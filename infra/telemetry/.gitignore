@@ -1,0 +1,3 @@
+# Raw OTLP JSON lines from the collector (infra/otel-collector/config.yaml)
+*
+!.gitignore

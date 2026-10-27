@@ -1,0 +1,36 @@
+import type { PoolClient } from "pg";
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { pool } from "@/db/client";
+import { setFlag } from "@/lib/flags";
+import { getStockLevel } from "@/lib/stock";
+
+const checkedOut = () => pool.totalCount - pool.idleCount;
+
+// Clients currently checked out of the pool, so any left over can be
+// destroyed after the test.
+const held = new Set<PoolClient>();
+const onAcquire = (client: PoolClient) => void held.add(client);
+const onRelease = (_err: unknown, client: PoolClient) => void held.delete(client);
+
+beforeAll(() => {
+  setFlag("FF_STOCK_DIRECT_QUERY", true);
+  pool.on("acquire", onAcquire);
+  pool.on("release", onRelease);
+});
+
+afterAll(async () => {
+  // release(true) destroys the connection; pool.end() would wait on it forever.
+  for (const client of held) client.release(true);
+  await pool.end();
+});
+
+it("returns every pooled connection when a product has no stock row", async () => {
+  const before = checkedOut();
+
+  // Fewer calls than the pool's max, so a leak shows up as a failed
+  // assertion rather than as a connection timeout.
+  for (let i = 0; i < 5; i++) {
+    expect(await getStockLevel(999_999)).toBe(0);
+    expect(checkedOut(), `connections checked out after call ${i + 1}`).toBe(before);
+  }
+});

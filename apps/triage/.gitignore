@@ -1,0 +1,7 @@
+# Next.js generated output (shared rules live in the root .gitignore)
+/.next/
+/out/
+/next-env.d.ts
+
+# Local incident store written by the investigation agent
+/.data/

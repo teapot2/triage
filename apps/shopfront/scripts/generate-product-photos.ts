@@ -1,0 +1,178 @@
+// Generates studio product photos for the catalog with OpenAI's GPT Image
+// models through OpenRouter (which needs no verified OpenAI organization),
+// and saves them to public/products/ as WebP, so the store shows photos
+// instead of the drawn placeholders. Run once and commit the images: the
+// store itself never calls an image API and needs no key.
+//
+//   pnpm --filter @triage/shopfront photos -- --only=stoneware-mug,cast-iron-teapot
+//   pnpm --filter @triage/shopfront photos               # every product without a photo
+//   pnpm --filter @triage/shopfront photos -- --force    # regenerate all
+//   pnpm --filter @triage/shopfront photos -- --dry-run  # print prompts, call nothing
+//
+// Options: --model=openai/gpt-image-2.5-sunburst (default: the faster
+// gpt-image-2.5-flare), --quality=low|medium|high|xhigh|max (default high).
+//
+// The key is read from OPENROUTER_API_KEY, or from a .env.local at the repo
+// root (gitignored, and outside the app so Next never loads it into the
+// store). It is never printed.
+
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import sharp from "sharp";
+import { catalog } from "@/lib/catalog";
+
+const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const outDir = join(appDir, "public", "products");
+const manifestPath = join(appDir, "src", "lib", "product-photos.ts");
+
+const args = new Map(
+  process.argv.slice(2).flatMap((a) => {
+    const m = a.match(/^--([^=]+)(?:=(.*))?$/);
+    return m ? [[m[1], m[2] ?? "true"] as const] : [];
+  }),
+);
+const model = args.get("model") ?? "openai/gpt-image-2.5-flare";
+const quality = args.get("quality") ?? "high";
+const force = args.has("force");
+const dryRun = args.has("dry-run");
+const only = args.get("only")?.split(",").map((s) => s.trim());
+
+export const slugify = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+// Backdrops match the drawn placeholders' tints, so photos and drawings
+// share a palette while the catalog is part-way through.
+const backdrops: Record<string, string> = {
+  sage: "soft sage green",
+  sand: "warm sand beige",
+  clay: "muted terracotta pink",
+  sky: "pale dusty blue",
+  honey: "soft honey yellow",
+};
+
+// One shared style, so the grid reads as one shop's photography.
+const promptFor = (p: (typeof catalog)[number]) =>
+  [
+    `Studio product photograph for a small, design-led home and kitchen shop.`,
+    `Subject: ${p.name}. ${p.description}`,
+    `Shown alone, centered, three-quarter view from slightly above, on a seamless ${backdrops[p.tint ?? "sand"] ?? "warm neutral"} paper backdrop.`,
+    `Soft natural window light from the left, a gentle realistic shadow, true-to-life materials and textures, subtle handmade imperfections.`,
+    `Calm, minimal, editorial. Square composition with generous empty space around the object.`,
+    `No text, no labels, no logos, no props, no people, no hands, no watermark.`,
+  ].join(" ");
+
+function loadKey() {
+  for (const file of [join(appDir, "..", "..", ".env.local")]) {
+    if (existsSync(file)) process.loadEnvFile(file);
+  }
+  return process.env.OPENROUTER_API_KEY;
+}
+
+// OpenRouter's image endpoint (not chat completions). It takes an aspect
+// ratio rather than pixel sizes and returns base64 bytes, usually PNG.
+async function generate(key: string, prompt: string) {
+  const res = await fetch("https://openrouter.ai/api/v1/images", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+      "x-title": "Fernhill Goods product photos",
+    },
+    body: JSON.stringify({ model, prompt, aspect_ratio: "1:1", quality, background: "opaque", n: 1 }),
+  });
+  const json = (await res.json().catch(() => null)) as {
+    data?: { b64_json?: string; media_type?: string }[];
+    usage?: { cost?: number };
+    error?: { message?: string };
+  } | null;
+  if (!res.ok || !json?.data?.[0]?.b64_json) {
+    throw new Error(`OpenRouter ${res.status}: ${json?.error?.message ?? "no image in response"}`);
+  }
+  // Whatever comes back, store a 1024 px WebP: a tenth of a PNG's size, and
+  // next/image resizes from there.
+  const bytes = await sharp(Buffer.from(json.data[0].b64_json, "base64"))
+    .resize(1024, 1024, { fit: "cover" })
+    .webp({ quality: 85 })
+    .toBuffer();
+  return { bytes, cost: json.usage?.cost };
+}
+
+// Rebuilt from what's on disk, so it always matches the files.
+function writeManifest() {
+  const files = existsSync(outDir) ? new Set(readdirSync(outDir)) : new Set<string>();
+  const entries = catalog
+    .map((p) => [p.name, `${slugify(p.name)}.webp`] as const)
+    .filter(([, file]) => files.has(file))
+    .map(([name, file]) => `  ${JSON.stringify(name)}: "/products/${file}",`);
+  writeFileSync(
+    manifestPath,
+    [
+      "// Generated by scripts/generate-product-photos.ts. Do not edit by hand.",
+      "// Product name -> photo under public/. Products not listed show their",
+      "// drawn placeholder (components/product-art.tsx).",
+      "export const productPhotos: Record<string, string> = {",
+      ...entries,
+      "};",
+      "",
+    ].join("\n"),
+  );
+  return entries.length;
+}
+
+async function main() {
+  const targets = catalog.filter((p) => {
+    const slug = slugify(p.name);
+    if (only && !only.includes(slug)) return false;
+    return force || only || !existsSync(join(outDir, `${slug}.webp`));
+  });
+  if (only) {
+    const unknown = only.filter((s) => !catalog.some((p) => slugify(p.name) === s));
+    if (unknown.length) throw new Error(`Unknown product slug(s): ${unknown.join(", ")}`);
+  }
+  if (targets.length === 0) {
+    console.log("photos: every product already has a photo (use --force to regenerate).");
+    console.log(`photos: manifest lists ${writeManifest()} photo(s).`);
+    return;
+  }
+
+  if (dryRun) {
+    for (const p of targets) console.log(`\n${slugify(p.name)}\n${promptFor(p)}`);
+    return;
+  }
+
+  const key = loadKey();
+  if (!key) {
+    throw new Error("OPENROUTER_API_KEY is not set. Add OPENROUTER_API_KEY=... to .env.local at the repo root.");
+  }
+
+  mkdirSync(outDir, { recursive: true });
+  console.log(`photos: ${targets.length} to generate with ${model} (quality ${quality})`);
+  let failed = 0;
+  let spent = 0;
+  for (const p of targets) {
+    const slug = slugify(p.name);
+    const started = Date.now();
+    try {
+      const { bytes, cost } = await generate(key, promptFor(p));
+      writeFileSync(join(outDir, `${slug}.webp`), bytes);
+      spent += cost ?? 0;
+      const secs = ((Date.now() - started) / 1000).toFixed(1);
+      console.log(`  ✓ ${slug} (${Math.round(bytes.length / 1024)} KB, ${secs} s${cost ? `, $${cost.toFixed(3)}` : ""})`);
+    } catch (err) {
+      failed++;
+      console.error(`  ✗ ${slug}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (spent) console.log(`photos: about $${spent.toFixed(2)} spent on OpenRouter`);
+  console.log(`photos: manifest lists ${writeManifest()} photo(s).`);
+  if (failed) process.exitCode = 1;
+}
+
+main().catch((err) => {
+  console.error(`photos failed: ${err instanceof Error ? err.message : String(err)}`);
+  process.exitCode = 1;
+});

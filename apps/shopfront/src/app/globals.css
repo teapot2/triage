@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Fernhill Goods: a small home-and-kitchen shop. Warm paper and ink, one
+   fern-green accent, an editorial serif for display type. Light only, like
+   most shops. */
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-serif: var(--font-fraunces);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--secondary);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--ring);
+  --color-sale: var(--sale);
+  --color-star: var(--star);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+  /* Paper, a warm off-white, and a deeper paper for tiles and bands. */
+  --background: oklch(0.985 0.006 85);
+  --card: oklch(0.995 0.003 85);
+  --secondary: oklch(0.955 0.012 80);
+  --muted: oklch(0.955 0.012 80);
+  /* Ink: a warm near-black, and its quiet tone for secondary text. */
+  --foreground: oklch(0.22 0.012 60);
+  --muted-foreground: oklch(0.5 0.015 60);
+  --border: oklch(0.9 0.012 80);
+  /* Fern green: buttons, links, focus. */
+  --primary: oklch(0.42 0.07 155);
+  --primary-foreground: oklch(0.985 0.006 85);
+  --ring: oklch(0.42 0.07 155);
+  --destructive: oklch(0.55 0.19 28);
+  --sale: oklch(0.55 0.15 40);
+  --star: oklch(0.72 0.14 75);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}

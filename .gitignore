@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output and caches (per-app Next.js rules live in apps/*/.gitignore)
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+.eslintcache
+.cache/
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+
+# Environment files (keep the committed examples)
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local reference docs
+/docs/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -1,0 +1,50 @@
+import type { Incident, IncidentStatus } from "./schema";
+import { activityAt } from "./summary";
+
+// The incident list's orders. Each label says its direction, since
+// "attention first" or "most severe first" have no meaningful reverse.
+export const incidentSorts = [
+  { id: "newest", label: "Newest first" },
+  { id: "oldest", label: "Oldest first" },
+  { id: "attention", label: "Needs attention first" },
+  { id: "severity", label: "Most severe first" },
+  { id: "updated", label: "Recently updated" },
+] as const;
+
+export type IncidentSort = (typeof incidentSorts)[number]["id"];
+export const defaultSort: IncidentSort = "newest";
+
+export function parseSort(value: string | string[] | undefined): IncidentSort {
+  return incidentSorts.find((s) => s.id === value)?.id ?? defaultSort;
+}
+
+// When an incident's run started (the alert time when there's no run).
+// Replayed scenarios share their alert time, so the run time is what
+// tells them apart, as in the sidebar.
+export const startedAt = (i: Incident) => i.run?.startedAt ?? i.detectedAt;
+
+// Most urgent first: a fix to approve, a run to retry, a run in progress,
+// then open diagnoses, then the finished ones.
+const statusRank: Record<IncidentStatus, number> = {
+  awaiting_approval: 0,
+  failed: 1,
+  investigating: 2,
+  diagnosed: 3,
+  resolved: 4,
+  healthy: 5,
+};
+
+const newestFirst = (a: Incident, b: Incident) => Date.parse(startedAt(b)) - Date.parse(startedAt(a));
+
+const comparators: Record<IncidentSort, (a: Incident, b: Incident) => number> = {
+  newest: newestFirst,
+  oldest: (a, b) => -newestFirst(a, b),
+  attention: (a, b) => statusRank[a.status] - statusRank[b.status] || newestFirst(a, b),
+  // "sev1" < "sev2" < "sev3" as strings, so the most severe sorts first.
+  severity: (a, b) => a.severity.localeCompare(b.severity) || newestFirst(a, b),
+  updated: (a, b) => Date.parse(activityAt(b)) - Date.parse(activityAt(a)),
+};
+
+export function sortIncidents(incidents: Incident[], sort: IncidentSort): Incident[] {
+  return [...incidents].sort(comparators[sort]);
+}

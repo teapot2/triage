@@ -1,0 +1,38 @@
+name: triage
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    # pg_stat_statements records per-query timing (the extension itself is
+    # created by Shopfront's migrations)
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    environment:
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: triage
+      POSTGRES_DB: shopfront
+    ports: ["5433:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d shopfront"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+      # Raw OTLP JSON lines for Triage's live source
+      - ./telemetry:/telemetry
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
