@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { formatAgo, formatDateTime } from "@/components/incident/format";
-import { collapseMotion } from "@/components/incident/motion";
 import { StatusDot, statusLabel } from "@/components/incident/status-badges";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -281,7 +280,7 @@ function CollapsibleGroup({
           </CollapsibleTrigger>
         </SidebarGroupLabel>
         {action}
-        <CollapsibleContent className={collapseMotion}>
+        <CollapsibleContent>
           <SidebarGroupContent>{children}</SidebarGroupContent>
         </CollapsibleContent>
       </SidebarGroup>

@@ -17,6 +17,10 @@ export function languageModel(s: StageModel & Endpoint) {
 // A local server that isn't running fails fast instead of hanging Settings.
 const LIST_TIMEOUT_MS = 5_000;
 
+// Nothing answered at the base URL, as opposed to an answer that was an
+// error. Settings shows a local server like this as not running.
+export class Unreachable extends Error {}
+
 // The models a provider offers, filtered to the chat models Triage can use.
 export async function listModels(provider: ProviderId, endpoint: Endpoint): Promise<string[]> {
   const info = providers[provider];
@@ -28,7 +32,7 @@ export async function listModels(provider: ProviderId, endpoint: Endpoint): Prom
       cache: "no-store",
     });
   } catch {
-    throw new Error(
+    throw new Unreachable(
       info.local
         ? `Couldn't reach ${info.label} at ${endpoint.baseUrl}. Is its server running?`
         : `Couldn't reach ${info.label} at ${endpoint.baseUrl}.`,

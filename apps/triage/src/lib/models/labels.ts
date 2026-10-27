@@ -7,7 +7,7 @@ export const providerLabels: Record<string, string> = {
   lmstudio: "LM Studio",
   ollama: "Ollama",
   llamacpp: "llama.cpp server",
-  custom: "Other OpenAI-compatible",
+  custom: "Custom endpoint",
 };
 
 // "muse-glimmer-30b via OpenRouter", or the model alone for old runs.

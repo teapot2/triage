@@ -1,9 +1,10 @@
 import { connection } from "next/server";
-import { listModels } from "@/lib/models/client";
+import { listModels, Unreachable } from "@/lib/models/client";
 import { providerIdSchema } from "@/lib/models/providers";
 import { endpointFor } from "@/lib/models/settings";
 
-// The chat models one provider offers, for the model field's suggestions.
+// The chat models one provider offers, for the model field's suggestions
+// and the provider's status in Settings.
 export async function GET(req: Request) {
   await connection();
   const provider = providerIdSchema.safeParse(new URL(req.url).searchParams.get("provider"));
@@ -11,6 +12,7 @@ export async function GET(req: Request) {
   try {
     return Response.json({ models: await listModels(provider.data, await endpointFor(provider.data)) });
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
+    const error = err instanceof Error ? err.message : String(err);
+    return Response.json({ error, unreachable: err instanceof Unreachable }, { status: 502 });
   }
 }

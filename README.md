@@ -34,7 +34,7 @@ Each stage that calls a model (**Investigate** and **Fix**) has its own provider
 | LM Studio | `http://localhost:1234/v1` (editable in Settings) | optional |
 | Ollama | `http://localhost:11434/v1` (editable) | optional |
 | llama.cpp server | `http://localhost:8080/v1` (editable) | optional |
-| Other OpenAI-compatible (Baseten, Modal, vLLM, …) | any base URL, set in Settings | optional, saved in Settings |
+| Custom endpoint (Baseten, Modal, vLLM, …) | any base URL, set in Settings | optional, saved in Settings |
 
 Put hosted keys in `apps/triage/.env.local` and restart. Keys entered in Settings are saved server-side in `apps/triage/.data/settings.json` (gitignored) and never sent to the browser.
 

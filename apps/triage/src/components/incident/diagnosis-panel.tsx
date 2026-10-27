@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent } from "./format";
 import type { ChartMarker } from "./metric-chart";
-import { collapseMotion } from "./motion";
 
 // The hypotheses that didn't win, in the order AlsoConsidered shows them:
 // the ones still possible first, then the ruled-out ones, each by
@@ -145,7 +144,7 @@ export function VerdictCard({
               </span>
             )}
           </CollapsibleTrigger>
-          <CollapsibleContent className={collapseMotion}>
+          <CollapsibleContent>
             <Reasoning
               report={report}
               leading={leading}

@@ -21,7 +21,6 @@ import { formatDuration, formatTime } from "./format";
 import { evidenceTitle } from "./metric-labels";
 import { activeFilterCount, emptyFilters, type Filters, filterSteps, matchSnippet } from "./log-filters";
 import { LogToolbar } from "./log-toolbar";
-import { collapseMotion } from "./motion";
 
 const statusIcons = {
   running: { Icon: LoaderCircleIcon, className: "animate-spin text-muted-foreground" },
@@ -308,7 +307,7 @@ export function InvestigationTimeline({
                           <ChevronRightIcon className="size-3.5 transition-[rotate] duration-200 group-data-[state=open]/calls:rotate-90 motion-reduce:transition-none" />
                           {phaseSteps.length} tool {phaseSteps.length === 1 ? "call" : "calls"}
                         </CollapsibleTrigger>
-                        <CollapsibleContent className={collapseMotion}>
+                        <CollapsibleContent>
                           <div className="pt-1">{rows}</div>
                         </CollapsibleContent>
                       </Collapsible>
@@ -379,7 +378,7 @@ function StepRow({
             </span>
           )}
         </CollapsibleTrigger>
-        <CollapsibleContent className={collapseMotion}>
+        <CollapsibleContent>
           <div className="mb-2 ml-8 flex flex-col gap-1.5 border-l pl-3 font-mono text-muted-foreground text-xs">
             {Object.entries(step.input).map(([key, value]) => (
               <span key={key} className="break-all">
