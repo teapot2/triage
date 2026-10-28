@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test 'src/**/*.test.ts'",
     "check:blind": "tsx scripts/check-blind.ts",
     "check:sandbox": "tsx scripts/check-sandbox.ts"
   },

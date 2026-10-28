@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { z } from "zod";
 import { stageModel, stageProblem } from "@/lib/models/settings";
-import { createLiveIncident, createScenarioIncident, runInvestigation } from "@/lib/investigation/agent";
+import { createLiveIncident, createRangeIncident, createScenarioIncident, runInvestigation } from "@/lib/investigation/agent";
 import { createLiveSource, shopfrontDir } from "@/lib/investigation/live/live-source";
 import { LIVE_ID } from "@/lib/investigation/options";
 import { createScenarioSource, getScenario } from "@/lib/investigation/scenarios";
@@ -10,21 +10,33 @@ import { createScenarioSource, getScenario } from "@/lib/investigation/scenarios
 // give it room.
 export const maxDuration = 300;
 
-const bodySchema = z.object({ scenario: z.string() });
+const bodySchema = z.object({
+  scenario: z.string(),
+  // Live only: a range (and route) selected on the live telemetry page.
+  focus: z
+    .object({ from: z.iso.datetime(), to: z.iso.datetime(), route: z.string().max(200).optional() })
+    .refine((f) => Date.parse(f.from) < Date.parse(f.to), "focus.from must be before focus.to")
+    .optional(),
+});
 
 // Starts an investigation and returns its incident ID right away; the agent
 // runs after the response and saves progress as it goes. `scenario` is a
-// recorded scenario's ID, or "live" for the running Shopfront.
+// recorded scenario's ID, or "live" for the running Shopfront, optionally
+// with a `focus` range from the live telemetry page.
 export async function POST(req: Request) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return Response.json({ error: "expected { scenario }" }, { status: 400 });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return Response.json({ error: issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "expected { scenario }" }, { status: 400 });
+  }
   const problem = stageProblem(await stageModel("investigate"));
   if (problem) return Response.json({ error: problem }, { status: 409 });
 
   if (parsed.data.scenario === LIVE_ID) {
     try {
       const source = await createLiveSource();
-      const incident = await createLiveIncident(source);
+      const { focus } = parsed.data;
+      const incident = focus ? await createRangeIncident(source, focus) : await createLiveIncident(source);
       after(() => runInvestigation(incident, source, { appDir: shopfrontDir }));
       return Response.json({ id: incident.id }, { status: 202 });
     } catch (err) {

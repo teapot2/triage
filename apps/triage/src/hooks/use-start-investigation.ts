@@ -26,14 +26,15 @@ export function useStartInvestigation() {
   const [error, setError] = useState<string | null>(null);
 
   // Resolves true once the run started and the page is navigating to it.
-  async function start(scenario: string): Promise<boolean> {
+  // `focus` narrows a live run to a range (and route) from the live page.
+  async function start(scenario: string, focus?: { from: string; to: string; route?: string }): Promise<boolean> {
     setPending(true);
     setError(null);
     try {
       const res = await fetch("/api/investigations", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scenario }),
+        body: JSON.stringify({ scenario, focus }),
       });
       const data = (await res.json()) as { id?: string; error?: string };
       if (!res.ok || !data.id) throw new Error(data.error ?? `HTTP ${res.status}`);

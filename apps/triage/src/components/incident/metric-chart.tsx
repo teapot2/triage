@@ -1,16 +1,23 @@
 "use client";
 
-import { useId } from "react";
-import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from "recharts";
+import { useId, useState } from "react";
+import { Area, AreaChart, CartesianGrid, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
 import {
   type ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import type { MetricPoint } from "@/lib/investigation/schema";
+import type { ChartPoint } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { formatTime } from "./format";
+
+const ordered = (a: string, b: string): [string, string] => (Date.parse(a) <= Date.parse(b) ? [a, b] : [b, a]);
+
+export interface TimeRange {
+  from: string;
+  to: string;
+}
 
 export interface ChartMarker {
   t: string;
@@ -19,7 +26,7 @@ export interface ChartMarker {
 
 // The series point closest to a time, since the x axis is the points' own
 // timestamps. Undefined when the time falls outside the series.
-function nearestPoint(series: MetricPoint[], t: string): string | undefined {
+function nearestPoint(series: ChartPoint[], t: string): string | undefined {
   const at = Date.parse(t);
   if (series.length === 0 || at < Date.parse(series[0].t) || at > Date.parse(series[series.length - 1].t)) return;
   return series.reduce((best, p) =>
@@ -35,9 +42,11 @@ export function MetricChart({
   markers = [],
   compact = false,
   onHover,
+  selection,
+  onSelect,
   className,
 }: {
-  series: MetricPoint[];
+  series: ChartPoint[];
   label: string;
   unit: string;
   threshold?: number;
@@ -46,9 +55,29 @@ export function MetricChart({
   // Sparkline: no axes, grid, labels or tooltip; pair it with onHover to show
   // the hovered value somewhere that doesn't cover the line.
   compact?: boolean;
-  onHover?: (point: MetricPoint | undefined) => void;
+  onHover?: (point: ChartPoint | undefined) => void;
+  // A time range to shade, as two of the series' own timestamps.
+  selection?: TimeRange;
+  // Makes the chart selectable: drag across it to pick a range; a click
+  // without a drag clears it (undefined).
+  onSelect?: (range: TimeRange | undefined) => void;
   className?: string;
 }) {
+  // The range being dragged out, from where the drag started to the point
+  // under the pointer now.
+  const [drag, setDrag] = useState<{ a: string; b: string }>();
+  // The timestamp under the pointer. No active index (null, as before the
+  // tooltip first shows) is no point, not the first one.
+  const at = (state: { activeTooltipIndex?: unknown }) =>
+    state.activeTooltipIndex == null ? undefined : series[Number(state.activeTooltipIndex)]?.t;
+  const finish = () => {
+    if (!drag) return;
+    const [from, to] = ordered(drag.a, drag.b);
+    onSelect?.(from === to ? undefined : { from, to });
+    setDrag(undefined);
+  };
+  const shaded = drag ? ordered(drag.a, drag.b) : selection && [selection.from, selection.to];
+
   const id = useId().replace(/:/g, "");
   const fillId = `fill-${id}`;
   const strokeId = `stroke-${id}`;
@@ -65,7 +94,7 @@ export function MetricChart({
   // highest down to the 0 baseline. Each split is where the limit falls in
   // that box, from the top: 0 when nothing is past it (or there's no limit),
   // 1 when everything is. Two stops at the same offset make a hard edge.
-  const values = series.map((p) => p.value);
+  const values = series.flatMap((p) => (p.value === null ? [] : [p.value]));
   const max = Math.max(...values);
   const min = Math.min(...values);
   const split = (low: number) => {
@@ -81,9 +110,18 @@ export function MetricChart({
       <AreaChart
         data={series}
         margin={compact ? { left: 0, right: 0, top: 4, bottom: 0 } : { left: 0, right: 8, top: 8, bottom: 0 }}
-        onMouseMove={(state) =>
-          onHover?.(state.isTooltipActive ? series[Number(state.activeTooltipIndex)] : undefined)
-        }
+        className={cn(onSelect && "cursor-crosshair select-none")}
+        onMouseMove={(state) => {
+          onHover?.(state.isTooltipActive ? series[Number(state.activeTooltipIndex)] : undefined);
+          const t = at(state);
+          if (drag && t && t !== drag.b) setDrag({ ...drag, b: t });
+        }}
+        onMouseDown={(state) => {
+          const t = at(state);
+          if (onSelect && t) setDrag({ a: t, b: t });
+        }}
+        onMouseUp={finish}
+        onMouseLeave={finish}
       >
         <defs>
           <linearGradient id={strokeId} x1="0" y1="0" x2="0" y2="1">
@@ -160,6 +198,9 @@ export function MetricChart({
               )
             );
           })}
+        {shaded && (
+          <ReferenceArea x1={shaded[0]} x2={shaded[1]} fill="var(--primary)" fillOpacity={0.12} stroke="var(--primary)" strokeOpacity={0.4} />
+        )}
         <Area
           dataKey="value"
           type="monotone"

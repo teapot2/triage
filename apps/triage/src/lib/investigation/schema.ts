@@ -29,6 +29,9 @@ export const metricPointSchema = z.object({
   value: z.number(),
 });
 export type MetricPoint = z.infer<typeof metricPointSchema>;
+// A point on a chart; a null value is a gap in the line (a bucket with
+// nothing to measure, on the live page).
+export type ChartPoint = MetricPoint | { t: string; value: null };
 
 const evidenceBase = {
   id: evidenceId,
@@ -265,6 +268,9 @@ export const incidentSchema = z.object({
     // The watch rule that opened it, in words. Missing on incidents a person
     // opened and on those from before watch rules.
     rule: z.object({ id: z.string(), name: z.string(), description: z.string() }).optional(),
+    // The time range (and route) a person selected on the live page to
+    // investigate. Missing on every other incident.
+    focus: z.object({ from: timestamp, to: timestamp, route: z.string().optional() }).optional(),
   }),
   steps: z.array(investigationStepSchema),
   evidence: z.array(evidenceSchema),

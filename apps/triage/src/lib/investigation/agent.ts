@@ -2,7 +2,8 @@ import { type ModelMessage, ToolLoopAgent } from "ai";
 import { languageModel } from "../models/client";
 import { stageModel, stageProblem } from "../models/settings";
 import { runFixStage } from "./fix/agent";
-import { liveAlert } from "./live/live-source";
+import { liveAlert, p95, requestSamples } from "./live/live-source";
+import { readTelemetry } from "./live/otlp-files";
 import { InvestigationRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
@@ -10,7 +11,7 @@ import type { Incident } from "./schema";
 import type { MetricSeries, TelemetrySource } from "./source";
 import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
-import { describeRule, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
+import { describeRule, matchesTarget, readRules, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
 
 const MAX_STEPS = 30;
 // Steps left when only submit_report stays available.
@@ -47,10 +48,15 @@ function prompt(incident: Incident, source: TelemetrySource): string {
   return `Alert: ${incident.title}
 Service: ${incident.service}
 Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}
-Alert time (treat as now): ${d.now}
+Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
 Dependency path: ${services}
 
 Investigate and submit your report.`;
+}
+
+function focusLine(focus: Incident["trigger"]["focus"]): string {
+  if (!focus) return "";
+  return `\nFocus: a person selected ${focus.from} to ${focus.to}${focus.route ? ` on ${focus.route}` : ""} on the live telemetry page. Explain what happened in that range, even if nothing crossed a limit.`;
 }
 
 export async function createScenarioIncident(scenario: Scenario): Promise<Incident> {
@@ -96,6 +102,38 @@ export async function createLiveIncident(
   });
 }
 
+// An incident for a range a person selected on the live page: the route
+// they picked, or the slowest one in the range, charted against its p95
+// limit, with the range on the incident for the agent to focus on.
+export async function createRangeIncident(
+  source: TelemetrySource,
+  focus: { from: string; to: string; route?: string },
+): Promise<Incident> {
+  const from = Date.parse(focus.from);
+  const to = Date.parse(focus.to);
+  const requests = requestSamples((await readTelemetry()).spans, from, to).filter((r) => r.service === "shopfront");
+  const byRoute = Map.groupBy(requests, (r) => r.route);
+  const route =
+    focus.route ??
+    [...byRoute.entries()].sort(([, a], [, b]) => p95(b.map((r) => r.durationMs)) - p95(a.map((r) => r.durationMs)))[0]?.[0];
+  if (!route) throw new Error("No Shopfront requests in the selected range to investigate.");
+
+  const rule = (await readRules()).find((r) => r.enabled && r.condition.metric === "p95" && matchesTarget(r.target, route));
+  const threshold = rule?.condition.metric === "p95" ? rule.condition.aboveMs : liveAlert.threshold;
+  const alert = await source.queryMetric({ name: `http.server.request.duration.p95{route=${route}}`, windowMinutes: 30 });
+  if (!alert || alert.points.length === 0) throw new Error(`No latency series for ${route} to open an incident from.`);
+  const method = byRoute.get(route)?.[0]?.method ?? "GET";
+  const clock = (iso: string) => iso.slice(11, 19);
+  return saveNewIncident(source, alert, {
+    title: `Investigate ${method} ${route}, ${clock(focus.from)} to ${clock(focus.to)} UTC`,
+    service: "shopfront",
+    severity: "sev3",
+    threshold,
+    openedBy: "person",
+    focus: { ...focus, route },
+  });
+}
+
 // An incident a watch rule opened: titled by the rule and the route that
 // tripped it, its chart that route's latency (or error ratio) against the
 // rule's limit.
@@ -126,6 +164,7 @@ async function saveNewIncident(
     threshold: number;
     openedBy?: Incident["openedBy"];
     rule?: Incident["trigger"]["rule"];
+    focus?: Incident["trigger"]["focus"];
   },
 ): Promise<Incident> {
   const stage = await stageModel("investigate");
@@ -144,6 +183,7 @@ async function saveNewIncident(
       observed: alert.points[alert.points.length - 1].value,
       series: alert.points,
       rule: a.rule,
+      focus: a.focus,
     },
     steps: [],
     evidence: [],

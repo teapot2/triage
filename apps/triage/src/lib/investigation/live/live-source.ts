@@ -78,11 +78,31 @@ const methodOf = (s: SpanRow) =>
   String(s.attributes["http.method"] ?? s.attributes["http.request.method"] ?? s.name.split(" ")[0] ?? "GET");
 
 export interface RequestSample {
+  service: string;
   route: string;
   method: string;
   start: number;
   durationMs: number;
+  // The HTTP status, 0 when the span didn't record one.
+  status: number;
   failed: boolean;
+  traceId: string;
+}
+
+// The requests among `spans` that started in (from, to], as samples.
+export function requestSamples(spans: SpanRow[], from: number, to: number): RequestSample[] {
+  return spans
+    .filter((s) => isRequest(s) && s.start > from && s.start <= to)
+    .map((s) => ({
+      service: s.service,
+      route: routeOf(s),
+      method: methodOf(s),
+      start: s.start,
+      durationMs: duration(s),
+      status: statusCode(s),
+      failed: failed(s),
+      traceId: s.traceId,
+    }));
 }
 
 // Every request in the last `windowMs`, straight from the request spans:
@@ -91,9 +111,7 @@ export interface RequestSample {
 export async function recentRequests(windowMs: number): Promise<RequestSample[]> {
   const now = Date.now();
   const { spans } = await readTelemetry();
-  return spans
-    .filter((s) => isRequest(s) && s.start > now - windowMs && s.start <= now)
-    .map((s) => ({ route: routeOf(s), method: methodOf(s), start: s.start, durationMs: duration(s), failed: failed(s) }));
+  return requestSamples(spans, now - windowMs, now);
 }
 
 export async function createLiveSource(): Promise<TelemetrySource> {

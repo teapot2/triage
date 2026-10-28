@@ -1,0 +1,579 @@
+"use client";
+
+import { ArrowDownIcon, LoaderCircleIcon, PauseIcon, PlayIcon, SearchIcon, XIcon } from "lucide-react";
+import Link from "next/link";
+import { type ReactNode, useEffect, useState } from "react";
+import { formatTime } from "@/components/incident/format";
+import { type ChartMarker, MetricChart, type TimeRange } from "@/components/incident/metric-chart";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge, StatusBadge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ruleStatuses } from "@/components/watch/rule-filters";
+import { useWatchState } from "@/components/watch/watch-client";
+import { WatchHeader } from "@/components/watch/watch-header";
+import { useLivePoll } from "@/hooks/use-live-poll";
+import { useStartInvestigation } from "@/hooks/use-start-investigation";
+import { LIVE_ID } from "@/lib/investigation/options";
+import { TraceSheet } from "./trace-sheet";
+import type { ChartPoint } from "@/lib/investigation/schema";
+import {
+  type LiveIncident,
+  type LiveLog,
+  type LiveRequest,
+  type LiveRoute,
+  type LiveSnapshot,
+  type LiveWindow,
+  liveWindows,
+} from "@/lib/live/types";
+import { cn } from "@/lib/utils";
+
+const POLL_MS = 2_000;
+// Shopfront exports metrics every 10s even when idle, so this long without
+// anything means the service or the collector has stopped.
+const STALE_MS = 25_000;
+
+const clock = (t: number) => formatTime(new Date(t).toISOString());
+
+// A clock that ticks every second, for "updated 2s ago".
+function useSecondClock() {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
+const ago = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`);
+
+export function LiveService({ service }: { service: string }) {
+  const [range, setRange] = useState<LiveWindow>("5m");
+  const [paused, setPaused] = useState(false);
+  // The request whose trace is open; it stays open across polls.
+  const [traced, setTraced] = useState<LiveRequest>();
+  // A range dragged out on a chart. The charts hold still while there is
+  // one, so it doesn't scroll away before it's investigated.
+  const [selection, setSelection] = useState<TimeRange>();
+  const frozen = paused || selection !== undefined;
+  const { data, error, updatedAt } = useLivePoll<LiveSnapshot>(
+    `/api/live?service=${encodeURIComponent(service)}&window=${range}`,
+    POLL_MS,
+    !frozen,
+  );
+  const now = useSecondClock();
+  // A window change keeps the last snapshot on screen until the new one
+  // arrives, so the charts don't flash empty.
+  const snapshot = data?.service === service ? data : undefined;
+  const silentFor = snapshot?.lastDataAt === undefined ? undefined : now - snapshot.lastDataAt;
+  const stale = snapshot && (silentFor === undefined || silentFor > STALE_MS);
+  const markers: ChartMarker[] = (snapshot?.incidents ?? []).map((i) => ({ t: i.detectedAt, label: "Incident" }));
+
+  return (
+    <div className="flex flex-col gap-6">
+      <WatchHeader
+        crumbs={[{ label: "Services", href: "/services" }]}
+        title={service}
+        actions={
+          <>
+            <SegmentedControl
+              aria-label="Time window"
+              value={range}
+              onValueChange={(r) => {
+                setRange(r);
+                setSelection(undefined);
+              }}
+              options={liveWindows.map((w) => ({ value: w.id, label: w.label }))}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // Resuming also lets go of a selection, which holds the charts.
+                setPaused(!frozen);
+                setSelection(undefined);
+              }}
+            >
+              {frozen ? <PlayIcon /> : <PauseIcon />}
+              {frozen ? "Resume" : "Pause"}
+            </Button>
+          </>
+        }
+      >
+        <LiveIndicator paused={frozen} stale={!!stale} hasData={!!snapshot} />
+        {updatedAt && <span>Updated {ago(now - updatedAt)} ago</span>}
+        <span>· Times in UTC</span>
+        <RuleStates />
+      </WatchHeader>
+
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>Couldn&apos;t refresh</AlertTitle>
+          <AlertDescription className="break-words">{error}. Showing the last data received.</AlertDescription>
+        </Alert>
+      )}
+      {stale && (
+        <Alert>
+          <AlertTitle>
+            {silentFor === undefined ? `No telemetry from ${service} yet` : `No data from ${service} for ${ago(silentFor)}`}
+          </AlertTitle>
+          <AlertDescription>
+            Check that {service} and the collector are running (<span className="font-mono text-xs">pnpm infra:up</span>).
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {!snapshot ? (
+        <LiveSkeleton />
+      ) : (
+        <>
+          <Tiles snapshot={snapshot} />
+          {selection ? (
+            <SelectionBar
+              selection={selection}
+              bucketMs={liveWindows.find((w) => w.id === snapshot.window)?.bucketMs ?? 5_000}
+              routes={snapshot.routes}
+              onClear={() => setSelection(undefined)}
+            />
+          ) : (
+            <p className="text-muted-foreground text-xs">Drag across a chart to select a range to investigate.</p>
+          )}
+          {snapshot.incidents.length > 0 && <IncidentList incidents={snapshot.incidents} />}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <ChartCard
+              title="Requests per second"
+              value={snapshot.now.perSecond}
+              unit="req/s"
+              series={snapshot.series.perSecond}
+              markers={markers}
+              selection={selection}
+              onSelect={setSelection}
+            />
+            <ChartCard
+              title="p95 latency"
+              value={snapshot.now.p95Ms}
+              unit="ms"
+              series={snapshot.series.p95Ms}
+              markers={markers}
+              selection={selection}
+              onSelect={setSelection}
+              threshold={snapshot.limits.p95Ms}
+              note={snapshot.limits.p95Ms ? "All routes together; the line is the API latency rule's limit." : undefined}
+            />
+            <ChartCard
+              title="Error rate"
+              value={snapshot.now.errorPercent}
+              unit="%"
+              series={snapshot.series.errorPercent}
+              markers={markers}
+              selection={selection}
+              onSelect={setSelection}
+              threshold={snapshot.limits.errorPercent}
+            />
+            <ChartCard
+              title="Database connections in use"
+              value={snapshot.now.poolUsed}
+              unit="connections"
+              series={snapshot.series.poolUsed}
+              markers={markers}
+              selection={selection}
+              onSelect={setSelection}
+              threshold={snapshot.limits.poolMax}
+              note={waitingNote(snapshot.series.poolWaiting)}
+            />
+          </div>
+          <Section title="Routes">
+            <RouteTable routes={snapshot.routes} />
+          </Section>
+          <Section title="Activity">
+            <Feed requests={snapshot.requests} logs={snapshot.logs} onOpenRequest={setTraced} />
+          </Section>
+        </>
+      )}
+      <TraceSheet request={traced} onClose={() => setTraced(undefined)} />
+    </div>
+  );
+}
+
+function LiveIndicator({ paused, stale, hasData }: { paused: boolean; stale: boolean; hasData: boolean }) {
+  const [label, dot] = paused
+    ? ["Paused", "bg-muted-foreground"]
+    : !hasData
+      ? ["Connecting", "bg-muted-foreground animate-pulse motion-reduce:animate-none"]
+      : stale
+        ? ["No data", "bg-warning"]
+        : ["Live", "bg-success animate-pulse motion-reduce:animate-none"];
+  return (
+    <span className="flex items-center gap-1.5 text-foreground">
+      <span aria-hidden className={cn("size-2 rounded-full", dot)} />
+      {label}
+    </span>
+  );
+}
+
+const SLOWEST = "slowest";
+
+// The selected range, and starting an investigation of it: of one route,
+// or of whichever was slowest in the range (picked on the server).
+function SelectionBar({
+  selection,
+  bucketMs,
+  routes,
+  onClear,
+}: {
+  selection: TimeRange;
+  bucketMs: number;
+  routes: LiveRoute[];
+  onClear: () => void;
+}) {
+  const [route, setRoute] = useState(SLOWEST);
+  const { start, pending, error } = useStartInvestigation();
+  // The selection runs to the end of its last bucket.
+  const to = new Date(Date.parse(selection.to) + bucketMs).toISOString();
+  const names = [...new Set(routes.map((r) => r.route))].sort();
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+        <span className="font-mono text-xs tabular-nums">
+          {clock(Date.parse(selection.from))} to {clock(Date.parse(to))} UTC
+        </span>
+        <Select value={route} onValueChange={setRoute}>
+          <SelectTrigger size="sm" aria-label="Route to investigate" className="max-w-64 bg-background">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={SLOWEST}>Slowest route in the range</SelectItem>
+            {names.map((r) => (
+              <SelectItem key={r} value={r} className="font-mono text-xs">
+                {r}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onClear}>
+            <XIcon />
+            Clear
+          </Button>
+          <Button
+            size="sm"
+            disabled={pending}
+            onClick={() =>
+              void start(LIVE_ID, { from: selection.from, to, route: route === SLOWEST ? undefined : route })
+            }
+          >
+            {pending ? <LoaderCircleIcon className="animate-spin" /> : <SearchIcon />}
+            Investigate this range
+          </Button>
+        </div>
+      </div>
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>Couldn&apos;t start the investigation</AlertTitle>
+          <AlertDescription className="break-words">{error}</AlertDescription>
+        </Alert>
+      )}
+    </div>
+  );
+}
+
+// The watch's rules as it last judged them, each linking to its page.
+function RuleStates() {
+  const watch = useWatchState();
+  if (!watch) return null;
+  if (!watch.enabled) return <StatusBadge tone="muted">Watch paused</StatusBadge>;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {watch.rules.map((r) => {
+        const status = ruleStatuses.find((s) => s.id === r.status) ?? ruleStatuses[0];
+        return (
+          <Link key={r.id} href={`/watch/${r.id}`} title={r.summary ?? r.description}>
+            <StatusBadge tone={status.tone} pulse={r.status === "breaching"} className="hover:bg-muted">
+              {r.name}
+              <span className="text-muted-foreground">
+                {r.status === "breaching" && r.checks ? `${status.label} · ${r.checks} of ${r.needed}` : status.label}
+              </span>
+            </StatusBadge>
+          </Link>
+        );
+      })}
+    </span>
+  );
+}
+
+function IncidentList({ incidents }: { incidents: LiveIncident[] }) {
+  return (
+    <Section title="Incidents in this window">
+      <ul className="-mx-2 flex flex-col">
+        {incidents.map((i) => (
+          <li key={i.id}>
+            <Link
+              href={`/incidents/${i.id}`}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
+            >
+              <span className="font-mono text-muted-foreground text-xs tabular-nums">{clock(Date.parse(i.detectedAt))}</span>
+              <span className="min-w-0 flex-1 truncate">{i.title}</span>
+              <span className="shrink-0 text-muted-foreground text-xs">{i.rule ? `Watch · ${i.rule}` : "Opened by a person"}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function waitingNote(series: ChartPoint[]) {
+  const peak = Math.max(0, ...series.map((p) => p.value ?? 0));
+  return peak > 0 ? `Up to ${peak} request${peak === 1 ? "" : "s"} waited for a connection in this window.` : undefined;
+}
+
+function Tiles({ snapshot }: { snapshot: LiveSnapshot }) {
+  const { now, limits } = snapshot;
+  const tiles: { label: string; value: string; over?: boolean }[] = [
+    { label: "Requests", value: `${now.perSecond} /s` },
+    {
+      label: "p95 latency",
+      value: now.p95Ms === undefined ? "—" : `${now.p95Ms} ms`,
+      over: limits.p95Ms !== undefined && now.p95Ms !== undefined && now.p95Ms > limits.p95Ms,
+    },
+    {
+      label: "Error rate",
+      value: now.errorPercent === undefined ? "—" : `${now.errorPercent}%`,
+      over: limits.errorPercent !== undefined && now.errorPercent !== undefined && now.errorPercent > limits.errorPercent,
+    },
+    {
+      label: "Connections in use",
+      value: now.poolUsed === undefined ? "—" : `${now.poolUsed}${now.poolMax ? ` / ${now.poolMax}` : ""}`,
+      over: now.poolMax !== undefined && now.poolUsed !== undefined && now.poolUsed >= now.poolMax,
+    },
+  ];
+  return (
+    <section aria-label="Last 30 seconds" className="flex flex-col gap-2">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {tiles.map((t) => (
+          <div key={t.label} className="flex flex-col gap-1 rounded-lg border px-4 py-3">
+            <span className="text-muted-foreground text-xs">{t.label}</span>
+            <span className={cn("font-medium font-mono text-lg tabular-nums", t.over && "text-destructive")}>{t.value}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-muted-foreground text-xs">Tiles cover the last 30 seconds; charts the whole window.</p>
+    </section>
+  );
+}
+
+function ChartCard({
+  title,
+  value,
+  unit,
+  series,
+  threshold,
+  markers,
+  selection,
+  onSelect,
+  note,
+}: {
+  title: string;
+  value?: number;
+  unit: string;
+  series: ChartPoint[];
+  threshold?: number;
+  markers?: ChartMarker[];
+  selection?: TimeRange;
+  onSelect?: (range: TimeRange | undefined) => void;
+  note?: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 rounded-lg border p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="font-medium text-sm">{title}</h3>
+        <span className="font-mono text-muted-foreground text-xs tabular-nums">
+          {value === undefined ? "—" : `${value} ${unit}`}
+        </span>
+      </div>
+      {series.every((p) => p.value === null) ? (
+        <div className="flex h-40 items-center justify-center text-muted-foreground text-sm">No requests in this window</div>
+      ) : (
+        <MetricChart
+          series={series}
+          label={title}
+          unit={unit}
+          threshold={threshold}
+          markers={markers}
+          selection={selection}
+          onSelect={onSelect}
+        />
+      )}
+      {note && <p className="text-muted-foreground text-xs">{note}</p>}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-medium text-sm">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+type RouteSort = "requests" | "p95Ms" | "errorPercent";
+
+function RouteTable({ routes }: { routes: LiveRoute[] }) {
+  const [sort, setSort] = useState<RouteSort>("requests");
+  if (routes.length === 0) {
+    return <p className="text-muted-foreground text-sm">No requests in this window.</p>;
+  }
+  const sorted = [...routes].sort((a, b) => b[sort] - a[sort]);
+  const header = (key: RouteSort, label: string) => (
+    <TableHead className="text-right" aria-sort={sort === key ? "descending" : undefined}>
+      <button
+        type="button"
+        onClick={() => setSort(key)}
+        className={cn("inline-flex items-center gap-1 hover:text-foreground", sort === key && "text-foreground")}
+      >
+        {label}
+        {sort === key && <ArrowDownIcon className="size-3" />}
+      </button>
+    </TableHead>
+  );
+  return (
+    <div className="rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Route</TableHead>
+            {header("requests", "Requests")}
+            <TableHead className="text-right">Per second</TableHead>
+            {header("p95Ms", "p95")}
+            {header("errorPercent", "Errors")}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sorted.map((r) => (
+            <TableRow key={`${r.method} ${r.route}`}>
+              <TableCell className="max-w-0 truncate font-mono text-xs">
+                <span className="text-muted-foreground">{r.method}</span> {r.route}
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">{r.requests}</TableCell>
+              <TableCell className="text-right font-mono text-xs tabular-nums">{r.perSecond}</TableCell>
+              <TableCell
+                className={cn(
+                  "text-right font-mono text-xs tabular-nums",
+                  r.limitMs !== undefined && r.p95Ms > r.limitMs && "text-destructive",
+                )}
+                title={r.limitMs !== undefined ? `Limit ${r.limitMs} ms` : undefined}
+              >
+                {r.p95Ms} ms
+              </TableCell>
+              <TableCell
+                className={cn("text-right font-mono text-xs tabular-nums", r.errorPercent > 0 && "text-destructive")}
+              >
+                {r.errorPercent}%
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+const levelBadge: Record<LiveLog["level"], "destructive" | "warning" | "secondary" | "outline"> = {
+  error: "destructive",
+  warn: "warning",
+  info: "secondary",
+  debug: "outline",
+};
+
+function Feed({
+  requests,
+  logs,
+  onOpenRequest,
+}: {
+  requests: LiveRequest[];
+  logs: LiveLog[];
+  onOpenRequest: (request: LiveRequest) => void;
+}) {
+  return (
+    <Tabs defaultValue="requests">
+      <TabsList>
+        <TabsTrigger value="requests">Requests</TabsTrigger>
+        <TabsTrigger value="logs">Logs</TabsTrigger>
+      </TabsList>
+      <TabsContent value="requests">
+        {requests.length === 0 ? (
+          <p className="py-2 text-muted-foreground text-sm">No requests in this window.</p>
+        ) : (
+          <ol className="divide-y rounded-lg border font-mono text-xs">
+            {requests.map((r) => (
+              <li key={`${r.traceId}-${r.time}`}>
+                <button
+                  type="button"
+                  onClick={() => onOpenRequest(r)}
+                  aria-label={`Show the trace of ${r.method} ${r.route} at ${clock(r.time)}`}
+                  className={cn(
+                    "grid w-full grid-cols-[4.5rem_3rem_minmax(0,1fr)_3rem_4.5rem] gap-3 px-3 py-1.5 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
+                    r.failed && "bg-destructive/5",
+                  )}
+                >
+                  <span className="text-muted-foreground tabular-nums">{clock(r.time)}</span>
+                  <span className="text-muted-foreground">{r.method}</span>
+                  <span className="truncate">{r.route}</span>
+                  <span className={cn("tabular-nums", r.failed && "text-destructive")}>{r.status || "—"}</span>
+                  <span className="text-right tabular-nums">{r.durationMs} ms</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+      </TabsContent>
+      <TabsContent value="logs">
+        {logs.length === 0 ? (
+          <p className="py-2 text-muted-foreground text-sm">No logs in this window.</p>
+        ) : (
+          <ol className="divide-y rounded-lg border text-xs">
+            {logs.map((l, i) => (
+              <li
+                // Logs have no id; time and position tell them apart.
+                key={`${l.time}-${i}`}
+                className={cn(
+                  "grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-start gap-3 px-3 py-1.5",
+                  l.level === "error" && "bg-destructive/5",
+                )}
+              >
+                <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
+                <Badge variant={levelBadge[l.level]} className="uppercase">
+                  {l.level}
+                </Badge>
+                <span className="break-words font-mono">{l.body}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function LiveSkeleton() {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-16" />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-56" />
+        ))}
+      </div>
+    </div>
+  );
+}
