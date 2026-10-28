@@ -15,7 +15,7 @@ export const telemetryDir = path.resolve(
     path.join(/* turbopackIgnore: true */ process.cwd(), "..", "..", "infra", "telemetry"),
 );
 
-const RETENTION_MS = 3 * 60 * 60_000;
+export const RETENTION_MS = 3 * 60 * 60_000;
 // On first load, skip to the last part of a huge file rather than parse it all.
 const MAX_INITIAL_BYTES = 64 * 1024 * 1024;
 

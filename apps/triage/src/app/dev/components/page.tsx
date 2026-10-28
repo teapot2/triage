@@ -2,11 +2,11 @@ import { LoaderCircleIcon, PlayIcon, SearchIcon, TrashIcon } from "lucide-react"
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import { HttpStatusBadge, LogLevelBadge, TestResultBadge } from "@/components/incident/outcome-badges";
-import { IncidentStatusBadge, SeverityBadge } from "@/components/incident/status-badges";
+import { HttpStatusBadge, LogLevelBadge, MetricBadges, TestResultBadge } from "@/components/incident/outcome-badges";
+import { IncidentStatusBadge, SeverityBadge, SeverityMeter } from "@/components/incident/status-badges";
 import { ThemeSelect } from "@/components/theme-select";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,7 @@ const buttonVariants = ["default", "secondary", "outline", "ghost", "destructive
 const buttonSizes = ["xs", "sm", "default", "lg"] as const;
 const badgeVariants = ["default", "secondary", "outline", "ghost", "destructive", "success", "warning", "info"] as const;
 const statuses: IncidentStatus[] = ["investigating", "diagnosed", "awaiting_approval", "resolved", "healthy", "failed"];
-const severities: Incident["severity"][] = ["sev1", "sev2", "sev3"];
+const severities: Incident["severity"][] = ["sev1", "sev2", "sev3", "sev4"];
 
 // A gallery of the UI components in their variants and states, to check how
 // they look together and in both themes. Development only: production 404s.
@@ -160,6 +160,19 @@ export default function ComponentsPage() {
             </Badge>
           ))}
         </Row>
+        <Row label="Status badge">
+          <StatusBadge tone="success">Ready</StatusBadge>
+          <StatusBadge tone="warning">Needs key</StatusBadge>
+          <StatusBadge tone="destructive">Error</StatusBadge>
+          <StatusBadge tone="info">Info</StatusBadge>
+          <StatusBadge tone="muted">Not running</StatusBadge>
+          <StatusBadge tone="muted" loading>
+            Checking
+          </StatusBadge>
+          <StatusBadge tone="warning" pulse>
+            Live
+          </StatusBadge>
+        </Row>
         <Row label="Incident status">
           {statuses.map((s) => (
             <IncidentStatusBadge key={s} status={s} />
@@ -170,9 +183,18 @@ export default function ComponentsPage() {
             <SeverityBadge key={s} severity={s} />
           ))}
         </Row>
+        <Row label="Severity meter">
+          {severities.map((s) => (
+            <SeverityMeter key={s} severity={s} />
+          ))}
+        </Row>
         <Row label="Test result">
           <TestResultBadge exitCode={0} />
           <TestResultBadge exitCode={1} />
+        </Row>
+        <Row label="Alert value">
+          <MetricBadges observed={3036} threshold={500} unit="ms" />
+          <MetricBadges observed={124} threshold={500} unit="ms" />
         </Row>
         <Row label="HTTP status">
           {[200, 302, 404, 500].map((s) => (

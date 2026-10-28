@@ -1,13 +1,13 @@
 "use client";
 
-import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { cn } from "@/lib/utils";
 
 // The pieces of Settings' lists: a section heading, group headings inside a
-// list, rows that open in place to an editor, and the status a row shows.
+// list, and rows that open in place to an editor. A row's status is a
+// StatusBadge, as everywhere else.
 
 export function SettingsSectionHeader({
   id,
@@ -40,28 +40,6 @@ export function ListGroup({ label, note }: { label: string; note?: string }) {
       <span className="font-medium">{label}</span>
       {note && <span className="text-muted-foreground">{note}</span>}
     </div>
-  );
-}
-
-// The text colors match the tinted badges, which mix toward black in light
-// mode for contrast.
-const tones = {
-  success: "text-[color-mix(in_oklab,var(--success)_70%,black)] dark:text-success",
-  warning: "text-[color-mix(in_oklab,var(--warning)_55%,black)] dark:text-warning",
-  destructive: "text-[color-mix(in_oklab,var(--destructive)_80%,black)] dark:text-destructive",
-  muted: "text-muted-foreground",
-};
-
-export function Status({ tone, loading, children }: { tone: keyof typeof tones; loading?: boolean; children: ReactNode }) {
-  return (
-    <span className={cn("flex items-center gap-1.5 whitespace-nowrap text-xs", tones[tone])}>
-      {loading ? (
-        <LoaderCircleIcon className="size-3 animate-spin" aria-hidden />
-      ) : (
-        <span className="size-1.5 rounded-full bg-current" aria-hidden />
-      )}
-      {children}
-    </span>
   );
 }
 

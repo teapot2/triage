@@ -8,10 +8,31 @@ import {
   type LucideIcon,
   ScrollTextIcon,
   WaypointsIcon,
+  XIcon,
 } from "lucide-react";
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
-import { CodeBlock } from "@/components/ai-elements/code-block";
+import {
+  createContext,
+  type ElementType,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockCopyButton,
+  CodeBlockFilename,
+  CodeBlockHeader,
+  CodeBlockTitle,
+  CodeBlockWrapButton,
+} from "@/components/ai-elements/code-block";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -23,7 +44,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Evidence, EvidenceKind } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
-import { formatDateTime, formatDuration } from "./format";
+import { Timestamp } from "@/components/timestamp";
+import { formatDuration } from "./format";
 import { MetricChart } from "./metric-chart";
 import { LogLevelBadge } from "./outcome-badges";
 import { evidenceTitle, metricLabel } from "./metric-labels";
@@ -42,10 +64,29 @@ interface EvidenceContextValue {
   numberOf: Map<string, number>;
   open: (id: string) => void;
   // The evidence opened last, until a few seconds after its panel closes:
-  // the timeline highlights its source so it's in view when the panel closes.
+  // the timeline highlights its source, beside the docked panel or in view
+  // when the sheet closes.
   focused: string | null;
-  // Whether the evidence panel is open; the highlight flashes once it closes.
+  // Whether the evidence panel is open.
   panelOpen: boolean;
+  // Whether it's open as a sheet over the page, hiding it; the highlight
+  // flashes once the page is visible again.
+  covered: boolean;
+}
+
+// Wide enough to keep the evidence beside the report instead of over it.
+// Narrower, the report would be squeezed to a column, so it's a sheet.
+const DOCK_QUERY = "(min-width: 1280px)";
+
+function subscribeDock(onChange: () => void) {
+  const mql = window.matchMedia(DOCK_QUERY);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+}
+
+// The server snapshot is the sheet; nothing is open on the first render.
+function useDocked() {
+  return useSyncExternalStore(subscribeDock, () => window.matchMedia(DOCK_QUERY).matches, () => false);
 }
 
 const EvidenceContext = createContext<EvidenceContextValue | null>(null);
@@ -74,48 +115,99 @@ export function EvidenceProvider({
   }, [order, evidence, byId]);
   const [focused, setFocused] = useState<string | null>(null);
   const panelOpen = openId !== null;
+  const docked = useDocked();
   useEffect(() => {
     if (!focused || panelOpen) return;
     const timer = setTimeout(() => setFocused(null), 3000);
     return () => clearTimeout(timer);
   }, [focused, panelOpen]);
+
+  // The sheet is a dialog and handles focus itself. The docked panel isn't,
+  // so it takes focus when it opens or changes, and gives it back to
+  // whatever opened it when it closes.
+  const opener = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const close = useCallback(() => {
+    setOpenId(null);
+    opener.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    if (docked && openId) panelRef.current?.focus({ preventScroll: true });
+  }, [docked, openId]);
+  useEffect(() => {
+    if (!docked || !panelOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // A dialog over the page (the search palette, a confirm) closes first.
+      if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
+      close();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [docked, panelOpen, close]);
+
   const value = useMemo(
     () => ({
       byId,
       numberOf,
       focused,
       panelOpen,
+      covered: panelOpen && !docked,
       open: (id: string) => {
+        if (document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
         setOpenId(id);
         setFocused(id);
       },
     }),
-    [byId, numberOf, focused, panelOpen],
+    [byId, numberOf, focused, panelOpen, docked],
   );
   const selected = openId ? byId.get(openId) : undefined;
 
+  // The wrapper is always there, so opening the docked panel never remounts
+  // the page beside it.
   return (
     <EvidenceContext.Provider value={value}>
-      {children}
-      <Sheet open={selected !== undefined} onOpenChange={(open) => !open && setOpenId(null)}>
-        <SheetContent className="w-full gap-0 sm:max-w-2xl">
-          {selected && <EvidenceDetail evidence={selected} />}
-        </SheetContent>
-      </Sheet>
+      <div className="flex min-w-0 flex-1">
+        <div className="min-w-0 flex-1">{children}</div>
+        {docked && selected && (
+          <aside
+            ref={panelRef}
+            tabIndex={-1}
+            aria-label="Evidence"
+            className="sticky top-0 flex h-svh w-md shrink-0 flex-col self-start border-l bg-background text-sm outline-none fade-in-0 slide-in-from-right-4 animate-in duration-200 ease-out motion-reduce:animate-none 2xl:w-xl"
+          >
+            <EvidenceDetail evidence={selected} docked />
+            <Button variant="ghost" size="icon-sm" onClick={close} className="absolute top-3 right-3">
+              <XIcon />
+              <span className="sr-only">Close</span>
+            </Button>
+          </aside>
+        )}
+      </div>
+      {!docked && (
+        <Sheet open={selected !== undefined} onOpenChange={(open) => !open && setOpenId(null)}>
+          <SheetContent className="w-full gap-0 sm:max-w-2xl">
+            {selected && <EvidenceDetail evidence={selected} docked={false} />}
+          </SheetContent>
+        </Sheet>
+      )}
     </EvidenceContext.Provider>
   );
 }
 
 // A numbered citation, like a footnote. Hover shows what it is; click opens
 // the raw evidence. Unknown IDs render as a struck "?": the verifier could
-// not find the evidence, so the claim citing it is not trusted.
+// not find the evidence, so the claim citing it is not trusted. The tooltips
+// aren't hoverable: citations sit side by side under a tooltip wider than
+// each, and a hoverable one stays open while the pointer crosses to the next
+// citation, which then can't open its own.
 export function Citation({ id }: { id: string }) {
   const { byId, numberOf, open } = useEvidence();
   const evidence = byId.get(id);
 
   if (!evidence) {
     return (
-      <Tooltip>
+      <Tooltip disableHoverableContent>
         <TooltipTrigger asChild>
           <span className="inline-flex h-4 min-w-4 items-center justify-center rounded bg-destructive/15 px-1 align-baseline font-mono text-[10px] text-destructive line-through">
             ?
@@ -128,7 +220,7 @@ export function Citation({ id }: { id: string }) {
 
   const Icon = evidenceIcons[evidence.kind];
   return (
-    <Tooltip>
+    <Tooltip disableHoverableContent>
       <TooltipTrigger asChild>
         <button
           type="button"
@@ -156,8 +248,12 @@ export function Citations({ ids, className }: { ids: string[]; className?: strin
   );
 }
 
-function EvidenceDetail({ evidence }: { evidence: Evidence }) {
+function EvidenceDetail({ evidence, docked }: { evidence: Evidence; docked: boolean }) {
   const Icon = evidenceIcons[evidence.kind];
+  // In the sheet these are the dialog's title and description; docked
+  // beside the page there's no dialog around them, so they're plain elements.
+  const Title: ElementType = docked ? "h2" : SheetTitle;
+  const Description: ElementType = docked ? "p" : SheetDescription;
   return (
     <>
       <SheetHeader className="border-b">
@@ -169,17 +265,34 @@ function EvidenceDetail({ evidence }: { evidence: Evidence }) {
           {evidence.observedAt && (
             <>
               <span>·</span>
-              <span>{formatDateTime(evidence.observedAt)}</span>
+              <Timestamp date={evidence.observedAt} />
             </>
           )}
         </div>
-        <SheetTitle>{evidenceTitle(evidence)}</SheetTitle>
-        <SheetDescription className="sr-only">Raw evidence returned by {evidence.tool}</SheetDescription>
+        <Title className="font-heading font-medium text-base text-foreground">{evidenceTitle(evidence)}</Title>
+        <Description className="sr-only">Raw evidence returned by {evidence.tool}</Description>
       </SheetHeader>
-      <div className="flex flex-col gap-4 overflow-y-auto p-4 text-sm">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 text-sm">
         <EvidenceBody evidence={evidence} />
       </div>
     </>
+  );
+}
+
+// What the code is (a file, or the query language) on the left; wrapping and
+// copying on the right. Code is the evidence most likely to run wider than
+// the panel, so wrapping is offered on every block.
+function CodeHeader({ label }: { label: string }) {
+  return (
+    <CodeBlockHeader className="gap-2 py-1">
+      <CodeBlockTitle className="min-w-0">
+        <CodeBlockFilename className="truncate">{label}</CodeBlockFilename>
+      </CodeBlockTitle>
+      <CodeBlockActions className="gap-0">
+        <CodeBlockWrapButton className="size-7" />
+        <CodeBlockCopyButton className="size-7" />
+      </CodeBlockActions>
+    </CodeBlockHeader>
   );
 }
 
@@ -231,7 +344,8 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
               {Object.entries(evidence.attributes).map(([key, value]) => (
                 <TableRow key={key}>
                   <TableCell className="font-mono text-muted-foreground text-xs">{key}</TableCell>
-                  <TableCell className="font-mono text-xs">{String(value)}</TableCell>
+                  {/* Values (error messages, URLs) wrap instead of scrolling the table. */}
+                  <TableCell className="whitespace-normal break-all font-mono text-xs">{String(value)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -254,14 +368,18 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
             </Field>
           </div>
           <MetricChart series={evidence.series} label={metricLabel(evidence.metric)} unit={evidence.unit} className="h-48" />
-          <span className="font-mono text-muted-foreground text-xs">{evidence.metric}</span>
+          {/* Metric names run long with labels and have no spaces; break
+              anywhere rather than scroll the panel sideways. */}
+          <span className="break-all font-mono text-muted-foreground text-xs">{evidence.metric}</span>
         </>
       );
     case "db": {
       const columns = Object.keys(evidence.rows[0] ?? {});
       return (
         <>
-          <CodeBlock code={evidence.query} language="sql" />
+          <CodeBlock code={evidence.query} language="sql">
+            <CodeHeader label="SQL" />
+          </CodeBlock>
           <Table>
             <TableHeader>
               <TableRow>
@@ -289,12 +407,9 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
     }
     case "source":
       return (
-        <>
-          <span className="font-mono text-muted-foreground text-xs">
-            {evidence.file}:{evidence.startLine}
-          </span>
-          <CodeBlock code={evidence.code} language="typescript" showLineNumbers />
-        </>
+        <CodeBlock code={evidence.code} language="typescript" showLineNumbers>
+          <CodeHeader label={`${evidence.file}:${evidence.startLine}`} />
+        </CodeBlock>
       );
     case "commit":
       return (

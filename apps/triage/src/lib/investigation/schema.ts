@@ -250,7 +250,7 @@ export const incidentSchema = z.object({
   id: z.string(),
   title: z.string(),
   service: z.string(),
-  severity: z.enum(["sev1", "sev2", "sev3"]),
+  severity: z.enum(["sev1", "sev2", "sev3", "sev4"]),
   status: incidentStatusSchema,
   detectedAt: timestamp,
   // Who started it: Triage's watch, when an alert crossed its limit, or a
@@ -262,6 +262,9 @@ export const incidentSchema = z.object({
     threshold: z.number(),
     observed: z.number(),
     series: z.array(metricPointSchema),
+    // The watch rule that opened it, in words. Missing on incidents a person
+    // opened and on those from before watch rules.
+    rule: z.object({ id: z.string(), name: z.string(), description: z.string() }).optional(),
   }),
   steps: z.array(investigationStepSchema),
   evidence: z.array(evidenceSchema),

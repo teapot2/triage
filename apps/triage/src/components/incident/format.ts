@@ -18,6 +18,16 @@ export function formatDateTime(iso: string): string {
   return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
+const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// Everything, to the millisecond: "Mon, Oct 26, 2026 · 21:26:14.382 UTC".
+// For the Timestamp tooltip.
+export function formatFullTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const ms = String(d.getUTCMilliseconds()).padStart(3, "0");
+  return `${days[d.getUTCDay()]}, ${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()} · ${formatTime(iso)}.${ms} UTC`;
+}
+
 // How long ago, short enough for the end of a sidebar row: "now", "12m",
 // "3h", "2d", then the date ("Oct 23") after a week. Pair it with
 // formatDateTime for the exact time.

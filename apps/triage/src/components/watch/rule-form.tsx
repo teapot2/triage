@@ -1,0 +1,578 @@
+"use client";
+
+import { LoaderCircleIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { type ReactNode, useEffect, useId, useState } from "react";
+import { SeverityBars, severityLabel } from "@/components/incident/status-badges";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  describeRule,
+  metricOptions,
+  ruleSchema,
+  targetOptions,
+  type WatchCondition,
+  type WatchRule,
+  type WatchTarget,
+} from "@/lib/investigation/watch-rule-model";
+import { cn } from "@/lib/utils";
+import { BacktestResult, sentence, updateRules, useBacktest, windowLabel } from "./watch-client";
+import { WatchHeader } from "./watch-header";
+
+// Where a new rule starts: the kind of rule that holds up at low traffic,
+// more than a few requests slower than a limit, on every route.
+const newRule: WatchRule = {
+  id: "new",
+  name: "",
+  enabled: true,
+  target: { kind: "all" },
+  condition: { metric: "slowCount", slowerThanMs: 1000, moreThan: 5 },
+  windowSeconds: 60,
+  checksToOpen: 2,
+  minRequests: 5,
+  severity: "sev3",
+};
+
+// A rule id from its name: "Checkout errors" becomes checkout-errors, with a
+// number added when that's taken. "new" is taken by the New rule page.
+function newId(name: string, taken: string[]): string {
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 56) || "rule";
+  const used = new Set([...taken, "new"]);
+  let id = base;
+  for (let n = 2; used.has(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+// The form's draft: the rule's fields as typed, numbers as text so a field
+// can be empty while it's edited. Each condition's numbers keep their own
+// field, so switching condition and back doesn't lose them.
+type Draft = {
+  name: string;
+  targetKind: WatchTarget["kind"];
+  route: string;
+  metric: WatchCondition["metric"];
+  ms: string;
+  count: string;
+  percent: string;
+  windowSeconds: number;
+  checksToOpen: string;
+  minRequests: string;
+  severity: WatchRule["severity"];
+};
+
+function toDraft(r: WatchRule): Draft {
+  const c = r.condition;
+  return {
+    name: r.name,
+    targetKind: r.target.kind,
+    route: r.target.kind === "route" ? r.target.route : "",
+    metric: c.metric,
+    ms: String(c.metric === "p95" ? c.aboveMs : c.metric === "errorRate" ? 1000 : c.slowerThanMs),
+    count: String(c.metric === "slowCount" ? c.moreThan : 5),
+    percent: String(c.metric === "slowShare" || c.metric === "errorRate" ? c.moreThanPercent : 5),
+    windowSeconds: r.windowSeconds,
+    checksToOpen: String(r.checksToOpen),
+    minRequests: String(r.minRequests),
+    severity: r.severity,
+  };
+}
+
+type Field = "name" | "route" | "ms" | "count" | "percent" | "checksToOpen" | "minRequests";
+
+const parseNumber = (s: string, min: number, max: number, integer: boolean) => {
+  const n = Number(s);
+  const ok = s.trim() !== "" && Number.isFinite(n) && (!integer || Number.isInteger(n)) && n >= min && n <= max;
+  return ok ? n : undefined;
+};
+
+// The draft as a rule, or what's wrong with it, field by field, in words.
+// The server checks the rule again on save.
+function fromDraft(d: Draft, base: WatchRule): { rule?: WatchRule; errors: Partial<Record<Field, string>> } {
+  const errors: Partial<Record<Field, string>> = {};
+  const name = d.name.trim();
+  if (!name) errors.name = "Give the rule a name.";
+  const route = d.route.trim();
+  if (d.targetKind === "route" && !route.startsWith("/")) errors.route = "A route starts with /, like /api/products/[id] or /api/*.";
+  const ms = parseNumber(d.ms, 1, 600_000, true);
+  const count = parseNumber(d.count, 0, 100_000, true);
+  const percent = parseNumber(d.percent, 0, 100, false);
+  if (d.metric !== "errorRate" && ms === undefined) errors.ms = "A whole number of milliseconds, from 1 to 600000.";
+  if (d.metric === "slowCount" && count === undefined) errors.count = "A whole number of requests.";
+  if ((d.metric === "slowShare" || d.metric === "errorRate") && percent === undefined) errors.percent = "A percentage from 0 to 100.";
+  const checksToOpen = parseNumber(d.checksToOpen, 1, 10, true);
+  if (checksToOpen === undefined) errors.checksToOpen = "From 1 to 10 checks.";
+  const minRequests = parseNumber(d.minRequests, 1, 1000, true);
+  if (d.metric !== "slowCount" && minRequests === undefined) errors.minRequests = "From 1 to 1000 requests.";
+  if (Object.keys(errors).length > 0) return { errors };
+
+  const target: WatchTarget = d.targetKind === "route" ? { kind: "route", route } : { kind: d.targetKind };
+  const condition: WatchCondition =
+    d.metric === "p95"
+      ? { metric: "p95", aboveMs: ms! }
+      : d.metric === "slowCount"
+        ? { metric: "slowCount", slowerThanMs: ms!, moreThan: count! }
+        : d.metric === "slowShare"
+          ? { metric: "slowShare", slowerThanMs: ms!, moreThanPercent: percent! }
+          : { metric: "errorRate", moreThanPercent: percent! };
+  const parsed = ruleSchema.safeParse({
+    ...base,
+    name,
+    target,
+    condition,
+    windowSeconds: d.windowSeconds,
+    checksToOpen,
+    // A counting rule ignores it; keep what was there.
+    minRequests: minRequests ?? base.minRequests,
+    severity: d.severity,
+  });
+  return parsed.success ? { rule: parsed.data, errors } : { errors: { name: parsed.error.issues[0]?.message } };
+}
+
+const windowOptions = [30, 60, 120, 300, 600, 900];
+
+const severities: WatchRule["severity"][] = ["sev1", "sev2", "sev3", "sev4"];
+
+// The Edit and New rule pages: the rule's fields in three sections, the
+// backtest of the draft under them, and Save. A rule changes only here, on
+// purpose. Cancel with changes asks first, and so does leaving the page
+// (reload, close); the sidebar's links don't ask.
+export function RuleForm({ rule }: { rule?: WatchRule }) {
+  const isNew = !rule;
+  const base = rule ?? newRule;
+  const id = useId();
+  const router = useRouter();
+  const [draft, setDraft] = useState(() => toDraft(base));
+  // Field errors show once Save has been tried, not while the first field
+  // is still being typed.
+  const [tried, setTried] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string>();
+  const [discarding, setDiscarding] = useState(false);
+  // Set once saved or deleted, so leaving for the next page doesn't warn.
+  const [done, setDone] = useState(false);
+
+  const { rule: candidate, errors } = fromDraft(draft, base);
+  // The draft as a rule whatever its name, which neither the sentence in the
+  // header nor the backtest uses, so a new rule shows both from the start.
+  const unnamed = fromDraft({ ...draft, name: draft.name.trim() || "Untitled" }, base).rule;
+  const shown = tried ? errors : {};
+  const changed = JSON.stringify(draft) !== JSON.stringify(toDraft(base));
+  const backtest = useBacktest(unnamed);
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((d) => ({ ...d, [key]: value }));
+  const back = isNew ? "/watch" : `/watch/${base.id}`;
+
+  useEffect(() => {
+    if (!changed || done) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [changed, done]);
+
+  async function save() {
+    setTried(true);
+    if (!candidate) return;
+    setSaving(true);
+    setError(undefined);
+    let savedId = base.id;
+    const result = await updateRules((rules) => {
+      if (!isNew) return rules.map((r) => (r.id === base.id ? candidate : r));
+      savedId = newId(candidate.name, rules.map((r) => r.id));
+      return [...rules, { ...candidate, id: savedId }];
+    });
+    setSaving(false);
+    if (result.error) return setError(result.error);
+    if (!result.rules?.some((r) => r.id === savedId)) {
+      return setError("This rule was deleted while you were editing it. Go back to Watch to add it again.");
+    }
+    setDone(true);
+    router.push(`/watch/${savedId}`);
+    router.refresh();
+  }
+
+  async function remove() {
+    setError(undefined);
+    const result = await updateRules((rules) => rules.filter((r) => r.id !== base.id));
+    if (result.error) return setError(result.error);
+    setDone(true);
+    router.push("/watch");
+    router.refresh();
+  }
+
+  function cancel() {
+    if (changed) setDiscarding(true);
+    else router.push(back);
+  }
+
+  const windows = windowOptions.includes(draft.windowSeconds)
+    ? windowOptions
+    : [...windowOptions, draft.windowSeconds].sort((a, b) => a - b);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <WatchHeader
+        crumbs={isNew ? [{ label: "Watch", href: "/watch" }] : [{ label: "Watch", href: "/watch" }, { label: base.name, href: back }]}
+        current={isNew ? "New rule" : "Edit"}
+        title={isNew ? "New rule" : `Edit ${base.name}`}
+      >
+        {/* The rule read back as it's edited; blank while a number is
+            invalid (its field says why), keeping its line so nothing jumps. */}
+        <span className="min-h-5">{unnamed && sentence(describeRule(unnamed))}</span>
+      </WatchHeader>
+
+      <form
+        className="flex flex-col gap-6"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        {/* Every section is the same two-column grid, every control fills
+            its cell, and numbers carry their unit inside the field, so the
+            edges line up from top to bottom. The header reads the rule back
+            as a sentence while it's edited. */}
+        <FormSection title="What it watches">
+          <FormField label="Name" htmlFor={`${id}-name`} error={shown.name}>
+            <Input
+              id={`${id}-name`}
+              value={draft.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="Checkout errors"
+              aria-invalid={Boolean(shown.name)}
+              autoComplete="off"
+            />
+          </FormField>
+          <FormField label="Routes" htmlFor={`${id}-target`}>
+            <Select value={draft.targetKind} onValueChange={(v) => set("targetKind", v as WatchTarget["kind"])}>
+              <SelectTrigger id={`${id}-target`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {targetOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          {draft.targetKind === "route" && (
+            <FormField
+              label="Route or pattern"
+              htmlFor={`${id}-route`}
+              error={shown.route}
+              hint="A trailing * matches the rest."
+              wide
+            >
+              <Input
+                id={`${id}-route`}
+                value={draft.route}
+                onChange={(e) => set("route", e.target.value)}
+                placeholder="/api/products/[id] or /api/*"
+                aria-invalid={Boolean(shown.route)}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+            </FormField>
+          )}
+        </FormSection>
+
+        <FormSection title="When it's over its limit">
+          <FormField label="Condition" htmlFor={`${id}-metric`}>
+            <Select value={draft.metric} onValueChange={(v) => set("metric", v as WatchCondition["metric"])}>
+              <SelectTrigger id={`${id}-metric`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {metricOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          {/* The condition's numbers, each in its own cell beside it. */}
+          {draft.metric === "p95" && (
+            <FormField label="p95 above" htmlFor={`${id}-ms`} error={shown.ms}>
+              <NumberInput id={`${id}-ms`} unit="ms" value={draft.ms} onChange={(v) => set("ms", v)} invalid={Boolean(shown.ms)} />
+            </FormField>
+          )}
+          {(draft.metric === "slowCount" || draft.metric === "slowShare") && (
+            <FormField label="Slower than" htmlFor={`${id}-ms`} error={shown.ms} hint="What counts as a slow request.">
+              <NumberInput id={`${id}-ms`} unit="ms" value={draft.ms} onChange={(v) => set("ms", v)} invalid={Boolean(shown.ms)} />
+            </FormField>
+          )}
+          {draft.metric === "slowCount" && (
+            <FormField label="More than" htmlFor={`${id}-count`} error={shown.count} hint="Slow requests in the window.">
+              <NumberInput
+                id={`${id}-count`}
+                unit="requests"
+                value={draft.count}
+                onChange={(v) => set("count", v)}
+                invalid={Boolean(shown.count)}
+              />
+            </FormField>
+          )}
+          {draft.metric === "slowShare" && (
+            <FormField label="More than" htmlFor={`${id}-percent`} error={shown.percent} hint="Of the requests in the window.">
+              <NumberInput
+                id={`${id}-percent`}
+                unit="%"
+                value={draft.percent}
+                onChange={(v) => set("percent", v)}
+                invalid={Boolean(shown.percent)}
+              />
+            </FormField>
+          )}
+          {draft.metric === "errorRate" && (
+            <FormField label="Error rate above" htmlFor={`${id}-percent`} error={shown.percent}>
+              <NumberInput
+                id={`${id}-percent`}
+                unit="%"
+                value={draft.percent}
+                onChange={(v) => set("percent", v)}
+                invalid={Boolean(shown.percent)}
+              />
+            </FormField>
+          )}
+          <FormField label="Judged over" htmlFor={`${id}-window`}>
+            <Select value={String(draft.windowSeconds)} onValueChange={(v) => set("windowSeconds", Number(v))}>
+              <SelectTrigger id={`${id}-window`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {windows.map((s) => (
+                  <SelectItem key={s} value={String(s)}>
+                    The last {windowLabel(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+          {draft.metric !== "slowCount" && (
+            <FormField
+              label="Minimum requests"
+              htmlFor={`${id}-min`}
+              error={shown.minRequests}
+              hint="A route with fewer in the window isn't judged."
+            >
+              <NumberInput
+                id={`${id}-min`}
+                unit="requests"
+                value={draft.minRequests}
+                onChange={(v) => set("minRequests", v)}
+                invalid={Boolean(shown.minRequests)}
+              />
+            </FormField>
+          )}
+        </FormSection>
+
+        <FormSection title="When it opens an incident">
+          <FormField
+            label="Opens after"
+            htmlFor={`${id}-checks`}
+            error={shown.checksToOpen}
+            hint="In a row over the limit. The watch checks every 10 seconds."
+          >
+            <NumberInput
+              id={`${id}-checks`}
+              unit="checks"
+              value={draft.checksToOpen}
+              onChange={(v) => set("checksToOpen", v)}
+              invalid={Boolean(shown.checksToOpen)}
+            />
+          </FormField>
+          <FormField label="Severity" htmlFor={`${id}-severity`}>
+            <Select value={draft.severity} onValueChange={(v) => set("severity", v as WatchRule["severity"])}>
+              <SelectTrigger id={`${id}-severity`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {severities.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    <SeverityBars severity={s} />
+                    {s.toUpperCase()} · {severityLabel[s]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        </FormSection>
+
+        {unnamed && <BacktestResult backtest={backtest} checksToOpen={unnamed.checksToOpen} />}
+
+        {error && (
+          <Alert key={error} variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setError(undefined)}>
+            <AlertTitle>Couldn&apos;t save</AlertTitle>
+            <AlertDescription className="break-words">{error}</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+          {isNew ? <span /> : <DeleteRule name={base.name} onConfirm={() => void remove()} disabled={saving} />}
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving || (!isNew && !changed)}>
+              {saving && <LoaderCircleIcon className="animate-spin" />}
+              {isNew ? "Create rule" : "Save changes"}
+            </Button>
+          </div>
+        </div>
+      </form>
+
+      <AlertDialog open={discarding} onOpenChange={setDiscarding}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard your changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isNew ? "The new rule won't be created." : `${base.name} stays as it was.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setDone(true);
+                router.push(back);
+              }}
+            >
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// Deletes the rule after a confirm. An incident it already opened stays.
+function DeleteRule({ name, onConfirm, disabled }: { name: string; onConfirm: () => void; disabled?: boolean }) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button type="button" variant="ghost" disabled={disabled}>
+          Delete rule
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The watch stops checking it, and an incident it already opened stays. To stop it for a while instead, pause it.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            Delete rule
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// A titled group of fields, in a bordered box: two equal columns from small
+// screens up, one on phones.
+function FormSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="font-medium text-sm">{title}</h2>
+      <div className="grid gap-x-4 gap-y-5 rounded-lg border p-4 sm:grid-cols-2">{children}</div>
+    </section>
+  );
+}
+
+// A labelled field, with a hint under it, or the error in its place. `wide`
+// spans both columns.
+function FormField({
+  label,
+  htmlFor,
+  hint,
+  error,
+  wide,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  hint?: string;
+  error?: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-1.5", wide && "sm:col-span-2")}>
+      <label htmlFor={htmlFor} className="font-medium text-xs">
+        {label}
+      </label>
+      {children}
+      {error ? (
+        <span role="alert" className="text-[color-mix(in_oklab,var(--destructive)_80%,black)] text-xs dark:text-destructive">
+          {error}
+        </span>
+      ) : (
+        hint && <span className="text-muted-foreground text-xs">{hint}</span>
+      )}
+    </div>
+  );
+}
+
+// A number filling its cell, its unit shown inside at the right end. The
+// browser's spin buttons are hidden; they'd sit on top of the unit.
+function NumberInput({
+  id,
+  unit,
+  value,
+  onChange,
+  invalid,
+}: {
+  id: string;
+  unit: string;
+  value: string;
+  onChange: (value: string) => void;
+  invalid?: boolean;
+}) {
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        type="number"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-invalid={invalid}
+        aria-describedby={`${id}-unit`}
+        style={{ paddingRight: `calc(${unit.length}ch + 1.25rem)` }}
+        className="tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <span
+        id={`${id}-unit`}
+        className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-muted-foreground text-sm"
+      >
+        {unit}
+      </span>
+    </div>
+  );
+}

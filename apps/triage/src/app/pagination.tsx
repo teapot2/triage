@@ -1,55 +1,29 @@
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { defaultSort, type IncidentSort } from "@/lib/investigation/sort";
+import { type ListParams, listHref } from "./list-params";
+import { PageSizeSelect } from "./page-size-select";
 
-export const PAGE_SIZE = 10;
-
-// The list's URL for a sort and page, leaving out whatever is the default.
-export function listHref(sort: IncidentSort, page: number): string {
-  const params = new URLSearchParams();
-  if (sort !== defaultSort) params.set("sort", sort);
-  if (page > 1) params.set("page", String(page));
-  const query = params.toString();
-  return query ? `/?${query}` : "/";
-}
-
-// A requested page as a number in range; anything else is the first page.
-export function parsePage(value: string | string[] | undefined, pageCount: number): number {
-  const n = Number(Array.isArray(value) ? value[0] : value);
-  return Number.isInteger(n) && n >= 1 ? Math.min(n, pageCount) : 1;
-}
-
-// After Navattic's and TheyDo's list footers: the range shown on the left,
-// Previous / Next on the right. Links, so each page has its own URL and the
-// back button steps through them.
-export function Pagination({
-  page,
-  pageCount,
-  total,
-  sort,
-}: {
-  page: number;
-  pageCount: number;
-  total: number;
-  sort: IncidentSort;
-}) {
-  const first = (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(page * PAGE_SIZE, total);
+// After Calendly's, Pinterest's and Navattic's list footers: rows per page on
+// the left, the range shown and Previous / Next on the right. The page
+// buttons are links, so each page has its own URL and the back button steps
+// through them.
+export function Pagination({ params, pageCount, total }: { params: ListParams; pageCount: number; total: number }) {
+  const { page, size } = params;
+  const first = (page - 1) * size + 1;
+  const last = Math.min(page * size, total);
 
   return (
     <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 pt-1">
-      <span className="text-muted-foreground text-sm tabular-nums">
-        Showing {first}–{last} of {total}
-      </span>
+      <PageSizeSelect params={params} />
       <div className="flex items-center gap-2">
-        <PageLink href={page > 1 ? listHref(sort, page - 1) : undefined} label="Previous page">
+        <span className="px-1 text-muted-foreground text-sm tabular-nums">
+          {first}–{last} of {total}
+        </span>
+        <PageLink href={page > 1 ? listHref({ ...params, page: page - 1 }) : undefined} label="Previous page">
           <ChevronLeftIcon /> Previous
         </PageLink>
-        <span className="px-1 text-muted-foreground text-sm tabular-nums">
-          Page {page} of {pageCount}
-        </span>
-        <PageLink href={page < pageCount ? listHref(sort, page + 1) : undefined} label="Next page">
+        <PageLink href={page < pageCount ? listHref({ ...params, page: page + 1 }) : undefined} label="Next page">
           Next <ChevronRightIcon />
         </PageLink>
       </div>

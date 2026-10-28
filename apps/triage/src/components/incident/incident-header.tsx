@@ -7,8 +7,9 @@ import { useRegisterCommands } from "@/components/command-registry";
 import type { Incident } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, useApprovalDecision } from "./approval-card";
-import { formatDateTime } from "./format";
+import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
+import { MetricBadges } from "./outcome-badges";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 
 // Height of the sticky bar; the report's section menu sticks below it.
@@ -19,7 +20,6 @@ const BAR_HEIGHT = 48;
 // keeps the title, status and approval in view.
 export function IncidentHeader({ incident }: { incident: Incident }) {
   const { trigger, fix, approval } = incident;
-  const breached = trigger.observed > trigger.threshold;
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
   const opensPr = incident.fixRun?.status === "proven";
   const { decision, decide, error } = useApprovalDecision(incident.id, approval?.state, opensPr);
@@ -111,8 +111,11 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             {actions}
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-muted-foreground text-sm">
+            {/* The badges first (state, severity, value against its limit),
+                then where and when, as text. */}
             <IncidentStatusBadge status={incident.status} />
             <SeverityBadge severity={incident.severity} />
+            <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
             {/* The dots only separate items on one line; on phones the line
                 wraps and they'd dangle at line ends, so spacing does it. */}
             <span className="sm:ml-1">{incident.service}</span>
@@ -120,16 +123,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
               ·
             </span>
             <span>
-              {incident.openedBy === "watch" ? "Detected by Triage" : "Detected"} {formatDateTime(incident.detectedAt)}
-            </span>
-            <span aria-hidden className="hidden sm:inline">
-              ·
-            </span>
-            <span className="tabular-nums">
-              <span className={cn(breached && "text-destructive")}>
-                {Math.round(trigger.observed)} {trigger.unit}
-              </span>{" "}
-              (limit {trigger.threshold} {trigger.unit})
+              {incident.openedBy === "watch" ? "Detected by Triage" : "Detected"} <Timestamp date={incident.detectedAt} />
             </span>
           </div>
         </div>

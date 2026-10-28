@@ -8,9 +8,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { cn } from "@/lib/utils";
-import { CheckIcon, CopyIcon } from "lucide-react";
+import { CheckIcon, CopyIcon, WrapTextIcon } from "lucide-react";
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react";
 import {
   createContext,
@@ -92,15 +97,28 @@ const LINE_NUMBER_CLASSES = cn(
   "before:select-none"
 );
 
+// Wrapped, a long line's continuation starts past the number column (w-8 +
+// mr-4 = 3rem) instead of under it: a hanging indent. The number keeps its
+// own indent at 0, since text-indent is inherited.
+const WRAPPED_LINE_NUMBER_CLASSES = "pl-12 -indent-12 before:indent-0";
+
 // Line rendering component
 const LineSpan = ({
   keyedLine,
   showLineNumbers,
+  wrap,
 }: {
   keyedLine: KeyedLine;
   showLineNumbers: boolean;
+  wrap: boolean;
 }) => (
-  <span className={showLineNumbers ? LINE_NUMBER_CLASSES : "block"}>
+  <span
+    className={
+      showLineNumbers
+        ? cn(LINE_NUMBER_CLASSES, wrap && WRAPPED_LINE_NUMBER_CLASSES)
+        : "block"
+    }
+  >
     {keyedLine.tokens.length === 0
       ? "\n"
       : keyedLine.tokens.map(({ token, key }) => (
@@ -124,11 +142,16 @@ interface TokenizedCode {
 
 interface CodeBlockContextType {
   code: string;
+  // Whether long lines wrap; off keeps the code's layout and scrolls.
+  wrap: boolean;
+  setWrap: (wrap: boolean) => void;
 }
 
 // Context
 const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
+  wrap: false,
+  setWrap: () => {},
 });
 
 // Highlighter cache (singleton per language)
@@ -255,10 +278,12 @@ const CodeBlockBody = memo(
   ({
     tokenized,
     showLineNumbers,
+    wrap,
     className,
   }: {
     tokenized: TokenizedCode;
     showLineNumbers: boolean;
+    wrap: boolean;
     className?: string;
   }) => {
     const preStyle = useMemo(
@@ -277,14 +302,18 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm",
+          // The size is the user's choice in Settings (--code-font-size);
+          // the line height scales with it.
+          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-(length:--code-font-size) leading-[1.45]",
+          // Break anywhere too: a URL or connection string has no spaces.
+          wrap && "whitespace-pre-wrap [overflow-wrap:anywhere]",
           className
         )}
         style={preStyle}
       >
         <code
           className={cn(
-            "font-mono text-sm",
+            "font-mono",
             showLineNumbers && "[counter-increment:line_0] [counter-reset:line]"
           )}
         >
@@ -293,6 +322,7 @@ const CodeBlockBody = memo(
               key={keyedLine.key}
               keyedLine={keyedLine}
               showLineNumbers={showLineNumbers}
+              wrap={wrap}
             />
           ))}
         </code>
@@ -302,6 +332,7 @@ const CodeBlockBody = memo(
   (prevProps, nextProps) =>
     prevProps.tokenized === nextProps.tokenized &&
     prevProps.showLineNumbers === nextProps.showLineNumbers &&
+    prevProps.wrap === nextProps.wrap &&
     prevProps.className === nextProps.className
 );
 
@@ -381,10 +412,12 @@ export const CodeBlockContent = ({
   code,
   language,
   showLineNumbers = false,
+  wrap = false,
 }: {
   code: string;
   language: BundledLanguage;
   showLineNumbers?: boolean;
+  wrap?: boolean;
 }) => {
   // Memoized raw tokens for immediate display
   const rawTokens = useMemo(() => createRawTokens(code), [code]);
@@ -437,7 +470,11 @@ export const CodeBlockContent = ({
 
   return (
     <div className="relative overflow-auto">
-      <CodeBlockBody showLineNumbers={showLineNumbers} tokenized={tokenized} />
+      <CodeBlockBody
+        showLineNumbers={showLineNumbers}
+        tokenized={tokenized}
+        wrap={wrap}
+      />
     </div>
   );
 };
@@ -450,7 +487,8 @@ export const CodeBlock = ({
   children,
   ...props
 }: CodeBlockProps) => {
-  const contextValue = useMemo(() => ({ code }), [code]);
+  const [wrap, setWrap] = useState(false);
+  const contextValue = useMemo(() => ({ code, wrap, setWrap }), [code, wrap]);
 
   return (
     <CodeBlockContext.Provider value={contextValue}>
@@ -460,9 +498,41 @@ export const CodeBlock = ({
           code={code}
           language={language}
           showLineNumbers={showLineNumbers}
+          wrap={wrap}
         />
       </CodeBlockContainer>
     </CodeBlockContext.Provider>
+  );
+};
+
+// Toggles wrapping long lines, as ChatGPT's code blocks do. Off by default,
+// so code keeps its layout until someone asks for it to fit. Its tooltip,
+// like the copy button's, isn't hoverable: they sit side by side, and a
+// hoverable one would stay open over its neighbour and block its tooltip.
+export const CodeBlockWrapButton = ({
+  className,
+  ...props
+}: ComponentProps<typeof Button>) => {
+  const { wrap, setWrap } = useContext(CodeBlockContext);
+  const label = wrap ? "Don't wrap lines" : "Wrap lines";
+
+  return (
+    <Tooltip disableHoverableContent>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={label}
+          aria-pressed={wrap}
+          className={cn("shrink-0", wrap && "bg-muted text-foreground", className)}
+          onClick={() => setWrap(!wrap)}
+          size="icon"
+          variant="ghost"
+          {...props}
+        >
+          <WrapTextIcon size={14} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -518,23 +588,29 @@ export const CodeBlockCopyButton = ({
   const swapped = useChangedSinceMount(isCopied);
 
   return (
-    <Button
-      className={cn("shrink-0", className)}
-      onClick={copyToClipboard}
-      size="icon"
-      variant="ghost"
-      {...props}
-    >
-      {children ?? (
-        <Icon
-          className={cn(
-            swapped &&
-              "animate-in fade-in-0 zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
+    <Tooltip disableHoverableContent>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label="Copy code"
+          className={cn("shrink-0", className)}
+          onClick={copyToClipboard}
+          size="icon"
+          variant="ghost"
+          {...props}
+        >
+          {children ?? (
+            <Icon
+              className={cn(
+                swapped &&
+                  "animate-in fade-in-0 zoom-in-50 duration-150 ease-out motion-reduce:animate-none"
+              )}
+              size={14}
+            />
           )}
-          size={14}
-        />
-      )}
-    </Button>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{isCopied ? "Copied" : "Copy code"}</TooltipContent>
+    </Tooltip>
   );
 };
 

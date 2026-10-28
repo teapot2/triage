@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CodeFontSizeSelect } from "@/components/code-font-size-select";
 import { ModelSettings } from "@/components/model-settings";
 import { ThemeSelect } from "@/components/theme-select";
 
@@ -6,7 +7,8 @@ export const metadata: Metadata = { title: "Settings · Triage" };
 
 // Settings. Each section is a bordered list of rows: a label and one-line
 // description on the left, the control on the right. Appearance is per
-// browser; the models are saved on the server.
+// browser; the models are saved on the server. The watch's rules have their
+// own page, /watch.
 export default function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 pt-2 pb-8 md:pt-8 sm:px-6">
@@ -18,15 +20,21 @@ export default function SettingsPage() {
         </h2>
         <div className="divide-y rounded-lg border">
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <span id="theme-label" className="font-medium text-sm">
+              Theme
+            </span>
+            <ThemeSelect aria-labelledby="theme-label" />
+          </div>
+          <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-0.5">
-              <span id="theme-label" className="font-medium text-sm">
-                Theme
+              <span id="code-font-label" className="font-medium text-sm">
+                Code font size
               </span>
               <span className="text-muted-foreground text-sm">
-                System follows your device&apos;s light or dark setting.
+                Text size in code viewers: evidence source, queries and fix diffs.
               </span>
             </div>
-            <ThemeSelect aria-labelledby="theme-label" />
+            <CodeFontSizeSelect aria-labelledby="code-font-label" />
           </div>
         </div>
       </section>

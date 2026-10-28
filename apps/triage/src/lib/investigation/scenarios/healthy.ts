@@ -15,7 +15,7 @@ export const healthy: Scenario = {
   alert: {
     title: "Control run: product page latency check",
     service: "shopfront",
-    severity: "sev3",
+    severity: "sev4",
     metric: "http.server.request.duration.p95{route=/api/products/[id]}",
     threshold: 500,
   },

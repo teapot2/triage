@@ -15,7 +15,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Incident, IncidentStatus } from "@/lib/investigation/schema";
 import { investigationOptions } from "@/lib/investigation/options";
 import { listIncidents } from "@/lib/investigation/store";
-import { activityAt, openStatuses, rootCauseTitle } from "@/lib/investigation/summary";
+import { activityAt, incidentPreview, openStatuses, rootCauseTitle } from "@/lib/investigation/summary";
+import { parseRecentFilters, SIDEBAR_FILTERS_COOKIE } from "@/lib/sidebar-filters";
 import { parseCollapsedSections, SIDEBAR_SECTIONS_COOKIE } from "@/lib/sidebar-sections";
 import { AppSidebarNav } from "./app-sidebar-nav";
 import { NewInvestigation } from "./new-investigation";
@@ -23,7 +24,6 @@ import { SidebarBrand } from "./sidebar-brand";
 import { SidebarFooterControls } from "./sidebar-footer";
 import { SidebarWatch } from "./sidebar-settings";
 
-const RECENT_LIMIT = 8;
 const ATTENTION_LIMIT = 5;
 // What someone has to act on or watch, most urgent first: a fix to approve,
 // a run to retry, a run in progress.
@@ -60,11 +60,15 @@ async function IncidentsNav() {
   await connection();
   // Collapsed groups render collapsed from the first byte, so a reload
   // doesn't open them and snap shut.
-  const collapsed = parseCollapsedSections((await cookies()).get(SIDEBAR_SECTIONS_COOKIE)?.value);
+  // So are Recent's sort and filters: the list renders filtered.
+  const jar = await cookies();
+  const collapsed = parseCollapsedSections(jar.get(SIDEBAR_SECTIONS_COOKIE)?.value);
+  const filters = parseRecentFilters(jar.get(SIDEBAR_FILTERS_COOKIE)?.value);
   return (
     <AppSidebarNav
       {...await loadNav()}
       collapsed={collapsed}
+      filters={filters}
       scenarios={investigationOptions}
     />
   );
@@ -72,10 +76,10 @@ async function IncidentsNav() {
 
 // What the nav shows, plus when it was read: the browser's first render of
 // the relative times uses that, so it matches this HTML before its own
-// clock takes over. Incidents that need someone go in Needs attention,
-// most urgent status first (each status newest first: the list is sorted
-// newest first and the sort is stable); Recent is everything else, so an
-// incident moves back there once it's handled.
+// clock takes over. `attention` is what needs someone, most urgent status
+// first (each status newest first: the list is sorted newest first and the
+// sort is stable), for the search palette. The sidebar's Recent list is
+// filtered from `all` in the browser, by the bell and the filter menu.
 async function loadNav() {
   const incidents = await listIncidents();
   const openCount = incidents.filter((i) => openStatuses.includes(i.status)).length;
@@ -85,20 +89,19 @@ async function loadNav() {
     title: i.title,
     service: i.service,
     status: i.status,
+    severity: i.severity,
     at: i.run?.startedAt ?? i.detectedAt,
     activityAt: activityAt(i),
+    preview: incidentPreview(i),
   });
   const attention = incidents
     .filter((i) => attentionOrder.includes(i.status))
     .sort((a, b) => attentionOrder.indexOf(a.status) - attentionOrder.indexOf(b.status))
     .slice(0, ATTENTION_LIMIT);
-  const shown = new Set(attention.map((i) => i.id));
-  const recent = incidents.filter((i) => !shown.has(i.id)).slice(0, RECENT_LIMIT);
   return {
     openCount,
     attention: attention.map(toItem),
-    recent: recent.map(toItem),
-    // Every incident, for search; the groups above only show a few.
+    // Every incident: Recent and search draw from it.
     all: incidents.map(toItem),
     now: Date.now(),
   };

@@ -6,37 +6,33 @@ import { Button } from "@/components/ui/button";
 import { useStartInvestigation } from "@/hooks/use-start-investigation";
 import type { Run } from "@/lib/investigation/schema";
 
-// What a failure means, in plain words; the raw error stays visible below
-// it for whoever needs to debug it.
-function explain(error: string): string {
-  if (/^Triage restarted/.test(error)) {
-    return "The server restarted while the agent was investigating, so the run stopped partway.";
-  }
-  if (/no accepted report/i.test(error)) {
-    return "The agent ran out of steps before its report passed validation.";
-  }
+// What a failure means, as one plain title. The raw error shows under it
+// only when it says something the title can't: an unrecognized failure, or
+// the model's own message about why it refused.
+function explain(error: string): { title: string; detail?: string } {
+  if (/^Triage restarted/.test(error)) return { title: "The run stopped when Triage restarted" };
+  if (/no accepted report/i.test(error)) return { title: "The agent ran out of steps before finishing its report" };
   if (/tool_choice|fetch|network|ECONN|timed? ?out|HTTP \d|api key|unauthor/i.test(error)) {
-    return "Triage couldn't reach the model, or the model rejected the request.";
+    return { title: "Couldn't reach the model", detail: error };
   }
-  return "Something went wrong while the agent was investigating.";
+  return { title: "The investigation failed", detail: error };
 }
 
-// A failed run on the Overview: what happened, the raw error, and a way to
-// try again when the run came from a replayable scenario.
+// A failed run on the Overview: what happened, in one line (two at most),
+// and a way to try again when the run came from a replayable scenario.
+// When retrying fails, that's the line instead.
 export function FailedRunNotice({ run }: { run: Run & { error: string } }) {
   const scenario = run.source.startsWith("scenario:") ? run.source.slice("scenario:".length) : undefined;
   const retry = useStartInvestigation();
+  const { title, detail } = explain(run.error);
+  const line = retry.error ? `Couldn't start a new run: ${retry.error}` : detail;
 
   return (
     // Room on the right for "Run again", which is wider than the action the
     // Alert reserves space for by default.
     <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
-      <AlertTitle>The investigation didn&apos;t finish</AlertTitle>
-      <AlertDescription className="flex flex-col gap-1.5">
-        <span>{explain(run.error)}</span>
-        <code className="break-words font-mono text-muted-foreground text-xs">{run.error}</code>
-        {retry.error && <span className="text-destructive text-xs">Couldn&apos;t start a new run: {retry.error}</span>}
-      </AlertDescription>
+      <AlertTitle>{title}</AlertTitle>
+      {line && <AlertDescription className="line-clamp-2 break-words">{line}</AlertDescription>}
       {scenario && (
         <AlertAction>
           <Button size="xs" variant="outline" disabled={retry.pending} onClick={() => retry.start(scenario)}>

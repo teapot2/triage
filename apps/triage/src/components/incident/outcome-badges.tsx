@@ -30,6 +30,25 @@ export function HttpStatusBadge({ status, latencyMs }: { status: number; latency
   );
 }
 
+const metricValue = (n: number, unit: string) =>
+  unit === "ratio" ? `${Math.round(n * 100)}%` : `${Math.round(n)} ${unit}`;
+
+// An alert's measured value against its limit, as a pair like the test
+// results: the value red when over the limit (green when within it), then
+// the limit itself, quiet.
+export function MetricBadges({ observed, threshold, unit }: { observed: number; threshold: number; unit: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Badge variant={observed > threshold ? "destructive" : "success"} className="tabular-nums">
+        {metricValue(observed, unit)}
+      </Badge>
+      <Badge variant="secondary" className="font-normal tabular-nums">
+        limit {metricValue(threshold, unit)}
+      </Badge>
+    </span>
+  );
+}
+
 // A log line's level: errors red, warnings amber, the rest quiet.
 export function LogLevelBadge({ level }: { level: "debug" | "info" | "warn" | "error" }) {
   const variant = level === "error" ? "destructive" : level === "warn" ? "warning" : "secondary";

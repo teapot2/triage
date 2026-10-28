@@ -8,6 +8,7 @@ import {
   CodeBlockFilename,
   CodeBlockHeader,
   CodeBlockTitle,
+  CodeBlockWrapButton,
 } from "@/components/ai-elements/code-block";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -122,6 +123,7 @@ export function FixView({ fix, validation, fixRun }: { fix: Fix; validation?: Sa
                 <CodeBlockFilename>{fix.files.join(", ")}</CodeBlockFilename>
               </CodeBlockTitle>
               <CodeBlockActions>
+                <CodeBlockWrapButton />
                 <CodeBlockCopyButton />
               </CodeBlockActions>
             </CodeBlockHeader>

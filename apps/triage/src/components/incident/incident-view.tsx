@@ -44,7 +44,8 @@ export function IncidentView({ incident }: { incident: Incident }) {
     <EvidenceProvider evidence={incident.evidence} order={order}>
       <IncidentCommands incident={incident} />
       <IncidentHeader incident={incident} />
-      <div className="mx-auto w-full max-w-6xl px-4 pt-8 pb-8 sm:px-6">
+      {/* A container, so the report lays out by its own width. */}
+      <div className="@container mx-auto w-full max-w-6xl px-4 pt-8 pb-8 sm:px-6">
         <IncidentReport incident={incident} unknownEvidenceIds={unknownEvidenceIds} cited={order} />
       </div>
     </EvidenceProvider>

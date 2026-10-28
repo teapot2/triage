@@ -433,7 +433,7 @@ const controlRun: Incident = {
   id: "inc_control",
   title: "Control run: product page latency check",
   service: "shopfront",
-  severity: "sev3",
+  severity: "sev4",
   status: "healthy",
   detectedAt: "2026-10-23T09:30:00Z",
   trigger: {

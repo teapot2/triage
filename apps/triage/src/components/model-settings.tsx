@@ -3,9 +3,9 @@
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { StageRow, useModelList } from "@/components/model-stage-row";
-import { DisclosureRow, ListGroup, SettingsSectionHeader, Status } from "@/components/settings-list";
+import { DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -76,7 +76,7 @@ export function ModelSettings() {
   return (
     <>
       <section aria-labelledby="models" className="flex flex-col gap-3">
-        <SettingsSectionHeader id="models" title="Models" description="The provider and model each stage runs on.">
+        <SettingsSectionHeader id="models" title="Models">
           {settings?.openWeights && <Badge variant="info">Open weights</Badge>}
         </SettingsSectionHeader>
 
@@ -113,7 +113,7 @@ export function ModelSettings() {
         {settings && (
           <div className="divide-y overflow-hidden rounded-lg border">
             <PresetRow providers={settings.providers} onSave={save} />
-            <ListGroup label="Stages" note="Each runs on its own provider and model" />
+            <ListGroup label="Stages" />
             {stageIds.map((stage) => (
               <StageRow
                 key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}`}
@@ -133,7 +133,7 @@ export function ModelSettings() {
           <SettingsSectionHeader
             id="providers"
             title="Providers"
-            description="Where each stage's model runs. Every provider speaks the OpenAI API."
+            description="Every provider speaks the OpenAI API."
           />
           <div className="divide-y overflow-hidden rounded-lg border">
             <ListGroup label="Hosted" note="Keys come from apps/triage/.env.local when the server starts" />
@@ -302,7 +302,7 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
       title={provider.label}
       tag={usedBy.join(" · ") || undefined}
       subtitle={<span className="font-mono">{provider.baseUrl}</span>}
-      status={provider.hasKey ? <Status tone="success">Ready</Status> : <Status tone="warning">Needs key</Status>}
+      status={provider.hasKey ? <StatusBadge tone="success">Ready</StatusBadge> : <StatusBadge tone="warning">Needs key</StatusBadge>}
       {...row}
     >
       <div className="flex flex-col gap-1.5">
@@ -360,10 +360,10 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
 
   let status;
   if (!configured) status = <span className={buttonVariants({ variant: "outline", size: "xs" })}>Set up</span>;
-  else if (list.loading) status = <Status tone="muted" loading>Checking</Status>;
-  else if (list.unreachable) status = <Status tone="muted">{provider.local ? "Not running" : "Unreachable"}</Status>;
-  else if (list.error) status = <Status tone="destructive">Error</Status>;
-  else status = <Status tone="success">{modelCount(list.models.length)}</Status>;
+  else if (list.loading) status = <StatusBadge tone="muted" loading>Checking</StatusBadge>;
+  else if (list.unreachable) status = <StatusBadge tone="muted">{provider.local ? "Not running" : "Unreachable"}</StatusBadge>;
+  else if (list.error) status = <StatusBadge tone="destructive">Error</StatusBadge>;
+  else status = <StatusBadge tone="success">{modelCount(list.models.length)}</StatusBadge>;
 
   async function save() {
     setSaving(true);

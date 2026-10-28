@@ -76,7 +76,7 @@
 
   @keyframes highlight-flash {
     from {
-      background-color: color-mix(in oklab, var(--warning) 45%, transparent);
+      background-color: color-mix(in oklab, var(--foreground) 25%, transparent);
     }
   }
 
@@ -177,6 +177,8 @@
 
 :root {
   color-scheme: light;
+  /* Code viewers' text size; Settings can change it (see lib/code-font). */
+  --code-font-size: 14px;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

@@ -1,40 +1,102 @@
 "use client";
 
-import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { PauseIcon, PlayIcon } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { SidebarMenuButton } from "@/components/ui/sidebar";
-import type { WatchState } from "@/lib/investigation/watch";
+import { formatAgo } from "@/components/incident/format";
+import { StatusBadgeDot, type StatusTone } from "@/components/ui/badge";
+import { SidebarMenuAction, SidebarMenuButton, useSidebar } from "@/components/ui/sidebar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useNow } from "@/hooks/use-now";
+import type { RuleState, WatchState } from "@/lib/investigation/watch";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 5_000;
 
-const look: Record<WatchState["status"], { label: string; dot: string }> = {
-  ok: { label: "Watching shopfront", dot: "bg-success" },
-  idle: { label: "Watching shopfront · no traffic", dot: "bg-muted-foreground" },
-  breaching: { label: "Shopfront over its limit", dot: "bg-warning animate-pulse motion-reduce:animate-none" },
-  alerting: { label: "Incident open on shopfront", dot: "bg-destructive" },
-  paused: { label: "Watch paused", dot: "bg-muted-foreground/50" },
+// Over a limit is the one state that pulses: it's about to open an
+// incident. A healthy watch stays still rather than pulling at the eye.
+const look: Record<WatchState["status"], { label: string; tone: StatusTone; pulse?: boolean }> = {
+  ok: { label: "Watching shopfront", tone: "success" },
+  idle: { label: "Watching shopfront", tone: "muted" },
+  breaching: { label: "Shopfront over a limit", tone: "warning", pulse: true },
+  alerting: { label: "Incident open on shopfront", tone: "destructive" },
+  paused: { label: "Watch paused", tone: "muted" },
 };
 
-// What the last check saw, for the tooltip.
-function detail(s: WatchState): string {
-  if (!s.enabled) return "Triage isn't watching the live store. Click to resume.";
-  if (s.error) return `The last check failed: ${s.error}`;
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+// The second line: what the last check saw, in as few words as fit.
+function reading(s: WatchState, now: number): string {
+  if (!s.enabled) return "Not checking shopfront";
+  if (s.error) return s.status === "alerting" ? "Couldn't open an incident" : "Last check failed";
+  if (s.status === "alerting" && s.lastOpened) {
+    const ago = formatAgo(s.lastOpened.at, now);
+    return `Opened ${ago === "now" ? "just now" : `${ago} ago`} · ${s.lastOpened.rule}`;
+  }
   const c = s.lastCheck;
-  if (!c || c.requests === 0) return "No requests to the store in the last minute. Click to pause.";
-  const errors = c.errorRatio === null ? "–" : `${Math.round(c.errorRatio * 100)}%`;
-  return `Last minute: p95 ${c.p95Ms ?? "–"} ms, ${errors} errors, ${c.requests} requests. Click to pause.`;
+  if (!c) return "Starting…";
+  if (c.requests === 0) return "No requests in the last minute";
+  // Over a limit, the rule and how close it is to opening an incident.
+  const breaching = s.rules.find((r) => r.status === "breaching");
+  if (breaching) return `${breaching.name} · check ${breaching.checks} of ${breaching.needed}`;
+  if (s.status === "idle") return `${plural(c.requests, "request", "requests")}, too few to judge`;
+  const ok = s.rules.filter((r) => r.status === "ok").length;
+  return `${plural(ok, "rule", "rules")} OK · ${c.requests}/min`;
+}
+
+const ruleWord: Record<RuleState["status"], string> = {
+  ok: "OK",
+  breaching: "over its limit",
+  alerting: "opened the incident",
+  idle: "not enough traffic",
+  paused: "off",
+};
+
+// The full story, for the row's tooltip: the last minute's traffic, then
+// each rule, what it checks and what it last saw.
+function Detail({ s, label }: { s: WatchState; label: string }) {
+  const headline = !s.enabled
+    ? "Triage isn't watching the live store."
+    : s.error
+      ? s.error
+      : s.lastCheck
+        ? `Last minute: ${plural(s.lastCheck.requests, "request", "requests")}.`
+        : "Starting.";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span>
+        <span className="font-medium">{label}.</span> {headline}
+      </span>
+      {s.enabled && s.rules.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {s.rules.map((r) => (
+            <li key={r.id}>
+              <span className="font-medium">{r.name}</span>: {ruleWord[r.status]}
+              {r.summary && r.status !== "idle" && <>, {r.summary}</>}
+              <span className="block opacity-70">{r.description}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 // Stage 1 in the sidebar: whether Triage is watching the live store and
-// what it last saw. Polls the watch; when it opens an incident, says so and
-// refreshes the page, so the incident appears without a reload. Clicking
-// pauses or resumes it.
+// what it last saw, on two lines. Polls the watch; when it opens an
+// incident, says so and refreshes the page, so the incident appears without
+// a reload. The row links to the Watch page, or to the incident while one
+// is open. Pausing and resuming is its own button, so clicking the row never
+// changes the watch.
 export function WatchStatus() {
   const router = useRouter();
+  const { setOpenMobile, isMobile } = useSidebar();
   const [state, setState] = useState<WatchState | null>(null);
+  // For "opened 2m ago". No state renders on the server, so its clock is
+  // never read there.
+  const now = useNow(0);
   // The incident the watch had opened when this page loaded; anything newer
   // is announced.
   const seen = useRef<string | undefined | null>(null);
@@ -53,7 +115,7 @@ export function WatchStatus() {
           seen.current = opened;
           router.refresh();
           toast.error("Triage opened an incident", {
-            description: "Shopfront crossed its alert limit. The investigation has started.",
+            description: `Shopfront tripped the ${next.lastOpened?.rule ?? "watch"} rule. The investigation has started.`,
             action: { label: "View", onClick: () => router.push(`/incidents/${opened}`) },
           });
         }
@@ -80,25 +142,68 @@ export function WatchStatus() {
   }
 
   const status = state?.status ?? "paused";
-  const { label, dot } = look[status];
-  const Icon = state?.enabled === false ? EyeOffIcon : EyeIcon;
+  const { label, tone, pulse } = look[status];
+  const line2 = state ? reading(state, now) : "Connecting…";
+  const incident = status === "alerting" ? state?.lastOpened?.incidentId : undefined;
+  const ToggleIcon = state?.enabled === false ? PlayIcon : PauseIcon;
+  const toggleLabel = state?.enabled === false ? "Resume watching" : "Pause watching";
+
+  const body = (
+    <>
+      {/* A size-4 box, so the dot lines up with the nav icons above. */}
+      <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
+        <StatusBadgeDot tone={tone} pulse={pulse} className={cn("size-2", (!state || status === "paused") && "opacity-50")} />
+      </span>
+      <div className="flex min-w-0 flex-col">
+        <span className={cn("truncate", status === "paused" && "text-muted-foreground")}>
+          {state ? label : "Watch"}
+        </span>
+        <span
+          className={cn(
+            "truncate text-muted-foreground text-xs tabular-nums",
+            state?.error && "text-[color-mix(in_oklab,var(--destructive)_80%,black)] dark:text-destructive",
+          )}
+        >
+          {line2}
+        </span>
+      </div>
+    </>
+  );
 
   return (
-    <SidebarMenuButton
-      onClick={() => void toggle()}
-      disabled={!state}
-      tooltip={state ? `${label}. ${detail(state)}` : "Watch"}
-      aria-label={state ? `${label}. ${detail(state)}` : "Watch"}
-      className="text-muted-foreground"
-    >
-      <span className="relative">
-        <Icon />
-        <span
-          aria-hidden
-          className={cn("absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-sidebar", state ? dot : "bg-muted")}
-        />
-      </span>
-      <span className="truncate">{state ? label : "Watch"}</span>
-    </SidebarMenuButton>
+    <>
+      {/* Sidebar tooltips only show when it's collapsed; this one carries
+          details the row has no room for, so it shows expanded too. Not
+          hoverable: the pause button sits between the row and the tooltip,
+          and a hoverable one would stay open over it and block its own. */}
+      <Tooltip disableHoverableContent>
+        <TooltipTrigger asChild>
+          <SidebarMenuButton
+            asChild
+            className="h-auto min-h-8 py-1.5"
+          >
+            <Link href={incident ? `/incidents/${incident}` : "/watch"} onClick={() => setOpenMobile(false)}>
+              {body}
+            </Link>
+          </SidebarMenuButton>
+        </TooltipTrigger>
+        <TooltipContent side="right" hidden={isMobile} className="items-start">
+          {state ? <Detail s={state} label={label} /> : "Watch"}
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <SidebarMenuAction
+            onClick={() => void toggle()}
+            disabled={!state}
+            aria-label={toggleLabel}
+            className="peer-data-[size=default]/menu-button:top-1/2 size-6 -translate-y-1/2 disabled:opacity-50"
+          >
+            <ToggleIcon />
+          </SidebarMenuAction>
+        </TooltipTrigger>
+        <TooltipContent side="right">{toggleLabel}</TooltipContent>
+      </Tooltip>
+    </>
   );
 }

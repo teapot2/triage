@@ -10,6 +10,7 @@ import type { Incident } from "./schema";
 import type { MetricSeries, TelemetrySource } from "./source";
 import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
+import { describeRule, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
 
 const MAX_STEPS = 30;
 // Steps left when only submit_report stays available.
@@ -42,9 +43,10 @@ function prompt(incident: Incident, source: TelemetrySource): string {
   const services = d.services
     .map((s) => `${s.name}${s.dependsOn.length ? ` -> ${s.dependsOn.join(", ")}` : ""}`)
     .join("; ");
+  const rule = incident.trigger.rule;
   return `Alert: ${incident.title}
 Service: ${incident.service}
-Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})
+Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}
 Alert time (treat as now): ${d.now}
 Dependency path: ${services}
 
@@ -63,9 +65,10 @@ export async function createScenarioIncident(scenario: Scenario): Promise<Incide
   });
 }
 
-// A live run raises the same alert the pool-leak scenario does, from the
-// store's real latency. Below threshold it still runs, as a health check,
-// unless the watch opened it for errors (`errorRatio` over ERROR_LIMIT).
+// A live run someone starts raises the same alert the pool-leak scenario
+// does, from the store's real latency. Below threshold it still runs, as a
+// health check, unless `errorRatio` is over ERROR_LIMIT. (The watch opens
+// its incidents from its rules instead: createRuleIncident.)
 export const ERROR_LIMIT = 0.05;
 
 export async function createLiveIncident(
@@ -87,16 +90,43 @@ export async function createLiveIncident(
         ? `Error rate above ${ERROR_LIMIT * 100}% on GET ${liveAlert.route}`
         : `Health check: p95 latency on GET ${liveAlert.route}`,
     service: "shopfront",
-    severity: firing || erroring ? "sev2" : "sev3",
+    severity: firing || erroring ? "sev2" : "sev4",
     threshold: liveAlert.threshold,
     openedBy: opts.openedBy ?? "person",
+  });
+}
+
+// An incident a watch rule opened: titled by the rule and the route that
+// tripped it, its chart that route's latency (or error ratio) against the
+// rule's limit.
+export async function createRuleIncident(
+  source: TelemetrySource,
+  trip: { rule: WatchRule; route: string; method: string },
+): Promise<Incident> {
+  const { metric, threshold } = tripMetric(trip.rule, trip.route);
+  const alert = await source.queryMetric({ name: metric, windowMinutes: 30 });
+  if (!alert || alert.points.length === 0) throw new Error(`No ${metric} series to open an incident from.`);
+  return saveNewIncident(source, alert, {
+    title: tripTitle(trip.rule, trip.method, trip.route),
+    service: "shopfront",
+    severity: trip.rule.severity,
+    threshold,
+    openedBy: "watch",
+    rule: { id: trip.rule.id, name: trip.rule.name, description: describeRule(trip.rule) },
   });
 }
 
 async function saveNewIncident(
   source: TelemetrySource,
   alert: MetricSeries,
-  a: { title: string; service: string; severity: Incident["severity"]; threshold: number; openedBy?: Incident["openedBy"] },
+  a: {
+    title: string;
+    service: string;
+    severity: Incident["severity"];
+    threshold: number;
+    openedBy?: Incident["openedBy"];
+    rule?: Incident["trigger"]["rule"];
+  },
 ): Promise<Incident> {
   const stage = await stageModel("investigate");
   const incident: Incident = {
@@ -113,6 +143,7 @@ async function saveNewIncident(
       threshold: a.threshold,
       observed: alert.points[alert.points.length - 1].value,
       series: alert.points,
+      rule: a.rule,
     },
     steps: [],
     evidence: [],

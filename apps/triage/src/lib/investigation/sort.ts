@@ -40,7 +40,7 @@ const comparators: Record<IncidentSort, (a: Incident, b: Incident) => number> = 
   newest: newestFirst,
   oldest: (a, b) => -newestFirst(a, b),
   attention: (a, b) => statusRank[a.status] - statusRank[b.status] || newestFirst(a, b),
-  // "sev1" < "sev2" < "sev3" as strings, so the most severe sorts first.
+  // "sev1" < "sev2" < "sev3" < "sev4" as strings, so the most severe sorts first.
   severity: (a, b) => a.severity.localeCompare(b.severity) || newestFirst(a, b),
   updated: (a, b) => Date.parse(activityAt(b)) - Date.parse(activityAt(a)),
 };

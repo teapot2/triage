@@ -6,10 +6,11 @@
 export const SIDEBAR_SECTIONS_COOKIE = "sidebar_sections_collapsed";
 const MAX_AGE = 60 * 60 * 24 * 365;
 
-export type SidebarSection = "attention" | "recent";
-const sections: SidebarSection[] = ["attention", "recent"];
+export type SidebarSection = "recent";
+const sections: SidebarSection[] = ["recent"];
 
-// "attention,recent" -> the collapsed sections; unknown names are ignored.
+// "recent" -> the collapsed sections; unknown names (like the old
+// "attention" group) are ignored.
 export function parseCollapsedSections(value: string | undefined): SidebarSection[] {
   const names = (value ?? "").split(",");
   return sections.filter((s) => names.includes(s));

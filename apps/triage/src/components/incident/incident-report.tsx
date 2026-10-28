@@ -20,6 +20,7 @@ import { FixProgress, FixProof, FixView } from "./fix-panel";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
+import { MetricBadges } from "./outcome-badges";
 
 type SectionId = "overview" | "fix" | "investigation";
 
@@ -44,7 +45,6 @@ export function IncidentReport({
 }) {
   const { report, fix, validation, steps, evidence, trigger, run } = incident;
   const running = incident.status === "investigating";
-  const breached = trigger.observed > trigger.threshold;
 
   // A verdict that arrives while the page is open rises in, the fix just
   // after it; one that was already there when the incident opened just
@@ -122,12 +122,7 @@ export function IncidentReport({
               <ChartLineIcon className="size-3.5" />
               {metricLabel(trigger.metric)}
             </span>
-            <span className="text-muted-foreground tabular-nums">
-              <span className={cn("font-medium", breached ? "text-destructive" : "text-foreground")}>
-                {Math.round(trigger.observed)} {trigger.unit}
-              </span>{" "}
-              · limit {trigger.threshold} {trigger.unit}
-            </span>
+            <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
           </div>
           <MetricChart
             series={trigger.series}
@@ -144,9 +139,12 @@ export function IncidentReport({
   };
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-10">
-      <nav aria-label="Report sections" className="md:sticky md:top-18 md:self-start">
-        <ul className="-mx-1 flex gap-1 overflow-x-auto pb-1 md:mx-0 md:flex-col md:overflow-visible md:pb-0">
+    // The menu sits beside the section only while the report itself is wide
+    // enough (a container query, not the window): the docked evidence panel
+    // takes room, and then the menu becomes a row on top.
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[11rem_minmax(0,1fr)] @2xl:gap-10">
+      <nav aria-label="Report sections" className="@2xl:sticky @2xl:top-18 @2xl:self-start">
+        <ul className="-mx-1 flex gap-1 overflow-x-auto pb-1 @2xl:mx-0 @2xl:flex-col @2xl:overflow-visible @2xl:pb-0">
           {sections.map((s) => {
             const Icon = s.icon;
             const active = s.id === current.id;

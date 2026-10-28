@@ -5,7 +5,8 @@ import { useEffect, useId, useState } from "react";
 import { formatDuration } from "@/components/incident/format";
 import type { ModelUpdate, Provider, SaveModelSettings, StageModel } from "@/components/model-settings";
 import { ModelPicker } from "@/components/model-picker";
-import { DisclosureRow, Status } from "@/components/settings-list";
+import { DisclosureRow } from "@/components/settings-list";
+import { StatusBadge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -103,12 +104,12 @@ export function StageRow({
   // list follows the draft's provider, so a draft on another one shows none.
   let status;
   if (draft.provider !== saved.provider) status = undefined;
-  else if (missingKey) status = <Status tone="warning">Needs key</Status>;
-  else if (list.loading) status = <Status tone="muted" loading>Checking</Status>;
-  else if (list.unreachable) status = <Status tone="muted">{provider?.local ? "Not running" : "Unreachable"}</Status>;
-  else if (list.error) status = <Status tone="destructive">Error</Status>;
-  else if (!list.models.includes(saved.model)) status = <Status tone="warning">Not found</Status>;
-  else status = <Status tone="success">Ready</Status>;
+  else if (missingKey) status = <StatusBadge tone="warning">Needs key</StatusBadge>;
+  else if (list.loading) status = <StatusBadge tone="muted" loading>Checking</StatusBadge>;
+  else if (list.unreachable) status = <StatusBadge tone="muted">{provider?.local ? "Not running" : "Unreachable"}</StatusBadge>;
+  else if (list.error) status = <StatusBadge tone="destructive">Error</StatusBadge>;
+  else if (!list.models.includes(saved.model)) status = <StatusBadge tone="warning">Not found</StatusBadge>;
+  else status = <StatusBadge tone="success">Ready</StatusBadge>;
 
   // A model ID rarely carries over to another provider, so start the new one
   // empty. The exceptions: going back to the saved provider restores its
@@ -245,10 +246,7 @@ export function StageRow({
       )}
       {check?.ok && (
         <Alert key={checks} variant="success" dismissible dismissLabel="Dismiss result" autoDismiss={SUCCESS_MS} onDismiss={() => setCheck(null)}>
-          <AlertTitle>The model answered</AlertTitle>
-          <AlertDescription className="break-words">
-            Replied &ldquo;{check.text}&rdquo; in {formatDuration(check.ms)}.
-          </AlertDescription>
+          <AlertTitle>The model answered in {formatDuration(check.ms)}</AlertTitle>
         </Alert>
       )}
       {check && !check.ok && (

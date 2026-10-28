@@ -65,23 +65,35 @@ interface Series {
 }
 
 // Next.js's server span for each request, the one that knows the route.
-const isRequest = (s: SpanRow) => s.scope === "next.js" && s.kind === 2 && typeof s.attributes["http.route"] === "string";
+// Requests to the demo harness's routes (see harnessPaths) don't count: the
+// watch never judges them and the agent never sees them.
+export const harnessRoutes = ["/ops", "/api/ops"];
+const routeOf = (s: SpanRow) => String(s.attributes["http.route"]);
+const isRequest = (s: SpanRow) =>
+  s.scope === "next.js" && s.kind === 2 && typeof s.attributes["http.route"] === "string" && !harnessRoutes.includes(routeOf(s));
 const statusCode = (s: SpanRow) => Number(s.attributes["http.status_code"] ?? s.attributes["http.response.status_code"] ?? 0);
 const failed = (s: SpanRow) => s.error || statusCode(s) >= 500;
 const duration = (s: SpanRow) => s.end - s.start;
+const methodOf = (s: SpanRow) =>
+  String(s.attributes["http.method"] ?? s.attributes["http.request.method"] ?? s.name.split(" ")[0] ?? "GET");
 
-// The alerted route's health over the last `windowMs`, straight from the
-// request spans: cheap enough to check every few seconds, and measured the
-// same way as the series an investigation sees.
-export async function routeHealth(windowMs: number, route = liveAlert.route) {
+export interface RequestSample {
+  route: string;
+  method: string;
+  start: number;
+  durationMs: number;
+  failed: boolean;
+}
+
+// Every request in the last `windowMs`, straight from the request spans:
+// what the watch's rules are judged on. Cheap enough to read every few
+// seconds, and measured the same way as the series an investigation sees.
+export async function recentRequests(windowMs: number): Promise<RequestSample[]> {
   const now = Date.now();
   const { spans } = await readTelemetry();
-  const rows = spans.filter((s) => isRequest(s) && s.attributes["http.route"] === route && s.start > now - windowMs && s.start <= now);
-  return {
-    requests: rows.length,
-    p95Ms: rows.length ? Math.round(p95(rows.map(duration))) : null,
-    errorRatio: rows.length ? rows.filter(failed).length / rows.length : null,
-  };
+  return spans
+    .filter((s) => isRequest(s) && s.start > now - windowMs && s.start <= now)
+    .map((s) => ({ route: routeOf(s), method: methodOf(s), start: s.start, durationMs: duration(s), failed: failed(s) }));
 }
 
 export async function createLiveSource(): Promise<TelemetrySource> {
@@ -253,16 +265,17 @@ const point = (start: number, value: number): MetricPoint => ({
 });
 
 // Request metrics computed from Next.js's server spans, since the HTTP
-// instrumentation's own histograms don't carry the route.
+// instrumentation's own histograms don't carry the route. Latency and error
+// ratio per route, pages included: a watch rule can trip on any route, and
+// its incident charts that route's series.
 function spanSeries(
   requests: SpanRow[],
   now: number,
   f: { statusCode: (s: SpanRow) => number; failed: (s: SpanRow) => boolean; duration: (s: SpanRow) => number },
 ): Series[] {
-  const routes = [...new Set(requests.map((r) => String(r.attributes["http.route"])))]
-    .filter((r) => r.startsWith("/api/") && r !== "/api/ops")
-    .sort();
+  const routes = [...new Set(requests.map((r) => String(r.attributes["http.route"])))].sort();
   if (!routes.includes(liveAlert.route)) routes.unshift(liveAlert.route);
+  const of = (route: string) => requests.filter((r) => r.attributes["http.route"] === route);
 
   const latency = (route: string): Series => ({
     name: `http.server.request.duration.p95{route=${route}}`,
@@ -270,12 +283,23 @@ function spanSeries(
     unit: "ms",
     description: `p95 latency of ${route}, per minute`,
     points: (w) =>
-      bucketed(requests.filter((r) => r.attributes["http.route"] === route), (r) => r.start, now, w).flatMap(({ start, rows }) =>
+      bucketed(of(route), (r) => r.start, now, w).flatMap(({ start, rows }) =>
         rows.length ? [point(start, p95(rows.map(f.duration)))] : [],
+      ),
+  });
+  const errorRatio = (route: string): Series => ({
+    name: `http.server.error_ratio{route=${route}}`,
+    service: "shopfront",
+    unit: "ratio",
+    description: `Share of ${route} responses with status >= 500, per minute`,
+    points: (w) =>
+      bucketed(of(route), (r) => r.start, now, w).flatMap(({ start, rows }) =>
+        rows.length ? [point(start, rows.filter(f.failed).length / rows.length)] : [],
       ),
   });
   return [
     ...routes.map(latency),
+    ...routes.map(errorRatio),
     {
       name: "http.server.request.rate",
       service: "shopfront",
@@ -370,7 +394,7 @@ function pendingSeries(connects: SpanRow[], now: number): Series {
   };
 }
 
-function p95(values: number[]): number {
+export function p95(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.95) - 1)];
 }

@@ -46,9 +46,9 @@ function demoIncident(i: number, now: number): Incident {
   const status = states[i % states.length];
   const { service, route } = services[i % services.length];
   const base = structuredClone(status === "healthy" ? controlRun : poolLeak);
-  // A healthy run is low severity; the rest spread across all three.
+  // A healthy run is sev4; the rest spread across the incident levels.
   const severity: Incident["severity"] =
-    status === "healthy" ? "sev3" : (["sev1", "sev2", "sev2", "sev3"] as const)[i % 4];
+    status === "healthy" ? "sev4" : (["sev1", "sev2", "sev2", "sev3"] as const)[i % 4];
 
   // Spread over about a week, newest first, at uneven minutes.
   const startedAt = now - minutes(i * 330 + 20 + ((i * 17) % 50));

@@ -9,6 +9,7 @@ import {
   MoonIcon,
   PanelLeftIcon,
   PlayIcon,
+  RadarIcon,
   ServerIcon,
   SearchIcon,
   SettingsIcon,
@@ -20,7 +21,7 @@ import { Dialog } from "radix-ui";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { type PaletteCommand, useCommandRegistry } from "@/components/command-registry";
 import { formatAgo } from "@/components/incident/format";
-import { StatusDot, statusLabel } from "@/components/incident/status-badges";
+import { StatusIcon, statusLabel } from "@/components/incident/status-badges";
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { useRecentlyViewed } from "@/hooks/use-seen";
 import { type ScenarioOption, useStartInvestigation } from "@/hooks/use-start-investigation";
@@ -31,6 +32,7 @@ import type { RecentIncident } from "./app-sidebar-nav";
 const pages: { label: string; href: string; icon: LucideIcon }[] = [
   { label: "Incidents", href: "/", icon: SirenIcon },
   { label: "Services", href: "/services", icon: ServerIcon },
+  { label: "Watch", href: "/watch", icon: RadarIcon },
   { label: "Settings", href: "/settings", icon: SettingsIcon },
 ];
 
@@ -132,7 +134,7 @@ export function SearchCommand({
       className={itemClass}
     >
       <span className="flex size-4 shrink-0 items-center justify-center">
-        <StatusDot status={i.status} />
+        <StatusIcon status={i.status} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{i.label}</span>

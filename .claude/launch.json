@@ -2,13 +2,24 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dev",
+      "name": "triage",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": [
-        "run",
+        "--filter",
+        "@triage/web",
         "dev"
       ],
       "port": 3000
+    },
+    {
+      "name": "shopfront",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@triage/shopfront",
+        "dev"
+      ],
+      "port": 3001
     }
   ]
 }

@@ -35,6 +35,9 @@ const enterMotion = "animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-
 // The opened evidence's source flashes as the panel closes, then holds the
 // highlight a few seconds, so the eye lands on it.
 const highlightFlash = "animate-highlight-flash motion-reduce:animate-none";
+// The opened evidence's source: a neutral wash, a step stronger than a row's
+// hover, and kept on hover so pointing at it doesn't fade it.
+const highlightBg = "bg-foreground/10 hover:bg-foreground/10";
 
 // The phases an investigation moves through, by the tool used.
 type Phase = "metrics" | "logs" | "database" | "changes" | "code";
@@ -88,7 +91,7 @@ export function InvestigationTimeline({
   running: boolean;
   run?: Run;
 }) {
-  const { byId, numberOf, open, focused, panelOpen } = useEvidence();
+  const { byId, numberOf, open, focused, covered } = useEvidence();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -121,7 +124,8 @@ export function InvestigationTimeline({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // When a citation is opened, bring its source into view behind the panel.
+  // When a citation is opened, bring its source into view, beside the docked
+  // panel or behind the sheet.
   // First expand its phase if it's only among the folded tool calls; that's
   // state derived from a changed value, so it's set during render (React's
   // pattern for it), and the effect below only scrolls.
@@ -142,12 +146,14 @@ export function InvestigationTimeline({
       );
       if (!el) return;
       const r = el.getBoundingClientRect();
-      // Instant: the evidence panel covers the page while this runs, so a
-      // smooth scroll would only be invisible and slower.
-      if (r.top < 0 || r.bottom > window.innerHeight) el.scrollIntoView({ block: "center" });
+      // Under the sheet it's instant: a smooth scroll would be invisible and
+      // only slower. Beside the docked panel it's in view, so it glides.
+      if (r.top < 0 || r.bottom > window.innerHeight) {
+        el.scrollIntoView({ block: "center", behavior: covered ? "instant" : "smooth" });
+      }
     }, 50);
     return () => clearTimeout(timer);
-  }, [focused]);
+  }, [focused, covered]);
 
   const clearAll = () => {
     setQuery("");
@@ -274,8 +280,8 @@ export function InvestigationTimeline({
                                 onClick={() => open(id)}
                                 className={cn(
                                   "grid w-full grid-cols-[1.25rem_auto_minmax(0,1fr)] items-center gap-x-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-muted/50",
-                                  focused === id && "bg-warning/15",
-                                  focused === id && !panelOpen && highlightFlash,
+                                  focused === id && highlightBg,
+                                  focused === id && !covered && highlightFlash,
                                 )}
                               >
                                 <span className="inline-flex h-4 min-w-4 items-center justify-center justify-self-start rounded bg-muted px-1 font-mono text-[10px] text-muted-foreground tabular-nums">
@@ -307,8 +313,13 @@ export function InvestigationTimeline({
                           <ChevronRightIcon className="size-3.5 transition-[rotate] duration-200 group-data-[state=open]/calls:rotate-90 motion-reduce:transition-none" />
                           {phaseSteps.length} tool {phaseSteps.length === 1 ? "call" : "calls"}
                         </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="pt-1">{rows}</div>
+                        {/* The content clips (for its height animation), and
+                            the rows reach 8px past each side so their
+                            highlight lines up with the findings'. Widen the
+                            clip by as much and pad it back, so the highlight's
+                            padding and rounded corners aren't cut off. */}
+                        <CollapsibleContent className="-mx-2">
+                          <div className="px-2 pt-1">{rows}</div>
                         </CollapsibleContent>
                       </Collapsible>
                     ) : (
@@ -340,7 +351,7 @@ function StepRow({
   highlighted: boolean;
   running: boolean;
 }) {
-  const { panelOpen } = useEvidence();
+  const { covered } = useEvidence();
   // The highlight sits on the Collapsible, not the li, so its flash and the
   // li's entrance never compete for the same animation.
   return (
@@ -348,8 +359,8 @@ function StepRow({
       <Collapsible
         className={cn(
           "group/step rounded-md transition-colors",
-          highlighted && "bg-warning/15",
-          highlighted && !panelOpen && highlightFlash,
+          highlighted && highlightBg,
+          highlighted && !covered && highlightFlash,
         )}
       >
         {/* Grid so a search snippet can sit under the summary column. */}

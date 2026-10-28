@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { formatDateTime } from "@/components/incident/format";
-import { StatusDot, statusLabel } from "@/components/incident/status-badges";
+import { Timestamp } from "@/components/timestamp";
+import { StatusIcon, statusLabel } from "@/components/incident/status-badges";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Incident } from "@/lib/investigation/schema";
 import { listIncidents } from "@/lib/investigation/store";
@@ -17,10 +17,7 @@ export const metadata: Metadata = { title: "Services · Triage" };
 export default function ServicesPage() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 pt-2 pb-8 md:pt-8 sm:px-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-heading font-semibold text-2xl tracking-tight">Services</h1>
-        <p className="text-muted-foreground text-sm">The services Triage has investigated, and their latest incident.</p>
-      </header>
+      <h1 className="font-heading font-semibold text-2xl tracking-tight">Services</h1>
       <Suspense fallback={<Skeleton className="h-24 w-full" />}>
         <ServiceList />
       </Suspense>
@@ -66,10 +63,10 @@ async function ServiceList() {
               href={`/incidents/${latest.id}`}
               className="ml-auto flex min-w-0 items-center gap-2 text-sm hover:text-muted-foreground"
             >
-              <StatusDot status={latest.status} />
+              <StatusIcon status={latest.status} />
               <span className="truncate">{incidentHeadline(latest) ?? latest.title}</span>
               <span className="shrink-0 text-muted-foreground text-xs">
-                {statusLabel[latest.status]} · {formatDateTime(latest.detectedAt)}
+                {statusLabel[latest.status]} · <Timestamp date={latest.detectedAt} />
               </span>
             </Link>
           </li>

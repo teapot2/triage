@@ -7,7 +7,9 @@ import { SidebarStateScript } from "@/components/sidebar-state-script";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { CodeFontSync } from "@/hooks/use-code-font-size";
 import { ThemeSync } from "@/hooks/use-theme";
+import { codeFontScript } from "@/lib/code-font";
 import { themeScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -44,7 +46,11 @@ export default function RootLayout({
         <Script id="theme" strategy="beforeInteractive">
           {themeScript}
         </Script>
+        <Script id="code-font" strategy="beforeInteractive">
+          {codeFontScript}
+        </Script>
         <ThemeSync />
+        <CodeFontSync />
         <TooltipProvider>
           <CommandRegistryProvider>
             <SidebarProvider>
