@@ -13,11 +13,10 @@
     },
     {
       "name": "shopfront",
-      "runtimeExecutable": "pnpm",
+      "runtimeExecutable": "sh",
       "runtimeArgs": [
-        "--filter",
-        "@triage/shopfront",
-        "dev"
+        "-c",
+        "pnpm infra:up && pnpm --filter @triage/shopfront db:migrate && exec pnpm --filter @triage/shopfront dev"
       ],
       "port": 3001
     }
