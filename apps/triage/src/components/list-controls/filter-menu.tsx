@@ -1,13 +1,14 @@
 "use client";
 
 import { ListFilterIcon, type LucideIcon, XIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -28,6 +29,9 @@ export type FilterOption = {
   icon?: ReactNode;
   // How many of the list's items have it.
   count?: number;
+  // A heading the option is listed under ("In progress", "Done"); options
+  // with the same group must be next to each other.
+  group?: string;
 };
 
 export type FilterFacet = {
@@ -71,21 +75,28 @@ export function FilterFacetSub({
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-56">
-        {facet.options.map((o) => (
-          <DropdownMenuCheckboxItem
-            key={o.value}
-            checked={selected.includes(o.value)}
-            onCheckedChange={(checked) =>
-              onChange(checked === true ? [...selected, o.value] : selected.filter((v) => v !== o.value))
-            }
-            onSelect={(e) => e.preventDefault()}
-          >
-            {o.icon}
-            <span className={cn("min-w-0 truncate", facet.mono && "font-mono text-xs")}>{o.label}</span>
-            {o.count !== undefined && (
-              <span className="ml-auto pl-3 font-mono text-muted-foreground text-xs tabular-nums">{o.count}</span>
+        {facet.options.map((o, i) => (
+          <Fragment key={o.value}>
+            {o.group && o.group !== facet.options[i - 1]?.group && (
+              <>
+                {i > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuLabel>{o.group}</DropdownMenuLabel>
+              </>
             )}
-          </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={selected.includes(o.value)}
+              onCheckedChange={(checked) =>
+                onChange(checked === true ? [...selected, o.value] : selected.filter((v) => v !== o.value))
+              }
+              onSelect={(e) => e.preventDefault()}
+            >
+              {o.icon}
+              <span className={cn("min-w-0 truncate", facet.mono && "font-mono text-xs")}>{o.label}</span>
+              {o.count !== undefined && (
+                <span className="ml-auto pl-3 font-mono text-muted-foreground text-xs tabular-nums">{o.count}</span>
+              )}
+            </DropdownMenuCheckboxItem>
+          </Fragment>
         ))}
       </DropdownMenuSubContent>
     </DropdownMenuSub>

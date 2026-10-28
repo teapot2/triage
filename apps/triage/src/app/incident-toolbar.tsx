@@ -2,7 +2,7 @@
 
 import { CircleDotIcon, ServerIcon, SignalIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { SeverityBars, severityLabel, StatusIcon, statusLabel } from "@/components/incident/status-badges";
+import { SeverityBars, severityLabel, StatusIcon, statusGroupOf, statusLabel } from "@/components/incident/status-badges";
 import { type FilterFacet, FilterChips, FilterMenu, type FilterValues } from "@/components/list-controls/filter-menu";
 import { SearchInput } from "@/components/list-controls/search-input";
 import { severityIds, statusIds } from "@/lib/sidebar-filters";
@@ -118,6 +118,7 @@ function incidentFacets(counts: Record<IncidentFacet, Record<string, number>>): 
         value,
         count,
         label: statusLabel[value],
+        group: statusGroupOf[value],
         icon: (
           <span className="flex size-4 items-center justify-center">
             <StatusIcon status={value} />

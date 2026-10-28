@@ -118,14 +118,13 @@ export function AppSidebarNav({
   };
   const needsAttention = (i: RecentIncident) => attentionStatuses.includes(i.status);
   const attentionCount = all.filter(needsAttention).length;
+  // The filter menu's choices; the bell is applied on its own.
+  const menuMatch = (i: RecentIncident) =>
+    (!filters.onlyNew || isNew(i.id, i.activityAt) || now - Date.parse(i.at) < DAY) &&
+    (filters.severities.length === 0 || filters.severities.includes(i.severity)) &&
+    (filters.statuses.length === 0 || filters.statuses.includes(i.status));
   const matching = all
-    .filter(
-      (i) =>
-        (!filters.attentionOnly || needsAttention(i)) &&
-        (!filters.onlyNew || isNew(i.id, i.activityAt) || now - Date.parse(i.at) < DAY) &&
-        (filters.severities.length === 0 || filters.severities.includes(i.severity)) &&
-        (filters.statuses.length === 0 || filters.statuses.includes(i.status)),
-    )
+    .filter((i) => (!filters.attentionOnly || needsAttention(i)) && menuMatch(i))
     .sort(recentOrder[filters.sort]);
   const shownRecent = matching.slice(0, limit);
   const hidden = matching.length - shownRecent.length;
@@ -133,6 +132,12 @@ export function AppSidebarNav({
   // in; the ones there on load are simply there.
   const [initialRecent] = useState(() => new Set(shownRecent.map((r) => r.id)));
   const unseenCount = all.filter((i) => isNew(i.id, i.activityAt)).length;
+  // New incidents the menu's filters keep out of Recent: the filter button's
+  // dot, since only the menu can bring them back. New ones already in the
+  // list are marked on their rows.
+  const filteredNewCount = all.filter(
+    (i) => isNew(i.id, i.activityAt) && (!filters.attentionOnly || needsAttention(i)) && !menuMatch(i),
+  ).length;
 
   // The collapsed sidebar hides Recent, so the Incidents icon carries its
   // signal: amber when something needs attention, else violet for news.
@@ -235,7 +240,12 @@ export function AppSidebarNav({
                 count={attentionCount}
                 onChange={(on) => changeFilters({ ...filters, attentionOnly: on })}
               />
-              <RecentFilterMenu filters={filters} onChange={changeFilters} unseenCount={unseenCount} />
+              <RecentFilterMenu
+                filters={filters}
+                onChange={changeFilters}
+                unseenCount={unseenCount}
+                filteredNewCount={filteredNewCount}
+              />
             </>
           }
         >
@@ -272,7 +282,13 @@ export function AppSidebarNav({
                               <StatusIcon status={incident.status} />
                             </span>
                             <span
-                              className={cn("min-w-0 flex-1 truncate", fresh && "font-medium text-sidebar-foreground")}
+                              // A run that found nothing recedes, so incidents stand out.
+                              className={cn(
+                                "min-w-0 flex-1 truncate",
+                                fresh
+                                  ? "font-medium text-sidebar-foreground"
+                                  : incident.status === "healthy" && "text-sidebar-foreground/60",
+                              )}
                             >
                               {incident.label}
                             </span>

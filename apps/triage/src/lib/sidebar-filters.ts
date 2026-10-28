@@ -17,7 +17,8 @@ export type RecentSort = (typeof recentSorts)[number]["id"];
 
 type Severity = Incident["severity"];
 export const severityIds: Severity[] = ["sev1", "sev2", "sev3", "sev4"];
-export const statusIds: IncidentStatus[] = ["investigating", "awaiting_approval", "failed", "diagnosed", "resolved", "healthy"];
+// In progress, then done, the order the filter menus group them in.
+export const statusIds: IncidentStatus[] = ["investigating", "diagnosed", "awaiting_approval", "resolved", "failed", "healthy"];
 
 // What someone has to act on or watch: a fix to approve, a run to retry, a
 // run in progress. The bell narrows Recent to these.

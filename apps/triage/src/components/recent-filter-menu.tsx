@@ -2,7 +2,7 @@
 
 import { BellIcon, ListFilterIcon } from "lucide-react";
 import { useState } from "react";
-import { SeverityBars, severityLabel, StatusIcon, statusLabel } from "@/components/incident/status-badges";
+import { SeverityBars, severityLabel, StatusIcon, statusGroupOf, statusLabel } from "@/components/incident/status-badges";
 import { type FilterFacet, FilterFacetSub } from "@/components/list-controls/filter-menu";
 import { SortRadioItems } from "@/components/list-controls/sort-menu";
 import {
@@ -51,6 +51,7 @@ const statusFacet: FilterFacet = {
   options: statusIds.map((s) => ({
     value: s,
     label: statusLabel[s],
+    group: statusGroupOf[s],
     icon: (
       <span className="flex size-4 items-center justify-center">
         <StatusIcon status={s} />
@@ -61,8 +62,8 @@ const statusFacet: FilterFacet = {
 
 // The bell beside the filter button: narrows Recent to the incidents that
 // need attention (a fix to approve, a run to retry, a run in progress), so
-// there's one list instead of two groups. Amber dot while any do; pressed
-// while it's on. Sits left of the filter button (right-9 to its right-3).
+// there's one list instead of two groups. Amber dot while any do and it's
+// off, as a prompt; pressed while it's on, when the list itself shows them. Sits left of the filter button (right-9 to its right-3).
 export function AttentionToggle({ on, count, onChange }: { on: boolean; count: number; onChange: (on: boolean) => void }) {
   const label = on ? "Show all recent incidents" : "Show only incidents that need attention";
   return (
@@ -75,7 +76,9 @@ export function AttentionToggle({ on, count, onChange }: { on: boolean; count: n
           className={cn("right-9", on && "bg-sidebar-accent text-sidebar-accent-foreground")}
         >
           <BellIcon />
-          {count > 0 && <span className="absolute top-0 right-0 size-1.5 rounded-full bg-warning ring-2 ring-sidebar" />}
+          {count > 0 && !on && (
+            <span className="absolute top-0 right-0 size-1.5 rounded-full bg-warning ring-2 ring-sidebar" />
+          )}
         </SidebarGroupAction>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -97,17 +100,20 @@ function Row({ label, value }: { label: string; value: string }) {
 
 // The Recent group's filter button: sort, severity, status and "only new",
 // as submenus that say their current value, like Claude's own sidebar menu.
-// Checkbox items keep the menu open, to pick several. The button carries a
-// dot when there's news you haven't seen, and stays highlighted while any
-// filter is on.
+// Checkbox items keep the menu open, to pick several. The button stays
+// highlighted while any filter is on, and carries a dot when those filters
+// hide new incidents.
 export function RecentFilterMenu({
   filters,
   onChange,
   unseenCount,
+  filteredNewCount,
 }: {
   filters: RecentFilters;
   onChange: (next: RecentFilters) => void;
   unseenCount: number;
+  // New incidents these filters keep out of the list.
+  filteredNewCount: number;
 }) {
   const active = !isDefaultMenu(filters);
   const keepOpen = (e: Event) => e.preventDefault();
@@ -122,7 +128,7 @@ export function RecentFilterMenu({
       : filters.statuses.length === 1
         ? statusLabel[filters.statuses[0]]
         : `${filters.statuses.length} selected`;
-  const label = `Filter and sort recent incidents${active ? " (filtered)" : ""}${unseenCount > 0 ? `, ${unseenCount} new` : ""}`;
+  const label = `Filter and sort recent incidents${active ? " (filtered)" : ""}${filteredNewCount > 0 ? `, ${filteredNewCount} new hidden` : ""}`;
 
   return (
     <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -137,7 +143,9 @@ export function RecentFilterMenu({
               )}
             >
               <ListFilterIcon />
-              {unseenCount > 0 && <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand ring-2 ring-sidebar" />}
+              {filteredNewCount > 0 && (
+                <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand ring-2 ring-sidebar" />
+              )}
             </SidebarGroupAction>
           </DropdownMenuTrigger>
         </TooltipTrigger>

@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { useId } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Incident, IncidentStatus } from "@/lib/investigation/schema";
@@ -9,7 +10,7 @@ export const statusLabel: Record<IncidentStatus, string> = {
   diagnosed: "Diagnosed",
   awaiting_approval: "Awaiting approval",
   resolved: "Resolved",
-  healthy: "Healthy",
+  healthy: "No issue found",
   failed: "Failed",
 };
 
@@ -18,9 +19,19 @@ const statusColor: Record<IncidentStatus, string> = {
   diagnosed: "text-warning",
   awaiting_approval: "text-warning",
   resolved: "text-success",
-  healthy: "text-success",
+  healthy: "text-muted-foreground",
   failed: "text-destructive",
 };
+
+// Where a status sits in the run: still going, or an outcome. Filter menus
+// list statuses under these headings, in this order.
+export const statusGroups: { label: string; statuses: IncidentStatus[] }[] = [
+  { label: "In progress", statuses: ["investigating", "diagnosed", "awaiting_approval"] },
+  { label: "Done", statuses: ["resolved", "failed", "healthy"] },
+];
+export const statusGroupOf = Object.fromEntries(
+  statusGroups.flatMap((g) => g.statuses.map((s) => [s, g.label])),
+) as Record<IncidentStatus, string>;
 
 // A ring, the shape every status icon starts from (r 6.25 in a 16 box, so a
 // 1.5 stroke stays inside it).
@@ -33,8 +44,10 @@ const ring = (props: React.SVGProps<SVGCircleElement>) => (
 // alone says which status it is, color only backing it up. The open
 // statuses fill the ring as the run gets further: investigating spins,
 // diagnosed is half full, awaiting approval (waiting on you) three-quarters.
-// Then done: failed is a cross, resolved a check on a tinted disc, healthy
-// (nothing to fix) a check in a plain ring. Reduced motion stops the spin.
+// Then done: failed is a cross, resolved (a fix shipped) a solid disc with
+// the check cut out, and healthy (nothing to fix, the most common outcome)
+// a gray check in a dashed ring, so it recedes next to real incidents.
+// Reduced motion stops the spin.
 const statusShape: Record<IncidentStatus, React.ReactNode> = {
   investigating: (
     <>
@@ -60,19 +73,31 @@ const statusShape: Record<IncidentStatus, React.ReactNode> = {
       <path d="M5.75 5.75l4.5 4.5M10.25 5.75l-4.5 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </>
   ),
-  resolved: (
-    <>
-      {ring({ fill: "currentColor", fillOpacity: 0.2 })}
-      <path d="M5.25 8.25l1.9 1.9 3.6-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </>
-  ),
+  // Drawn by StatusIcon, which needs an id for the check's cutout.
+  resolved: null,
   healthy: (
     <>
-      {ring({})}
+      {/* 12 dashes around the ring (circumference 39.27), so no seam. */}
+      {ring({ strokeDasharray: "1.8 1.4725" })}
       <path d="M5.25 8.25l1.9 1.9 3.6-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </>
   ),
 };
+
+// Resolved: a solid disc with the check masked out, so the check shows
+// whatever is behind the icon (a hovered row, a menu, a badge).
+function ResolvedShape() {
+  const mask = useId();
+  return (
+    <>
+      <mask id={mask}>
+        <rect width="16" height="16" fill="white" />
+        <path d="M5.25 8.25l1.9 1.9 3.6-4" fill="none" stroke="black" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      </mask>
+      <circle cx="8" cy="8" r="7" fill="currentColor" mask={`url(#${mask})`} />
+    </>
+  );
+}
 
 export function StatusIcon({ status, className }: { status: IncidentStatus; className?: string }) {
   return (
@@ -87,7 +112,7 @@ export function StatusIcon({ status, className }: { status: IncidentStatus; clas
         className,
       )}
     >
-      {statusShape[status]}
+      {status === "resolved" ? <ResolvedShape /> : statusShape[status]}
     </svg>
   );
 }
