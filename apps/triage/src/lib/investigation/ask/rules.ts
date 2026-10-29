@@ -22,6 +22,25 @@ export function nextQuestionId(incident: Incident): string {
   return `q_${Math.max(0, ...taken) + 1}`;
 }
 
+// The conversation so far, as the model gets it: the last `limit` finished
+// questions with their answers, and a failed one with what went wrong, so
+// a follow-up like "try again" knows what it follows.
+export function conversationHistory(questions: Question[], limit: number): string {
+  return questions
+    .filter((q) => q.status !== "answering")
+    .slice(-limit)
+    .map((q) => `Q: ${q.text}\nA: ${q.status === "failed" ? `(no answer${q.error ? `: ${q.error}` : ""})` : q.answer}`)
+    .join("\n\n");
+}
+
+// An answer as plain text, for the clipboard: without its evidence
+// citations, which mean nothing outside the incident page.
+export function plainAnswer(answer: string): string {
+  return answer
+    .replace(/[ \t]*\[[^\]\n]*\bev_[a-z0-9]+(?:_[a-z0-9]+)*[^\]\n]*\]/g, "")
+    .trim();
+}
+
 // Every evidence ID an answer on this incident may cite: the
 // investigation's and every question's.
 export function knownEvidenceIds(incident: Incident, current?: Question): Set<string> {

@@ -116,7 +116,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
       </div>
 
       <header ref={headerRef} className="mx-auto w-full max-w-6xl px-4 pt-2 sm:px-6 md:pt-8">
-        <div className="flex flex-col gap-2 border-b pb-6">
+        <div className="flex flex-col gap-2 border-b pb-4">
           <nav className="flex items-center gap-1.5 text-muted-foreground text-sm">
             <Link href="/" className="hover:text-foreground">
               Incidents

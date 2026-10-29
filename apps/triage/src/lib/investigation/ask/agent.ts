@@ -14,7 +14,7 @@ import type { Claim, Incident, Question } from "../schema";
 import { sourceFor } from "../source-for";
 import type { TelemetrySource } from "../source";
 import { createInvestigationTools, forModel } from "../tools";
-import { knownEvidenceIds, parseCitations } from "./rules";
+import { conversationHistory, knownEvidenceIds, parseCitations } from "./rules";
 
 // Stage "ask": a follow-up question on a finished incident, answered by a
 // small, bounded investigation with the same read-only tools, cited like
@@ -90,11 +90,7 @@ function prompt(incident: Incident, question: Question, source: TelemetrySource 
   const evidence = [...incident.evidence, ...earlier.flatMap((q) => q.evidence)]
     .map((e) => JSON.stringify(forModel(e)))
     .join("\n");
-  const history = earlier
-    .filter((q) => q.status === "answered")
-    .slice(-HISTORY)
-    .map((q) => `Q: ${q.text}\nA: ${q.answer}`)
-    .join("\n\n");
+  const history = conversationHistory(earlier, HISTORY);
   return `${incidentBlock(incident, source)}
 
 Evidence you may cite:

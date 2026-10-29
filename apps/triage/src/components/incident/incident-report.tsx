@@ -73,7 +73,7 @@ export function IncidentReport({
   const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
   if (report) {
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
-    sections.push({ id: "questions", label: "Questions", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
+    sections.push({ id: "questions", label: "Ask Triage", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
 
   // The open section lives in the URL (?section=fix), so it can be linked

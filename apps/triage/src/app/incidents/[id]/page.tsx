@@ -36,13 +36,13 @@ function IncidentSkeleton() {
   return (
     <>
       <div className="mx-auto w-full max-w-6xl px-4 pt-2 sm:px-6 md:pt-8">
-        <div className="flex flex-col gap-2 border-b pb-6">
+        <div className="flex flex-col gap-2 border-b pb-4">
           <Skeleton className="h-5 w-48" />
           <Skeleton className="h-8 w-2/3" />
           <Skeleton className="h-5 w-96 max-w-full" />
         </div>
       </div>
-      <div className="mx-auto w-full max-w-6xl px-4 pt-8 pb-8 sm:px-6">
+      <div className="mx-auto w-full max-w-6xl px-4 pt-5 pb-8 sm:px-6">
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[11rem_minmax(0,1fr)] md:gap-10">
           <div className="flex gap-1 md:flex-col">
             {["overview", "fix", "investigation"].map((id) => (

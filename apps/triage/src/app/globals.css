@@ -266,6 +266,46 @@
   --sidebar-ring: oklch(0.56 0.21 292);
 }
 
+/* A thin scrollbar like the ScrollArea's (a rounded thumb, no arrows)
+   that shows only while its box is hovered or scrolling, as in a chat.
+   The page sets data-scrolling on the box while it scrolls. Chromium and
+   Safari draw it from ::-webkit-scrollbar; Firefox from the standard
+   properties, which Chromium would otherwise prefer. */
+@utility scrollbar-subtle {
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-button {
+    display: none;
+  }
+  &::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+    background-color: transparent;
+  }
+  &:hover::-webkit-scrollbar-thumb,
+  &[data-scrolling]::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+  }
+  @supports not selector(::-webkit-scrollbar) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    &:hover,
+    &[data-scrolling] {
+      scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+    }
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

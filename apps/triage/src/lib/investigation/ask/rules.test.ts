@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "../fixtures";
 import type { Incident, Question } from "../schema";
-import { askRefusal, knownEvidenceIds, nextQuestionId, parseCitations } from "./rules";
+import { askRefusal, conversationHistory, knownEvidenceIds, nextQuestionId, parseCitations, plainAnswer } from "./rules";
 
 const finished = (): Incident => structuredClone(exampleIncidents[0]);
 
@@ -87,5 +87,29 @@ describe("knownEvidenceIds", () => {
     assert.ok(known.has(incident.evidence[0].id));
     assert.ok(known.has("ev_q1_span_1"));
     assert.ok(known.has("ev_q2_span_1"));
+  });
+});
+
+describe("conversationHistory", () => {
+  it("keeps the last finished turns, a failed one with what went wrong", () => {
+    const history = conversationHistory(
+      [
+        question("q_1", { text: "Old one", answer: "Dropped" }),
+        question("q_2", { text: "Why the pool?", answer: "It leaked [ev_log_3]." }),
+        question("q_3", { text: "And the fix?", status: "failed", error: "model timed out" }),
+        question("q_4", { text: "Still going", status: "answering", answer: "Partial" }),
+      ],
+      2,
+    );
+    assert.equal(history, "Q: Why the pool?\nA: It leaked [ev_log_3].\n\nQ: And the fix?\nA: (no answer: model timed out)");
+  });
+});
+
+describe("plainAnswer", () => {
+  it("drops the citations and keeps the text around them", () => {
+    assert.equal(
+      plainAnswer("- Pool at 10 of 10 [ev_metric_1, ev_log_2].\n- Turned on at 01:52 [ev_q1_flag_1] [ev_deploy_1]\n\nSee [the runbook]."),
+      "- Pool at 10 of 10.\n- Turned on at 01:52\n\nSee [the runbook].",
+    );
   });
 });

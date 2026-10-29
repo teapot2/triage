@@ -2,22 +2,41 @@
 
 import { getToolName, isToolUIPart, readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import {
+  ActivityIcon,
+  ArchiveIcon,
   ArrowUpIcon,
   BrainIcon,
+  CheckIcon,
   ChevronRightIcon,
+  CircleSlashIcon,
   CircleXIcon,
+  CopyIcon,
+  CornerDownLeftIcon,
+  GitCommitHorizontalIcon,
   LoaderCircleIcon,
-  MessageSquareTextIcon,
+  type LucideIcon,
   RotateCcwIcon,
+  ScanSearchIcon,
+  TimerIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type KeyboardEvent, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Timestamp } from "@/components/timestamp";
 import { TriageMark } from "@/components/triage-mark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { askRefusal, MAX_QUESTION_CHARS } from "@/lib/investigation/ask/rules";
+import { askRefusal, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { modelLabel } from "@/lib/models/labels";
@@ -156,15 +175,36 @@ export function requestComposerFocus() {
   window.dispatchEvent(new Event(FOCUS_EVENT));
 }
 
+// A suggested question: the text sent, with what it asks about (a ruled-out
+// cause's title) set apart where the list shows it.
+interface Suggestion {
+  text: string;
+  icon: LucideIcon;
+  label: ReactNode;
+}
+
 // From the report: why each ruled-out cause was ruled out, what changed,
 // the slowest request, and whether the mitigation worked.
-export function suggestedQuestions(incident: Incident): string[] {
-  const out: string[] = [];
+export function suggestedQuestions(incident: Incident): Suggestion[] {
+  const plain = (text: string, icon: LucideIcon): Suggestion => ({ text, icon, label: text });
+  const out: Suggestion[] = [];
   for (const h of incident.report?.hypotheses ?? []) {
-    if (h.status === "rejected") out.push(`Why was ${h.title} ruled out?`);
+    if (h.status !== "rejected") continue;
+    out.push({
+      text: `Why was "${h.title}" ruled out?`,
+      icon: CircleSlashIcon,
+      label: (
+        <>
+          Why was <span className="font-medium text-foreground">{h.title}</span> ruled out?
+        </>
+      ),
+    });
   }
-  out.push("What changed in the hour before the alert?", "Show me the slowest request");
-  if (incident.mitigation?.state === "applied") out.push("Is the pool back to normal?");
+  out.push(
+    plain("What changed in the hour before the alert?", GitCommitHorizontalIcon),
+    plain("Show me the slowest request", TimerIcon),
+  );
+  if (incident.mitigation?.state === "applied") out.push(plain("Is the pool back to normal?", ActivityIcon));
   return out;
 }
 
@@ -295,61 +335,270 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     return () => window.removeEventListener(FOCUS_EVENT, onFocus);
   }, [focusComposer]);
 
-  // A question this tab asks scrolls the composer and the new card into view.
+  // The conversation opens at its latest message where it scrolls in its
+  // own box; a question this tab asks scrolls to it; then the conversation
+  // follows the answer down as it streams, as long as the reader stays at
+  // the bottom.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  useFitToWindow(boxRef, views.length > 0);
+  useScrollingFlag(threadRef, views.length > 0);
+  useLayoutEffect(() => {
+    if (scrollsItself(threadRef.current)) scrollToEnd(threadRef.current, endRef.current);
+  }, []);
   const liveKey = live ? "live" : undefined;
   useEffect(() => {
-    if (liveKey) endRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (liveKey) scrollToEnd(threadRef.current, endRef.current, "smooth");
   }, [liveKey]);
+  const last = views.at(-1);
+  useFollowBottom(
+    threadRef,
+    endRef,
+    last?.status === "answering" ? last.answer.length + last.steps.length + last.thoughts.length : undefined,
+    views.length > 0,
+  );
 
   const askAgain = (text: string) => {
     ask.setDraft(text);
     requestAnimationFrame(focusComposer);
   };
 
+  // Without a source to read again (a bundled example, or a run whose
+  // scenario is gone) answers come from the recorded evidence alone
+  // (evidence_only), as the route decides.
+  const mode: Question["mode"] = sourceKind(incident) ? "tools" : "evidence_only";
+  const composer = <Composer ask={ask} mode={mode} textareaRef={textareaRef} />;
+  const suggestions = suggestedQuestions(incident);
+
+  // Nothing asked yet: the composer first, then questions to start from.
+  if (views.length === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div ref={endRef}>{composer}</div>
+        <Suggestions suggestions={suggestions} disabled={ask.refusal !== undefined} onPick={ask.send} />
+      </div>
+    );
+  }
+
+  // Follow-ups to offer under the last answer: suggestions not asked yet.
+  const asked = new Set(views.map((v) => v.text));
+  const followUps = suggestions.filter((s) => !asked.has(s.text)).slice(0, 3);
+
+  // Beside the section menu (a wide report), the conversation scrolls in its
+  // own box, with the composer under it, and the page doesn't scroll: the
+  // box reaches at most from where it starts down to the window's bottom
+  // (useFitToWindow). Narrower, where the menu is a row on top and the
+  // window is small, the conversation scrolls with the page and the
+  // composer sticks to the bottom of the window.
   return (
-    <div className="flex flex-col gap-5">
-      {views.length === 0 ? (
-        <div className="flex flex-col gap-3">
-          {/* Without a source to read again (a bundled example, or a run
-              whose scenario is gone) answers come from the recorded
-              evidence alone (evidence_only), as the route decides. */}
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            {sourceKind(incident)
-              ? "Ask Triage about this incident. It answers with the investigation's read-only tools over the alert's window and cites its evidence, like the report."
-              : "Ask Triage about this incident. It answers from the evidence the investigation recorded and cites it, like the report."}
-          </p>
-          <ul className="flex flex-wrap gap-1.5" aria-label="Suggested questions">
-            {suggestedQuestions(incident).map((q) => (
-              <li key={q}>
-                <button
-                  type="button"
-                  disabled={ask.refusal !== undefined}
-                  onClick={() => ask.send(q)}
-                  className="rounded-full border px-3 py-1 text-left text-muted-foreground text-xs transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-                >
-                  {q}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <ol className="flex flex-col gap-4">
+    <div ref={boxRef} className="flex flex-col @2xl:max-h-[var(--chat-max,calc(100dvh_-_6.5rem))]">
+      <div
+        ref={threadRef}
+        className="@2xl:-mr-3 @2xl:min-h-0 @2xl:flex-1 @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pr-3 @2xl:scrollbar-subtle"
+      >
+        <ol aria-label="Conversation with Triage" className="flex flex-col gap-9">
           {views.map((v) => (
-            <QuestionCard key={v.key} view={v} onAskAgain={askAgain} />
+            <ChatTurn key={v.key} view={v} latest={v === last} onAskAgain={askAgain} />
           ))}
         </ol>
-      )}
-      <div ref={endRef}>
-        <Composer ask={ask} textareaRef={textareaRef} />
+      </div>
+      {/* Follow-ups sit right above the composer, outside the scrolling
+          conversation, so picking one is next to where you'd type. */}
+      <div
+        ref={endRef}
+        className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:pb-0"
+      >
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-linear-to-t from-background" />
+        {last?.status === "answered" && followUps.length > 0 && (
+          <FollowUps suggestions={followUps} disabled={ask.refusal !== undefined} onPick={ask.send} />
+        )}
+        {composer}
       </div>
     </div>
   );
 }
 
+// Whether the conversation scrolls in its own box (wide reports) rather
+// than with the page.
+function scrollsItself(thread: HTMLElement | null): thread is HTMLElement {
+  return thread !== null && getComputedStyle(thread).overflowY !== "visible";
+}
+
+// How far the conversation is from its latest message, in pixels.
+function distanceFromEnd(thread: HTMLElement | null): number {
+  if (scrollsItself(thread)) return thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+  return document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+}
+
+// Scrolls the conversation to its latest message. In its own box the
+// composer is in the window already, unless the window is too short for
+// the box's minimum height; then the page brings it into view.
+function scrollToEnd(thread: HTMLElement | null, composer: HTMLElement | null, behavior: ScrollBehavior = "auto") {
+  if (scrollsItself(thread)) {
+    thread.scrollTo({ top: thread.scrollHeight, behavior });
+    composer?.scrollIntoView({ block: "nearest", behavior });
+  } else {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
+  }
+}
+
+// Caps the conversation's box at what's left of the window below where it
+// starts on the page, less the page's bottom padding (pb-8), so the page
+// itself has nothing to scroll; 20rem at least, for very short windows.
+// Its top moves when the header above wraps or the window resizes, so it
+// is measured again then. `mounted` says the box is on screen.
+function useFitToWindow(boxRef: RefObject<HTMLElement | null>, mounted: boolean) {
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const fit = () => {
+      const top = Math.ceil(box.getBoundingClientRect().top + window.scrollY);
+      box.style.setProperty("--chat-max", `max(20rem, calc(100dvh - ${top}px - 2rem))`);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(document.body);
+    window.addEventListener("resize", fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [boxRef, mounted]);
+}
+
+// Marks the box data-scrolling while it scrolls and for a moment after,
+// so its scrollbar (scrollbar-subtle) shows then as well as on hover.
+// `mounted` says the box is on screen.
+function useScrollingFlag(ref: RefObject<HTMLElement | null>, mounted: boolean) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      el.dataset.scrolling = "";
+      clearTimeout(timer);
+      timer = setTimeout(() => delete el.dataset.scrolling, 800);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      clearTimeout(timer);
+    };
+  }, [ref, mounted]);
+}
+
+// Keeps the conversation at its latest message while `signal` changes, if
+// the reader was there: scrolling up to read stops it, scrolling back down
+// picks it up again. Undefined stops following. `mounted` says the
+// conversation is on screen (it isn't before the first question).
+function useFollowBottom(
+  threadRef: RefObject<HTMLElement | null>,
+  composerRef: RefObject<HTMLElement | null>,
+  signal: number | undefined,
+  mounted: boolean,
+) {
+  const atEnd = useRef(true);
+  useEffect(() => {
+    const thread = threadRef.current;
+    const onScroll = () => {
+      atEnd.current = distanceFromEnd(threadRef.current) < 96;
+    };
+    onScroll();
+    thread?.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      thread?.removeEventListener("scroll", onScroll);
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, [threadRef, mounted]);
+  useLayoutEffect(() => {
+    if (signal !== undefined && atEnd.current) scrollToEnd(threadRef.current, composerRef.current);
+  }, [signal, threadRef, composerRef]);
+}
+
+// Suggested follow-ups after the last answer, as chips above the composer.
+function FollowUps({
+  suggestions,
+  disabled,
+  onPick,
+}: {
+  suggestions: Suggestion[];
+  disabled: boolean;
+  onPick: (text: string) => void;
+}) {
+  return (
+    <ul aria-label="Suggested follow-ups" className={cn("flex flex-wrap gap-1.5", enterMotion)}>
+      {suggestions.map(({ text, icon: Icon, label }) => (
+        <li key={text} className="min-w-0 max-w-full">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(text)}
+            className="flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1 text-left text-muted-foreground text-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+          >
+            <Icon className="size-3 shrink-0" />
+            <span className="truncate">{label}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// The suggested questions as a list; picking one asks it.
+function Suggestions({
+  suggestions,
+  disabled,
+  onPick,
+}: {
+  suggestions: Suggestion[];
+  disabled: boolean;
+  onPick: (text: string) => void;
+}) {
+  return (
+    <section aria-labelledby="ask-suggestions" className="flex flex-col gap-1">
+      <h3 id="ask-suggestions" className="text-muted-foreground text-xs">
+        Suggestions
+      </h3>
+      <ul className="-mx-2 flex flex-col">
+        {suggestions.map(({ text, icon: Icon, label }) => (
+          <li key={text} className="border-b last:border-b-0">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onPick(text)}
+              className="group/suggestion my-0.5 flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left text-muted-foreground text-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+            >
+              <Icon className="mt-[3px] size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1">{label}</span>
+              <CornerDownLeftIcon
+                aria-hidden
+                className="mt-[3px] size-3.5 shrink-0 opacity-0 transition-opacity group-hover/suggestion:opacity-100 group-focus-visible/suggestion:opacity-100"
+              />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 const enterMotion = "animate-in fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none";
 
-function QuestionCard({ view, onAskAgain }: { view: QuestionView; onAskAgain: (text: string) => void }) {
+// One exchange in the conversation: the question as the person's message,
+// on the right; Triage's reply under it, on the left, without a bubble.
+// The work behind the reply (tool calls, thoughts) folds into one line
+// above it, open while it runs; its time, model and a copy button sit under
+// it, shown for the latest reply and on hover for earlier ones.
+function ChatTurn({
+  view,
+  latest,
+  onAskAgain,
+}: {
+  view: QuestionView;
+  latest: boolean;
+  onAskAgain: (text: string) => void;
+}) {
   const answering = view.status === "answering";
   const t0 = Date.parse(view.askedAt);
   const took =
@@ -366,14 +615,13 @@ function QuestionCard({ view, onAskAgain }: { view: QuestionView; onAskAgain: (t
   // model answered from the evidence it had.
   const calls = view.steps.length;
   const thoughts = view.thoughts.length;
-  const folded = [
-    calls > 0 && `${calls} tool ${calls === 1 ? "call" : "calls"}`,
-    calls === 0 && thoughts > 0 && `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const folded =
+    calls > 0
+      ? `${calls} tool ${calls === 1 ? "call" : "calls"}`
+      : thoughts > 0
+        ? `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`
+        : undefined;
   const meta = [
-    took,
     view.model && modelLabel(view.model, view.provider),
     view.mode === "evidence_only" && "from the recorded evidence",
   ].filter(Boolean);
@@ -403,79 +651,144 @@ function QuestionCard({ view, onAskAgain }: { view: QuestionView; onAskAgain: (t
     </ol>
   );
 
-  return (
-    <li className={cn("flex flex-col rounded-lg border", answering && enterMotion)}>
-      <div className="flex flex-col gap-1.5 p-4">
-        <div className="flex items-center justify-between gap-3 text-muted-foreground text-xs">
-          <span className="flex items-center gap-1.5">
-            <MessageSquareTextIcon className="size-3.5" />
-            Question
-          </span>
-          <Timestamp date={view.askedAt}>{formatTime(view.askedAt)} UTC</Timestamp>
-        </div>
-        <p className="whitespace-pre-wrap font-medium text-sm leading-relaxed">{view.text}</p>
-      </div>
+  // The line above the reply: what Triage is doing, then what it did.
+  const status = answering ? (
+    <>
+      <LoaderCircleIcon className="size-3.5 animate-spin" />
+      {rows.length > 0 ? "Working" : "Thinking"}
+    </>
+  ) : (
+    <>
+      <TriageMark className="size-3.5" />
+      {[view.status === "failed" ? "Stopped" : took ? `Worked for ${took}` : "Answered", folded].filter(Boolean).join(" · ")}
+    </>
+  );
 
-      {rows.length > 0 &&
-        (answering ? (
-          <div className="border-t px-4 py-2">{list}</div>
-        ) : (
-          <Collapsible className="group/calls border-t">
-            <CollapsibleTrigger className="flex w-full items-center gap-1 px-4 py-2 text-muted-foreground text-xs transition-colors hover:text-foreground">
-              <ChevronRightIcon className="size-3.5 transition-[rotate] duration-200 group-data-[state=open]/calls:rotate-90 motion-reduce:transition-none" />
-              {folded}
+  return (
+    <li className={cn("group/turn relative flex flex-col gap-3", answering && enterMotion)}>
+      <p className="max-w-[85%] self-end whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-sm leading-relaxed">
+        {view.text}
+      </p>
+
+      <div className="flex flex-col gap-2">
+        {rows.length > 0 && !answering ? (
+          <Collapsible className="group/work">
+            <CollapsibleTrigger className="flex items-center gap-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground">
+              {status}
+              <ChevronRightIcon className="size-3.5 transition-[rotate] duration-200 group-data-[state=open]/work:rotate-90 motion-reduce:transition-none" />
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div className="px-4 pb-2">{list}</div>
+              <div className="mt-1 border-l pl-3">{list}</div>
             </CollapsibleContent>
           </Collapsible>
-        ))}
+        ) : (
+          <div className="flex flex-col gap-1">
+            <p className="flex items-center gap-1.5 text-muted-foreground text-xs" aria-live="polite">
+              {status}
+            </p>
+            {rows.length > 0 && <div className="mt-1 border-l pl-3">{list}</div>}
+          </div>
+        )}
 
-      <div className="flex flex-col gap-2 border-t p-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-muted-foreground text-xs">
-          <span className="flex items-center gap-1.5">
-            {answering ? (
-              <>
-                <LoaderCircleIcon className="size-3.5 animate-spin" />
-                Answering
-              </>
-            ) : view.status === "failed" ? (
-              <>
-                <CircleXIcon className="size-3.5 text-destructive" />
-                No answer
-              </>
-            ) : (
-              <>
-                <TriageMark className="size-3.5" />
-                Triage
-              </>
-            )}
-          </span>
-          {meta.length > 0 && <span className="truncate">{meta.join(" · ")}</span>}
-        </div>
         {view.status === "failed" ? (
           <div className="flex flex-col items-start gap-2">
-            <p className="text-destructive text-sm leading-relaxed">{view.error ?? "The answer failed."}</p>
+            <p className="flex items-start gap-1.5 text-destructive text-sm leading-relaxed">
+              <CircleXIcon className="mt-[3px] size-3.5 shrink-0" />
+              {view.error ?? "The answer failed."}
+            </p>
             <Button variant="outline" size="sm" onClick={() => onAskAgain(view.text)}>
               <RotateCcwIcon />
               Ask again
             </Button>
           </div>
         ) : (
-          <AnswerText text={view.answer} streaming={answering} />
+          (view.answer || !answering) && <AnswerText text={view.answer} streaming={answering} />
+        )}
+
+        {view.status === "answered" && (
+          <div
+            className={cn(
+              "-ml-2 flex min-w-0 items-center gap-2 text-muted-foreground text-xs transition-opacity",
+              // Under an earlier reply it floats in the gap before the next
+              // question, so it takes no room while hidden. It stays shown
+              // while one of its tooltips is open (the trigger's data-state
+              // is delayed-open or instant-open), since the pointer can move
+              // onto the tooltip and so off the turn.
+              !latest &&
+                "absolute inset-x-0 top-full pt-1 opacity-0 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100 has-[[data-state$=open]]:opacity-100",
+            )}
+          >
+            <CopyAnswer answer={view.answer} />
+            <Timestamp date={view.askedAt} className="shrink-0">
+              {formatTime(view.askedAt)} UTC
+            </Timestamp>
+            {meta.length > 0 && <span className="truncate">· {meta.join(" · ")}</span>}
+          </div>
         )}
       </div>
     </li>
   );
 }
 
-// A textarea that sends on Enter (Shift+Enter for a new line), capped at
-// the server's limit; disabled, with the reason on hover, while a question
-// is being answered or there's no report yet.
-function Composer({ ask, textareaRef }: { ask: Ask; textareaRef: RefObject<HTMLTextAreaElement | null> }) {
+// Copies a reply as plain text, without its citations.
+function CopyAnswer({ answer }: { answer: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Copy answer"
+          onClick={() => void navigator.clipboard.writeText(plainAnswer(answer)).then(() => setCopied(true))}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{copied ? "Copied" : "Copy answer"}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// What the answer will read from, behind the composer's mode icon.
+const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detail: string }> = {
+  tools: {
+    icon: ScanSearchIcon,
+    text: "Read-only tools, alert window",
+    detail: "Answers with the investigation's read-only tools over the alert's window, citing evidence like the report.",
+  },
+  evidence_only: {
+    icon: ArchiveIcon,
+    text: "Recorded evidence only",
+    detail: "No run to read again: answers from the evidence the investigation recorded, citing it like the report.",
+  },
+};
+
+// One row: a textarea that grows with what's typed (up to 10 rem, then
+// scrolls), sends on Enter (Shift+Enter for a new line) and is capped at
+// the server's limit; then the mode icon, which says on hover or focus
+// what the answer reads from, and the send button. Disabled, with the
+// reason on hover, while a question is being answered or there's no
+// report yet.
+function Composer({
+  ask,
+  mode,
+  textareaRef,
+}: {
+  ask: Ask;
+  mode: Question["mode"];
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+}) {
   const disabled = ask.refusal !== undefined;
   const length = ask.draft.length;
   const canSend = !disabled && ask.draft.trim().length > 0 && length <= MAX_QUESTION_CHARS;
+  const hint = modeHint[mode];
+  const HintIcon = hint.icon;
 
   const submit = () => {
     if (canSend) ask.send(ask.draft);
@@ -493,7 +806,7 @@ function Composer({ ask, textareaRef }: { ask: Ask; textareaRef: RefObject<HTMLT
         submit();
       }}
       className={cn(
-        "flex flex-col rounded-lg border bg-background transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "flex items-end gap-1 rounded-lg border bg-background p-1.5 pl-3 transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
         disabled && "opacity-60",
       )}
     >
@@ -507,26 +820,52 @@ function Composer({ ask, textareaRef }: { ask: Ask; textareaRef: RefObject<HTMLT
         onChange={(e) => ask.setDraft(e.target.value)}
         onKeyDown={onKeyDown}
         disabled={disabled}
-        rows={2}
+        rows={1}
         maxLength={MAX_QUESTION_CHARS}
         placeholder={disabled ? ask.refusal : "Ask about this incident…"}
         aria-invalid={ask.error ? true : undefined}
-        aria-describedby={ask.error ? "ask-triage-error" : undefined}
-        className="w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+        aria-describedby={ask.error ? "ask-triage-error" : "ask-triage-mode"}
+        className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
       />
-      <div className="flex items-center justify-between gap-2 px-2 pb-2">
-        <span className="pl-1 text-muted-foreground text-xs">
-          <span className="hidden sm:inline">Enter to send · Shift+Enter for a new line</span>
-          {length > MAX_QUESTION_CHARS * 0.8 && (
-            <span className={cn("tabular-nums sm:ml-2", length >= MAX_QUESTION_CHARS && "text-destructive")}>
-              {length}/{MAX_QUESTION_CHARS}
-            </span>
+      {length > MAX_QUESTION_CHARS * 0.8 && (
+        <span
+          className={cn(
+            "self-center px-1 text-muted-foreground text-xs tabular-nums",
+            length >= MAX_QUESTION_CHARS && "text-destructive",
           )}
+        >
+          {length}/{MAX_QUESTION_CHARS}
         </span>
-        <Button type="submit" size="icon-sm" disabled={!canSend} aria-label="Send">
-          <ArrowUpIcon />
-        </Button>
-      </div>
+      )}
+      <span id="ask-triage-mode" className="sr-only">
+        {hint.detail}
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={disabled}
+            aria-label={`Answers from: ${hint.text}`}
+            className="text-muted-foreground"
+          >
+            <HintIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-64 flex-col items-start gap-0.5">
+          <span className="font-medium">{hint.text}</span>
+          <span className="opacity-70">{hint.detail}</span>
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button type="submit" size="icon-sm" disabled={!canSend} aria-label="Send">
+            <ArrowUpIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Enter to send · Shift+Enter for a new line</TooltipContent>
+      </Tooltip>
     </form>
   );
 
