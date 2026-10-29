@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { EvidenceDraft, InvestigationRecorder } from "./recorder";
+import type { EvidenceDraft, InvestigationRecorder, StepRecorder } from "./recorder";
 import {
   type Evidence,
   findUnknownEvidenceIds,
@@ -26,7 +26,29 @@ const windowMinutes = z
   .optional()
   .describe("Look-back window in minutes from the alert time (default 30)");
 
-export function createInvestigationTools(source: TelemetrySource, recorder: InvestigationRecorder) {
+// The investigation's tools: seven read-only ones, plus submit_report for
+// the investigation itself. A question gets only the read-only seven
+// ({ submit: false }), recorded on its own StepRecorder.
+export function createInvestigationTools(
+  source: TelemetrySource,
+  recorder: InvestigationRecorder,
+): ReturnType<typeof readOnlyTools> & { submit_report: ReturnType<typeof submitReportTool> };
+export function createInvestigationTools(
+  source: TelemetrySource,
+  recorder: StepRecorder,
+  opts: { submit: false },
+): ReturnType<typeof readOnlyTools>;
+export function createInvestigationTools(
+  source: TelemetrySource,
+  recorder: StepRecorder | InvestigationRecorder,
+  opts: { submit?: boolean } = {},
+) {
+  const tools = readOnlyTools(source, recorder);
+  if (opts.submit === false) return tools;
+  return { ...tools, submit_report: submitReportTool(source, recorder as InvestigationRecorder) };
+}
+
+function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
   const description = source.describe();
   const serviceNames = description.services.map((s) => s.name);
   const metricList = description.metrics
@@ -180,7 +202,7 @@ export function createInvestigationTools(source: TelemetrySource, recorder: Inve
         return {
           summary,
           evidence: [{ kind: "source", summary, file: file.path, startLine, code }],
-          services: [recorder.incident.service],
+          services: [recorder.service],
         };
       }),
     }),
@@ -205,7 +227,7 @@ export function createInvestigationTools(source: TelemetrySource, recorder: Inve
         return {
           summary: `${commits.length} commits`,
           evidence,
-          services: [recorder.incident.service],
+          services: [recorder.service],
         };
       }),
     }),
@@ -243,33 +265,37 @@ export function createInvestigationTools(source: TelemetrySource, recorder: Inve
       }),
     }),
 
-    submit_report: tool({
-      description:
-        "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses and must name a fault (if nothing is wrong, the verdict is healthy), and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
-      inputSchema: investigationReportSchema.omit({ servicesQueried: true }).extend({ summary: reportSummarySchema }),
-      execute: async (input) => {
-        const report = { ...input, servicesQueried: [...recorder.queriedServices].sort() };
-        const unknown = findUnknownEvidenceIds(report, recorder.evidence);
-        const unqueried = serviceNames.filter((s) => !recorder.queriedServices.has(s));
-        const problems = [
-          ...reportProblems(report),
-          ...(unknown.length ? [`unknown evidence IDs cited: ${unknown.join(", ")}`] : []),
-          ...unqueried.map((s) => `service not queried yet: ${s}`),
-        ];
-        if (problems.length > 0) {
-          recorder.rejectedReports += 1;
-          return { accepted: false, problems };
-        }
-        recorder.update({ report });
-        return { accepted: true };
-      },
-    }),
   };
+}
+
+function submitReportTool(source: TelemetrySource, recorder: InvestigationRecorder) {
+  const serviceNames = source.describe().services.map((s) => s.name);
+  return tool({
+    description:
+      "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses and must name a fault (if nothing is wrong, the verdict is healthy), and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
+    inputSchema: investigationReportSchema.omit({ servicesQueried: true }).extend({ summary: reportSummarySchema }),
+    execute: async (input) => {
+      const report = { ...input, servicesQueried: [...recorder.queriedServices].sort() };
+      const unknown = findUnknownEvidenceIds(report, recorder.evidence);
+      const unqueried = serviceNames.filter((s) => !recorder.queriedServices.has(s));
+      const problems = [
+        ...reportProblems(report),
+        ...(unknown.length ? [`unknown evidence IDs cited: ${unknown.join(", ")}`] : []),
+        ...unqueried.map((s) => `service not queried yet: ${s}`),
+      ];
+      if (problems.length > 0) {
+        recorder.rejectedReports += 1;
+        return { accepted: false, problems };
+      }
+      recorder.update({ report });
+      return { accepted: true };
+    },
+  });
 }
 
 // What the model sees for each evidence item: enough to reason with, short
 // enough to keep the context small.
-function forModel(e: Evidence) {
+export function forModel(e: Evidence) {
   const base = { id: e.id, summary: e.summary };
   switch (e.kind) {
     case "log":

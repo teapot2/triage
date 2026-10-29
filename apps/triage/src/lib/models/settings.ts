@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
-import { type StageId, stageIdSchema, stageIds } from "./stages";
+import { type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
 export { type StageId, stageIdSchema, stageIds } from "./stages";
 
@@ -61,9 +61,16 @@ export async function endpointFor(id: ProviderId): Promise<Endpoint> {
   return endpointOf(await read(), id);
 }
 
+// The stage's saved model, else its fallback stage's (Ask uses
+// Investigate's), else the env's.
+function chosenModel(settings: Settings, stage: StageId): StageModel {
+  const fallback = stageFallback[stage];
+  return settings.stages[stage] ?? (fallback && settings.stages[fallback]) ?? defaultStage();
+}
+
 export async function stageModel(stage: StageId): Promise<StageModel & Endpoint> {
   const settings = await read();
-  const chosen = settings.stages[stage] ?? defaultStage();
+  const chosen = chosenModel(settings, stage);
   return { ...chosen, ...endpointOf(settings, chosen.provider) };
 }
 
@@ -84,7 +91,7 @@ export function stageProblem(s: StageModel & Endpoint): string | undefined {
 // What the browser sees: no keys, only whether one is set and where from.
 export async function publicModelSettings() {
   const settings = await read();
-  const stages = Object.fromEntries(stageIds.map((id) => [id, settings.stages[id] ?? defaultStage()])) as Record<
+  const stages = Object.fromEntries(stageIds.map((id) => [id, chosenModel(settings, id)])) as Record<
     StageId,
     StageModel
   >;

@@ -14,8 +14,10 @@ export async function failInterruptedRuns(): Promise<number> {
   const now = new Date().toISOString();
   let fixed = 0;
   for (const incident of await listIncidents()) {
-    if (isExample(incident.id) || isDemo(incident.id)) continue;
-    const next = recovered(incident, now);
+    if (isDemo(incident.id)) continue;
+    // A bundled example can take questions (and so be cut off answering
+    // one); its other stages pose as they are.
+    const next = isExample(incident.id) ? withAnswersCutOff(incident, now) : recovered(incident, now);
     if (next) {
       await saveIncident(next);
       fixed += 1;
@@ -48,5 +50,21 @@ function recovered(incident: Incident, now: string): Incident | undefined {
   if (approval?.prState === "opening") {
     edit({ approval: { ...approval, prState: "failed", prError: `${RESTARTED} while the PR was being opened` } });
   }
+  const answers = withAnswersCutOff(next ?? incident, now);
+  if (answers) edit({ questions: answers.questions });
   return next;
+}
+
+// The incident with every question still answering marked as failed, or
+// undefined if none was.
+function withAnswersCutOff(incident: Incident, now: string): Incident | undefined {
+  if (!incident.questions?.some((q) => q.status === "answering")) return undefined;
+  return {
+    ...incident,
+    questions: incident.questions.map((q) =>
+      q.status === "answering"
+        ? { ...q, status: "failed", answeredAt: now, error: `${RESTARTED} before the answer finished` }
+        : q,
+    ),
+  };
 }

@@ -7,7 +7,7 @@ import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
 import { proposeMitigation } from "./mitigation/propose";
 import { readTelemetry } from "./live/otlp-files";
-import { InvestigationRecorder } from "./recorder";
+import { InvestigationRecorder, type ThoughtRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
 import type { Incident, Thought } from "./schema";
@@ -210,7 +210,7 @@ async function saveNewIncident(
 // text when the call ends, before the tool calls it asked for run. The SDK's
 // callId is shared by every call in one generate(), so each thought gets its
 // own id; an agent's calls run one at a time, so the open one is the last.
-function recordThoughts(recorder: InvestigationRecorder, kind: Thought["reasoningKind"]) {
+export function recordThoughts(recorder: ThoughtRecorder, kind: Thought["reasoningKind"]) {
   let open: string | undefined;
   const joined = (content: ReadonlyArray<{ type: string; text?: string }>, type: string) =>
     content.flatMap((p) => (p.type === type && p.text?.trim() ? [p.text.trim()] : [])).join("\n\n") || undefined;

@@ -114,8 +114,10 @@ export async function recentRequests(windowMs: number): Promise<RequestSample[]>
   return requestSamples(spans, now - windowMs, now);
 }
 
-export async function createLiveSource(): Promise<TelemetrySource> {
-  const now = Date.now();
+// `now` anchors the source at another time than the call's: an alert's,
+// to look at a finished incident's window as it was (sourceFor).
+export async function createLiveSource(opts: { now?: number } = {}): Promise<TelemetrySource> {
+  const now = opts.now ?? Date.now();
   const all = await readTelemetry();
   const spans = all.spans.filter((s) => s.start <= now);
   const logs = all.logs.filter((l) => l.time <= now);
