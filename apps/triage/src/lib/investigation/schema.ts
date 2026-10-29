@@ -107,7 +107,23 @@ export const investigationStepSchema = z.object({
 });
 export type InvestigationStep = z.infer<typeof investigationStepSchema>;
 
-const claimSchema = z.object({
+// One model call in the investigation: what the model thought before the
+// tool calls it then made. `reasoning` is its raw thinking where the
+// provider returns it (open weights through OpenRouter or a local server),
+// or the provider's summary of it (Meta's API: the raw thinking stays
+// private there). No duration while the model is still working.
+export const thoughtSchema = z.object({
+  id: z.string(),
+  startedAt: timestamp,
+  durationMs: z.number().optional(),
+  reasoning: z.string().optional(),
+  reasoningKind: z.enum(["raw", "summary"]).optional(),
+  // What the model wrote alongside its tool calls, if anything.
+  text: z.string().optional(),
+});
+export type Thought = z.infer<typeof thoughtSchema>;
+
+export const claimSchema = z.object({
   text: z.string(),
   evidenceIds: z.array(evidenceId).min(1).describe("Every claim must cite evidence"),
 });
@@ -164,6 +180,43 @@ export const fixSchema = z.object({
 });
 export type Fix = z.infer<typeof fixSchema>;
 
+// The alert's metric after a mitigation is applied, watched until it is back
+// under the threshold or the watch gives up. Stops at a measured status; the
+// incident's Resolved transition is separate.
+export const recoverySchema = z.object({
+  metric: z.string(),
+  threshold: z.number(),
+  since: timestamp,
+  series: z.array(metricPointSchema),
+  status: z.enum(["watching", "recovered", "not_recovered"]),
+  recoveredAt: timestamp.optional(),
+  checkedAt: timestamp.optional(),
+  note: z.string().optional(),
+});
+export type Recovery = z.infer<typeof recoverySchema>;
+
+// A fast, reversible step to stop the bleeding before the fix ships: turn off
+// the flag or roll back the deploy the diagnosis cites. Proposed by a rule
+// over the evidence (mitigation/propose.ts), approved by a person, then run
+// against the service and watched until the alert recovers.
+export const mitigationSchema = z.object({
+  kind: z.enum(["flag_off", "rollback"]),
+  target: z.string().describe("The flag name, or the deploy's sha"),
+  title: z.string(),
+  why: claimSchema,
+  steps: z.array(z.string()),
+  undo: z.string(),
+  risk: z.enum(["very_low", "low", "medium"]),
+  state: z.enum(["proposed", "approved", "denied", "running", "applied", "failed"]),
+  proposedAt: timestamp,
+  decidedAt: timestamp.optional(),
+  appliedAt: timestamp.optional(),
+  output: z.string().optional(),
+  error: z.string().optional(),
+  recovery: recoverySchema.optional(),
+});
+export type Mitigation = z.infer<typeof mitigationSchema>;
+
 export const testCaseSchema = z.object({
   name: z.string(),
   status: z.enum(["passed", "failed", "skipped"]),
@@ -207,13 +260,18 @@ export type Approval = z.infer<typeof approvalSchema>;
 // Stages 3 and 4 as they run: the model writes a fix and a regression test,
 // the sandbox proves them, and a failed proof goes back to the model.
 export const fixRunSchema = z.object({
-  status: z.enum(["writing", "testing", "proven", "failed"]),
+  // declined: the model judged the diagnosis isn't a code defect it should
+  // fix (see declinedBecause), instead of fixing something else.
+  status: z.enum(["writing", "testing", "proven", "failed", "declined"]),
+  declinedBecause: z.string().optional(),
   attempt: z.number().int().describe("Submissions so far, counting the one being tested"),
   // The fix stage's provider and model.
   provider: z.string().optional(),
   model: z.string().optional(),
   rejections: z.array(z.string()).optional().describe("Why each rejected submission failed, first line only"),
   startedAt: timestamp,
+  // As on the investigation's run: the fix stage's host waking up.
+  wakingSince: timestamp.optional(),
   finishedAt: timestamp.optional(),
   modelSteps: z.number().int().optional(),
   inputTokens: z.number().int().optional(),
@@ -240,6 +298,9 @@ export const runSchema = z.object({
   provider: z.string().optional(),
   model: z.string(),
   startedAt: timestamp,
+  // Set while the model's host wakes from scaled to zero (Modal), before
+  // the first model call; cleared once it answers.
+  wakingSince: timestamp.optional(),
   finishedAt: timestamp.optional(),
   modelSteps: z.number().int().optional(),
   inputTokens: z.number().int().optional(),
@@ -273,8 +334,12 @@ export const incidentSchema = z.object({
     focus: z.object({ from: timestamp, to: timestamp, route: z.string().optional() }).optional(),
   }),
   steps: z.array(investigationStepSchema),
+  // The model's thinking, one entry per model call, in order. Missing on
+  // incidents from before it was recorded.
+  thoughts: z.array(thoughtSchema).optional(),
   evidence: z.array(evidenceSchema),
   report: investigationReportSchema.optional(),
+  mitigation: mitigationSchema.optional(),
   fix: fixSchema.optional(),
   validation: z.array(sandboxRunSchema).optional(),
   fixRun: fixRunSchema.optional(),
@@ -301,6 +366,16 @@ export function findUnknownEvidenceIds(
   return [...new Set(cited.filter((id) => !known.has(id)))];
 }
 
+// Phrases that say there's no fault: a hypothesis that "the alert is a false
+// positive" or "no ongoing issue" is a healthy verdict's rationale, not a
+// root cause. Seen on a live run: the model concluded "no ongoing problem;
+// alert is false positive due to idle traffic" yet filed it as root_cause,
+// and the fix stage then fixed a bug the investigation had ruled out.
+const noFault =
+  /\b(false[- ]positive|no (ongoing|real|actual|current|underlying|genuine) (issue|problem|fault|incident|regression)|no (issue|problem|fault) (found|detected|exists)|nothing (is )?(wrong|broken)|not an? (real|actual|genuine) (issue|problem|incident)|idle traffic|metric is meaningless)\b/i;
+
+export const saysNothingIsWrong = (h: Hypothesis) => noFault.test(`${h.title}\n${h.causalChain.rootCause.text}`);
+
 // Rules the JSON schema cannot express; checked after the model responds.
 export function reportProblems(report: InvestigationReport): string[] {
   const problems: string[] = [];
@@ -310,6 +385,11 @@ export function reportProblems(report: InvestigationReport): string[] {
     const chosen = hypotheses.find((h) => h.id === verdict.hypothesisId);
     if (!chosen) problems.push(`verdict cites unknown hypothesis ${verdict.hypothesisId}`);
     else if (chosen.status !== "leading") problems.push("verdict hypothesis must be leading");
+    else if (saysNothingIsWrong(chosen)) {
+      problems.push(
+        `verdict hypothesis ${chosen.id} says nothing is wrong ("${chosen.title}"). A breach with no fault behind it (a false positive, a one-off slow request that recovered, idle traffic) is a healthy verdict: submit healthy, with that as its rationale. root_cause is for a fault in the system that caused the breach.`,
+      );
+    }
   }
   if (verdict.kind === "healthy" && hypotheses.some((h) => h.status === "leading")) {
     problems.push("healthy verdict cannot have a leading hypothesis");

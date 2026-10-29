@@ -8,11 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test 'src/**/*.test.ts'",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "check:blind": "tsx scripts/check-blind.ts",
     "check:sandbox": "tsx scripts/check-sandbox.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "4.0.99",
     "@ai-sdk/openai-compatible": "3.0.75",
     "ai": "7.0.148",
     "ansi-to-react": "^6.2.6",

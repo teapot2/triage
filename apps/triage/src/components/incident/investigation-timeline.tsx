@@ -1,19 +1,27 @@
 "use client";
 
 import {
+  BrainIcon,
+  ChartLineIcon,
   ChevronRightIcon,
-  CircleCheckIcon,
   CircleXIcon,
+  DatabaseIcon,
+  FileCodeIcon,
+  GitCommitHorizontalIcon,
   LoaderCircleIcon,
+  type LucideIcon,
+  RocketIcon,
+  ScrollTextIcon,
   SearchIcon,
   SearchXIcon,
+  WaypointsIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { useCountUp } from "@/hooks/use-count-up";
-import type { InvestigationStep, Run, ToolName } from "@/lib/investigation/schema";
+import type { InvestigationStep, Run, Thought, ToolName } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations, evidenceIcons, useEvidence } from "./evidence";
 import { modelLabel } from "@/lib/models/labels";
@@ -22,9 +30,21 @@ import { evidenceTitle } from "./metric-labels";
 import { activeFilterCount, emptyFilters, type Filters, filterSteps, matchSnippet } from "./log-filters";
 import { LogToolbar } from "./log-toolbar";
 
+// A finished tool call shows what kind of call it was, so a metrics query,
+// a log search and a source read look different at a glance; a running one
+// spins and a failed one shows a cross instead.
+const toolIcons: Record<ToolName, LucideIcon> = {
+  query_metrics: ChartLineIcon,
+  query_logs: ScrollTextIcon,
+  query_traces: WaypointsIcon,
+  db_diagnostics: DatabaseIcon,
+  deploy_history: RocketIcon,
+  git_log: GitCommitHorizontalIcon,
+  read_source: FileCodeIcon,
+};
+
 const statusIcons = {
   running: { Icon: LoaderCircleIcon, className: "animate-spin text-muted-foreground" },
-  completed: { Icon: CircleCheckIcon, className: "text-muted-foreground" },
   error: { Icon: CircleXIcon, className: "text-destructive" },
 };
 
@@ -65,6 +85,39 @@ interface PhaseGroup {
   steps: InvestigationStep[];
 }
 
+type TimelineView = "phases" | "steps";
+
+// A turn of the step-by-step view: a model call's thinking and the tool
+// calls it led to. No thought when it's filtered out (its calls then show
+// without one) or for calls made before the first recorded thought.
+interface Turn {
+  key: string;
+  thought?: Thought;
+  steps: InvestigationStep[];
+}
+
+// Each step belongs to the latest thought that started before it: a model
+// call ends, then the tool calls it asked for run, then the next call
+// starts. Turns are cut by every thought, shown or not, so a hidden
+// thought's calls don't join the previous one's.
+function groupTurns(all: Thought[], shown: Thought[], steps: InvestigationStep[]): Turn[] {
+  const visible = new Set(shown.map((t) => t.id));
+  const turns: Turn[] = [{ key: "start", steps: [] }];
+  const starts = all.map((t) => ({ at: Date.parse(t.startedAt), t })).sort((a, b) => a.at - b.at);
+  let next = 0;
+  for (const step of [...steps].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
+    while (next < starts.length && starts[next].at <= Date.parse(step.startedAt)) {
+      const { t } = starts[next++];
+      turns.push({ key: t.id, thought: visible.has(t.id) ? t : undefined, steps: [] });
+    }
+    turns.at(-1)!.steps.push(step);
+  }
+  // Thoughts after the last step (the model's final call, or one still
+  // thinking).
+  for (const { t } of starts.slice(next)) turns.push({ key: t.id, thought: visible.has(t.id) ? t : undefined, steps: [] });
+  return turns.filter((turn) => turn.thought || turn.steps.length > 0);
+}
+
 // Phases in the order the agent first reached them.
 function groupByPhase(steps: InvestigationStep[]): PhaseGroup[] {
   const groups = new Map<Phase, InvestigationStep[]>();
@@ -80,17 +133,28 @@ function groupByPhase(steps: InvestigationStep[]): PhaseGroup[] {
 // the citations: just what the diagnosis cites, or all of it. Its tool calls
 // fold below. While the agent runs, or while searching or filtering, the
 // tool calls show directly.
+//
+// With the model's thinking recorded, a second view lays the run out step by
+// step instead: each model call's thinking, then the tool calls it made, in
+// order. It's the default while the agent runs, to follow along.
 export function InvestigationTimeline({
   steps,
+  thoughts = [],
   cited,
   running,
   run,
 }: {
   steps: InvestigationStep[];
+  thoughts?: Thought[];
   cited: string[];
   running: boolean;
   run?: Run;
 }) {
+  const [chosenView, setView] = useState<TimelineView>();
+  // Step by step when the page opened on a running investigation, and it
+  // stays so when the run ends, rather than switching under the reader.
+  const [openedLive] = useState(running);
+  const view: TimelineView = thoughts.length > 0 ? (chosenView ?? (openedLive ? "steps" : "phases")) : "phases";
   const { byId, numberOf, open, focused, covered } = useEvidence();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
@@ -104,7 +168,10 @@ export function InvestigationTimeline({
   const shown = useMemo(() => filterSteps(steps, query, filters, byId), [steps, query, filters, byId]);
   const groups = useMemo(() => groupByPhase(filtering ? shown : steps), [filtering, shown, steps]);
   const citedSet = useMemo(() => new Set(cited), [cited]);
-  const t0 = steps.length ? Date.parse(steps[0].startedAt) : 0;
+  // Offsets count from the first thing that happened: the model's first
+  // thought, where it's recorded, comes before the first tool call.
+  const firsts = [steps[0]?.startedAt, thoughts[0]?.startedAt].flatMap((t) => (t ? [Date.parse(t)] : []));
+  const t0 = firsts.length ? Math.min(...firsts) : 0;
   const showCallsByDefault = filtering || running || cited.length === 0;
   const took = run?.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : undefined;
   // Ticks up as the agent adds calls, rather than jumping.
@@ -169,46 +236,69 @@ export function InvestigationTimeline({
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  // Step by step: each thought, with the tool calls it led to nested under
+  // it, in the order they happened. Type picks thoughts, tool calls or both;
+  // the other filters are about tool calls, so with one on, thoughts show
+  // only if Type asks for them. A search narrows both.
+  const q = query.trim().toLowerCase();
+  const toolFiltersOn = activeFilterCount({ ...filters, kind: [] }) > 0;
+  const showThoughts = filters.kind.length > 0 ? filters.kind.includes("thought") : !toolFiltersOn;
+  const shownThoughts = showThoughts
+    ? thoughts.filter((t) => !q || `${t.text ?? ""}\n${t.reasoning ?? ""}`.toLowerCase().includes(q))
+    : [];
+  const turns = groupTurns(thoughts, shownThoughts, filtering ? shown : steps);
+  const rowCount = shownThoughts.length + (filtering ? shown : steps).length;
+  const lastThought = thoughts.at(-1)?.id;
+  const nothingShown = view === "phases" ? groups.length === 0 : rowCount === 0;
+  const changeView = (next: TimelineView) => {
+    setView(next);
+    // Type is a step-by-step filter; the phases hold only tool calls.
+    if (next === "phases" && filters.kind.length > 0) setFilters({ ...filters, kind: [] });
+  };
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 text-muted-foreground text-xs">
+      <div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
         <span className="tabular-nums">
           {took && `${took} · `}
           {callCount} tool {callCount === 1 ? "call" : "calls"}
           {run && ` · ${modelLabel(run.model, run.provider)}`}
         </span>
-        {cited.length > 0 && (
-          <div role="group" aria-label="Evidence shown" className="ml-auto inline-flex rounded-md bg-muted p-0.5">
-            {[
-              { all: false, label: "Cited", count: cited.length },
-              { all: true, label: "All evidence", count: byId.size },
-            ].map((o) => (
-              <button
-                key={o.label}
-                type="button"
-                aria-pressed={showAll === o.all}
-                onClick={() => setShowAll(o.all)}
-                className={cn(
-                  "flex h-6 items-center gap-1.5 rounded-[5px] px-2 transition-colors",
-                  showAll === o.all ? "bg-background text-foreground shadow-sm" : "hover:text-foreground",
-                )}
-              >
-                {o.label}
-                <span className="tabular-nums opacity-60">{o.count}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <Button
-          variant={searchOpen || filtering ? "secondary" : "ghost"}
-          size="icon-xs"
-          aria-label="Search and filter tool calls"
-          aria-pressed={searchOpen || filtering}
-          onClick={toggleSearch}
-          className={cn(cited.length === 0 && "ml-auto")}
-        >
-          <SearchIcon />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {thoughts.length > 0 && (
+            <PillToggle
+              label="Timeline view"
+              value={view}
+              onChange={changeView}
+              options={[
+                { value: "phases", label: "By phase" },
+                { value: "steps", label: "Step by step" },
+              ]}
+            />
+          )}
+          {/* What the diagnosis cites is marked per phase, so it's a
+              phase-view choice. */}
+          {view === "phases" && cited.length > 0 && (
+            <PillToggle
+              label="Evidence shown"
+              value={showAll ? "all" : "cited"}
+              onChange={(v) => setShowAll(v === "all")}
+              options={[
+                { value: "cited", label: "Cited", count: cited.length },
+                { value: "all", label: "All evidence", count: byId.size },
+              ]}
+            />
+          )}
+          <Button
+            variant={searchOpen || filtering ? "secondary" : "ghost"}
+            size="icon-xs"
+            aria-label="Search and filter tool calls"
+            aria-pressed={searchOpen || filtering}
+            onClick={toggleSearch}
+          >
+            <SearchIcon />
+          </Button>
+        </div>
       </div>
       <div ref={rootRef} className="flex flex-col gap-3">
         {(searchOpen || filtering) && (
@@ -218,21 +308,58 @@ export function InvestigationTimeline({
             onQueryChange={setQuery}
             filters={filters}
             onFiltersChange={setFilters}
-            shown={shown.length}
+            shown={view === "steps" ? rowCount : shown.length}
+            total={view === "steps" ? steps.length + thoughts.length : steps.length}
+            thoughtCount={view === "steps" ? thoughts.length : 0}
             inputRef={inputRef}
           />
         )}
 
-        {groups.length === 0 ? (
+        {nothingShown ? (
           // Held back a beat, so it doesn't flash while a query is still being typed.
           <div className="flex flex-col items-center gap-1 rounded-md border border-dashed py-6 text-center animate-in fade-in-0 delay-150 fill-mode-backwards duration-200 ease-out motion-reduce:animate-none">
             <SearchXIcon className="mb-1 size-5 text-muted-foreground" />
-            <p className="font-medium text-sm">No tool calls match</p>
+            <p className="font-medium text-sm">{view === "steps" ? "Nothing matches" : "No tool calls match"}</p>
             <p className="text-muted-foreground text-xs">Try a different search or remove a filter.</p>
             <Button variant="outline" size="sm" onClick={clearAll} className="mt-2">
               Clear search and filters
             </Button>
           </div>
+        ) : view === "steps" ? (
+          <ol className="-mx-2 flex flex-col">
+            {turns.map((turn) => (
+              <Fragment key={turn.key}>
+                {turn.thought && (
+                  <ThoughtRow
+                    thought={turn.thought}
+                    offsetMs={Date.parse(turn.thought.startedAt) - t0}
+                    live={running && turn.thought.id === lastThought}
+                    running={running}
+                  />
+                )}
+                {turn.steps.length > 0 && (
+                  <li>
+                    {/* Under a thought, its calls hang off a rail from the
+                        thought's icon (15px: the row's padding and half the
+                        icon). */}
+                    <ol className={cn("flex flex-col", turn.thought && "ml-[15px] border-l pl-1.5")}>
+                      {turn.steps.map((step) => (
+                        <StepRow
+                          key={step.id}
+                          step={step}
+                          offsetMs={Date.parse(step.startedAt) - t0}
+                          query={query}
+                          snippet={matchSnippet(step, query, byId)}
+                          highlighted={focused !== null && step.evidenceIds.includes(focused)}
+                          running={running}
+                        />
+                      ))}
+                    </ol>
+                  </li>
+                )}
+              </Fragment>
+            ))}
+          </ol>
         ) : (
           <ol className="flex flex-col">
             {groups.map(({ phase, steps: phaseSteps }, i) => {
@@ -365,7 +492,7 @@ function StepRow({
       >
         {/* Grid so a search snippet can sit under the summary column. */}
         <CollapsibleTrigger className="grid w-full grid-cols-[auto_7rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50">
-          <StepStatusIcon status={step.status} />
+          <StepStatusIcon status={step.status} tool={step.tool} />
           <span className="font-mono text-xs">
             <Highlight text={step.tool} query={query} />
           </span>
@@ -411,11 +538,127 @@ function StepRow({
   );
 }
 
-// The spinner, then a check or cross that pops in when the step finishes
-// while in view. Steps already done when the row mounts show it still.
-function StepStatusIcon({ status }: { status: InvestigationStep["status"] }) {
+// A model call's thinking, as a row among the tool calls: "Thinking…" while
+// the model works, then what it wrote alongside its calls (or a line of its
+// reasoning) and how long it took. Open, that line shows in full and below
+// it only what it doesn't already say: the reasoning, or the rest of it
+// (Meta's summary as is, open weights' raw thinking in a scrolling box).
+// No labels; the row's place in the run says what it is. The newest one
+// stays open while the run is live, to follow along; once someone toggles a
+// row, it's theirs.
+function ThoughtRow({
+  thought,
+  offsetMs,
+  live,
+  running,
+}: {
+  thought: Thought;
+  offsetMs: number;
+  live: boolean;
+  running: boolean;
+}) {
+  const [toggled, setToggled] = useState<boolean>();
+  const thinking = thought.durationMs === undefined;
+  const open = toggled ?? (live && !thinking);
+  const raw = thought.reasoningKind === "raw";
+  // Without a note, the reasoning gives the headline: a summary's first line,
+  // or raw thinking's last, where open weights decide what to do next ("Check
+  // deploy history around 19:02.") after recapping the results above it.
+  const lines = (thought.reasoning ?? "").split("\n");
+  const nonEmpty = lines.flatMap((l, i) => (l.trim() ? [i] : []));
+  const pick = raw ? nonEmpty.at(-1) : nonEmpty[0];
+  const headline = thought.text ?? (pick === undefined ? "" : lines[pick].trim());
+  // What the open row adds: the reasoning, or the rest of it, in order.
+  const rest = thought.text
+    ? thought.reasoning
+    : lines.filter((_, i) => i !== pick).join("\n").trim() || undefined;
+  return (
+    <li className={cn(running && enterMotion)}>
+      <Collapsible open={open} onOpenChange={setToggled} className="rounded-md">
+        <CollapsibleTrigger
+          disabled={thinking}
+          className="grid w-full grid-cols-[auto_7rem_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 disabled:hover:bg-transparent"
+        >
+          {/* Tinted, unlike the tool icons, and with the text across the
+              tool-name column too: the model talking, not a call. */}
+          <BrainIcon
+            aria-label={thinking ? "Thinking" : "Thought"}
+            className={cn("mt-[3px] size-3.5 text-brand", thinking && "animate-pulse motion-reduce:animate-none")}
+          />
+          <span
+            className={cn(
+              "col-span-2",
+              open ? "whitespace-pre-wrap" : "truncate",
+              thinking ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {thinking ? "Thinking…" : headline}
+          </span>
+          <span className="mt-0.5 flex items-baseline gap-2 font-mono text-muted-foreground text-xs tabular-nums">
+            <span className="w-14 text-right opacity-70">{thinking ? "…" : formatDuration(thought.durationMs!)}</span>
+            <span>{formatOffset(offsetMs)}</span>
+          </span>
+        </CollapsibleTrigger>
+        {rest && (
+          <CollapsibleContent>
+            <p
+              className={cn(
+                "mb-2 ml-8 whitespace-pre-wrap border-l pl-3 text-muted-foreground text-xs",
+                // Raw thinking runs long; it scrolls rather than pushing the
+                // tool calls off the page.
+                raw && "max-h-72 overflow-y-auto font-mono text-[11px]",
+              )}
+            >
+              {rest}
+            </p>
+          </CollapsibleContent>
+        )}
+      </Collapsible>
+    </li>
+  );
+}
+
+// A few choices as one small pill, in the timeline's header: the view, and
+// which evidence the phases show.
+function PillToggle<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: string; count?: number }[];
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex rounded-md bg-muted p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex h-6 items-center gap-1.5 rounded-[5px] px-2 transition-colors",
+            value === o.value ? "bg-background text-foreground shadow-sm" : "hover:text-foreground",
+          )}
+        >
+          {o.label}
+          {o.count !== undefined && <span className="tabular-nums opacity-60">{o.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// The spinner, then the tool's icon (or a cross) that pops in when the step
+// finishes while in view. Steps already done when the row mounts show it
+// still.
+function StepStatusIcon({ status, tool }: { status: InvestigationStep["status"]; tool: ToolName }) {
   const justFinished = useChangedSinceMount(status);
-  const { Icon, className } = statusIcons[status];
+  const { Icon, className } =
+    status === "completed" ? { Icon: toolIcons[tool], className: "text-muted-foreground" } : statusIcons[status];
   return (
     <Icon
       className={cn(

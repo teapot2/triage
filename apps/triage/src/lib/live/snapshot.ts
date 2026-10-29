@@ -3,7 +3,7 @@ import { type LogRow, type MetricRow, readTelemetry, type SpanRow } from "@/lib/
 import type { ChartPoint, Incident } from "@/lib/investigation/schema";
 import { listIncidents } from "@/lib/investigation/store";
 import { matchesTarget, readRules, type WatchRule } from "@/lib/investigation/watch-rules";
-import { type LiveRoute, type LiveSnapshot, type LiveWindow, liveWindows } from "./types";
+import { type LiveRoute, type LiveSnapshot, type LiveWindow, liveService, liveWindows } from "./types";
 
 // A service's last few minutes for the live page, summarized here so the
 // browser gets a few hundred numbers per poll rather than raw spans. Reads
@@ -46,6 +46,9 @@ export function liveSnapshot(service: string, window: LiveWindow): Promise<LiveS
   const key = `${service}:${window}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.snapshot;
+  // Expired entries go, so a page polled once (or a mistyped service name)
+  // isn't held for the life of the server.
+  for (const [k, v] of cache) if (Date.now() - v.at >= CACHE_MS) cache.delete(k);
   const snapshot = (async () => {
     const [telemetry, rules, incidents] = await Promise.all([readTelemetry(), readRules(), listIncidents()]);
     return summarize({ ...telemetry, rules, incidents }, service, window, Date.now());
@@ -60,7 +63,9 @@ export function liveSnapshot(service: string, window: LiveWindow): Promise<LiveS
 // directly (snapshot.test.ts).
 export function summarize(input: SnapshotInput, service: string, window: LiveWindow, now: number): LiveSnapshot {
   const { ms: windowMs, bucketMs } = liveWindows.find((w) => w.id === window) ?? liveWindows[1];
-  const { rules } = input;
+  // The watch rules judge the live service only, so other services' charts
+  // and routes get no limits from them.
+  const rules = service === liveService ? input.rules : [];
   const end = Math.floor((now - LAG_MS) / bucketMs) * bucketMs;
   const start = end - windowMs;
   const buckets = Array.from({ length: windowMs / bucketMs }, (_, i) => start + i * bucketMs);

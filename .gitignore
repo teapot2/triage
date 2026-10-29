@@ -46,3 +46,6 @@ Thumbs.db
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Python bytecode (infra/modal)
+__pycache__/

@@ -1,4 +1,5 @@
-import type { Evidence, EvidenceKind, Incident, InvestigationReport, ToolName } from "./schema";
+import type { Evidence, EvidenceKind, Incident, InvestigationReport, Thought, ToolName } from "./schema";
+import { getIncident, withIncidentLock } from "./store";
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -53,6 +54,36 @@ export class InvestigationRecorder {
     return evidence;
   }
 
+  // A model call began: shown as "Thinking…" until it ends.
+  startThought(id: string) {
+    this.incident.thoughts = [...(this.incident.thoughts ?? []), { id, startedAt: new Date().toISOString() }];
+    this.persist();
+  }
+
+  // A model call ended, before its tool calls run. A call that returned no
+  // thinking and no text (Meta's Chat Completions keeps both private) is
+  // dropped, so the timeline doesn't fill with empty rows.
+  endThought(id: string, out: Pick<Thought, "reasoning" | "reasoningKind" | "text">) {
+    const thoughts = this.incident.thoughts ?? [];
+    if (!out.reasoning && !out.text) {
+      this.incident.thoughts = thoughts.filter((t) => t.id !== id);
+    } else {
+      this.incident.thoughts = thoughts.map((t) =>
+        t.id === id ? { ...t, ...out, durationMs: Date.now() - Date.parse(t.startedAt) } : t,
+      );
+    }
+    this.persist();
+  }
+
+  // A call that failed never ends; once the run is over, its "Thinking…"
+  // would spin forever, so it goes.
+  dropUnfinishedThoughts() {
+    const thoughts = this.incident.thoughts ?? [];
+    if (thoughts.every((t) => t.durationMs !== undefined)) return;
+    this.incident.thoughts = thoughts.filter((t) => t.durationMs !== undefined);
+    this.persist();
+  }
+
   failStep(id: string, error: string) {
     this.updateStep(id, (step) => ({
       ...step,
@@ -84,8 +115,15 @@ export class InvestigationRecorder {
 
   private persist() {
     const snapshot = structuredClone(this.incident);
+    // The mitigation is decided and applied from a route while the fix stage
+    // still runs here; a whole-snapshot save would overwrite it.
     this.writes = this.writes
-      .then(() => this.save(snapshot))
+      .then(() =>
+        withIncidentLock(snapshot.id, async () => {
+          const stored = (await getIncident(snapshot.id))?.mitigation;
+          await this.save(stored ? { ...snapshot, mitigation: stored } : snapshot);
+        }),
+      )
       .catch((err) => console.error("[triage] failed to save incident", snapshot.id, err));
   }
 }

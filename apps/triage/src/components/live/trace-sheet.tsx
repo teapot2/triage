@@ -4,6 +4,7 @@ import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { formatTime } from "@/components/incident/format";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { LiveRequest, LiveTrace } from "@/lib/live/types";
 import { cn } from "@/lib/utils";
 
@@ -77,16 +78,21 @@ function Waterfall({ trace }: { trace: LiveTrace }) {
             key={s.spanId}
             className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_4rem] items-center gap-3 py-1 text-xs"
           >
-            <div className="min-w-0" style={{ paddingLeft: `${Math.min(s.depth, 8) * 12}px` }}>
-              <div className={cn("truncate", s.error && "text-destructive")} title={s.name}>
-                {s.name}
-              </div>
-              {(s.detail || s.statusMessage) && (
-                <div className="truncate font-mono text-[11px] text-muted-foreground" title={s.statusMessage ?? s.detail}>
-                  {s.statusMessage ?? s.detail}
+            {/* The full name and detail on hover, since both truncate. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="min-w-0 cursor-default" style={{ paddingLeft: `${Math.min(s.depth, 8) * 12}px` }}>
+                  <div className={cn("truncate", s.error && "text-destructive")}>{s.name}</div>
+                  {(s.detail || s.statusMessage) && (
+                    <div className="truncate font-mono text-[11px] text-muted-foreground">{s.statusMessage ?? s.detail}</div>
+                  )}
                 </div>
-              )}
-            </div>
+              </TooltipTrigger>
+              <TooltipContent side="left" className="max-w-sm flex-col items-start gap-0.5 break-words">
+                <span>{s.name}</span>
+                {(s.detail || s.statusMessage) && <span className="font-mono opacity-70">{s.statusMessage ?? s.detail}</span>}
+              </TooltipContent>
+            </Tooltip>
             <div className="relative h-3 rounded-sm bg-muted/40">
               <div
                 className={cn("absolute inset-y-0 rounded-sm", s.error ? "bg-destructive" : "bg-primary/70")}

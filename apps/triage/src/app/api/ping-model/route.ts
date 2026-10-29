@@ -1,6 +1,6 @@
 import { generateText } from "ai";
 import { connection } from "next/server";
-import { languageModel } from "@/lib/models/client";
+import { languageModel, modelOptions, wakeProvider } from "@/lib/models/client";
 import { providerIdSchema } from "@/lib/models/providers";
 import { endpointFor, stageIdSchema, stageModel, stageProblem } from "@/lib/models/settings";
 
@@ -22,8 +22,11 @@ export async function GET(req: Request) {
   const problem = stageProblem(target);
   if (problem) return Response.json({ ok: false, error: problem }, { status: 409 });
   try {
+    // The 60 s budget is for the model's answer, not a cold host's start.
+    await wakeProvider(target);
     const { text, usage } = await generateText({
       model: languageModel(target),
+      providerOptions: modelOptions(target),
       prompt: "Reply with the single word: pong",
       abortSignal: AbortSignal.timeout(60_000),
     });

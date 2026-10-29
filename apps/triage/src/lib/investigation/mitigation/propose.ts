@@ -1,0 +1,93 @@
+import type { Evidence, InvestigationReport, Mitigation } from "../schema";
+
+type Commit = Extract<Evidence, { kind: "commit" }>;
+
+const flagCheck = /isEnabled\(\s*["'`](FF_[A-Z0-9_]+)["'`]\s*\)/;
+
+const isDeploy = (e: Evidence): e is Commit => e.kind === "commit" && e.tool === "deploy_history";
+const isConfig = (e: Commit) => e.sha.startsWith("config:");
+// Connections still checked out: turning the flag off stops new leaks but
+// frees none of these, so the flag-off also recycles them.
+const isPoolEvidence = (e: Evidence) =>
+  e.kind === "db" || (e.kind === "metric" && e.metric.startsWith("db.client.connection"));
+
+const recycleStep = "Recycle pooled connections held longer than 5 s (what a restart would do)";
+
+type Candidate = { kind: Mitigation["kind"]; target: string; from: Evidence; turnedOn?: boolean };
+
+// The leading hypothesis' causal chain, as the evidence items it cites (the
+// set the alert chart's deploy markers come from). A deploy counts when the
+// chain cites it or a commit with its sha; cited ones come first.
+function cited(report: InvestigationReport, evidence: Evidence[]): { items: Evidence[]; deploys: Commit[] } {
+  const { verdict } = report;
+  if (verdict.kind !== "root_cause") return { items: [], deploys: [] };
+  const h = report.hypotheses.find((x) => x.id === verdict.hypothesisId);
+  if (!h) return { items: [], deploys: [] };
+  const { symptom, propagation, rootCause } = h.causalChain;
+  const ids = new Set([symptom, propagation, rootCause].flatMap((c) => c.evidenceIds));
+  const items = evidence.filter((e) => ids.has(e.id));
+  const shas = new Set(items.flatMap((e) => (e.kind === "commit" ? [e.sha] : [])));
+  const bySha = evidence.filter(isDeploy).filter((e) => !ids.has(e.id) && shas.has(e.sha));
+  return { items, deploys: [...items.filter(isDeploy), ...bySha] };
+}
+
+// First match wins: a flag turned on, then a flag the blamed code checks,
+// then the deploy itself.
+function candidate(items: Evidence[], deploys: Commit[]): Candidate | undefined {
+  const flagOn = deploys.find((e) => isConfig(e) && e.message.includes("turned on"));
+  if (flagOn) return { kind: "flag_off", target: flagOn.sha.slice("config:".length), from: flagOn, turnedOn: true };
+  for (const e of items) {
+    const flag = e.kind === "source" ? flagCheck.exec(e.code)?.[1] : undefined;
+    if (flag) return { kind: "flag_off", target: flag, from: e };
+  }
+  const deploy = deploys.find((e) => !isConfig(e));
+  if (deploy) return { kind: "rollback", target: deploy.sha, from: deploy };
+}
+
+const templates = {
+  flag_off: (flag: string, service: string) => ({
+    title: `Turn off ${flag}`,
+    steps: [`Turn off ${flag} on ${service}`],
+    undo: `Turn ${flag} back on from Shopfront's ops page`,
+    risk: "very_low" as const,
+  }),
+  rollback: (sha: string, service: string) => ({
+    title: `Roll back ${service} to the deploy before ${sha}`,
+    steps: [`Redeploy ${service} at the deploy before ${sha}`],
+    undo: `Redeploy ${sha}`,
+    risk: "low" as const,
+  }),
+};
+
+function why(c: Candidate, service: string, recycles: boolean): string {
+  if (c.kind === "rollback") return `The symptom began after ${c.target} was deployed to ${service}.`;
+  const change = c.turnedOn
+    ? `The symptom began after ${c.target} was turned on`
+    : `The code the diagnosis blames only runs while ${c.target} is on`;
+  return recycles ? `${change}; turning it off stops new leaks, and recycling the held connections frees the pool.` : `${change}.`;
+}
+
+// A fast, reversible step to propose beside a root-cause verdict, chosen by
+// rule from the evidence the diagnosis cites. Nothing when no cited change
+// can be undone that way.
+export function proposeMitigation(
+  report: InvestigationReport,
+  evidence: Evidence[],
+  service: string,
+  now = new Date().toISOString(),
+): Mitigation | undefined {
+  const { items, deploys } = cited(report, evidence);
+  const c = candidate(items, deploys);
+  if (!c) return undefined;
+  const pool = c.kind === "flag_off" ? items.filter(isPoolEvidence) : [];
+  const t = templates[c.kind](c.target, service);
+  return {
+    kind: c.kind,
+    target: c.target,
+    ...t,
+    steps: pool.length ? [...t.steps, recycleStep] : t.steps,
+    why: { text: why(c, service, pool.length > 0), evidenceIds: [c.from.id, ...pool.map((e) => e.id)] },
+    state: "proposed",
+    proposedAt: now,
+  };
+}

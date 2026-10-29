@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { z } from "zod";
-import { listModels, Unreachable } from "@/lib/models/client";
+import { listModels, Unreachable, WAKE_TIMEOUT_MS } from "@/lib/models/client";
 import { providerIdSchema, providers } from "@/lib/models/providers";
 import { endpointFor } from "@/lib/models/settings";
 
@@ -32,7 +32,9 @@ export async function POST(req: Request) {
   if (!endpoint.baseUrl) return Response.json({ error: "Enter a base URL." }, { status: 400 });
 
   try {
-    return Response.json({ models: await listModels(provider, endpoint) });
+    // A host that scales to zero is waited for, so testing it wakes it
+    // rather than reporting it unreachable after a few seconds.
+    return Response.json({ models: await listModels(provider, endpoint, info.coldStart ? WAKE_TIMEOUT_MS : undefined) });
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     return Response.json({ error, unreachable: err instanceof Unreachable }, { status: 502 });

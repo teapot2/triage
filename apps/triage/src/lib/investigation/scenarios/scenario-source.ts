@@ -33,6 +33,8 @@ export interface Scenario {
   files: Record<string, string>;
   commits: CommitRecord[];
   deploys: DeployRecord[];
+  // The alert's metric after the mitigation, for the simulated apply.
+  recovery?: MetricPoint[];
 }
 
 const levelRank = { debug: 0, info: 1, warn: 2, error: 3 } as const;

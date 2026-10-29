@@ -70,7 +70,11 @@ export async function stageModel(stage: StageId): Promise<StageModel & Endpoint>
 // Why a stage can't run as configured, or undefined when it can.
 export function stageProblem(s: StageModel & Endpoint): string | undefined {
   const info = providers[s.provider];
-  if (!s.baseUrl) return `${info.label} has no base URL. Set one in Settings.`;
+  if (!s.baseUrl) {
+    return info.baseUrlEnv
+      ? `${info.baseUrlEnv} is not set. Add your ${info.label} deployment's URL (ending in /v1) to apps/triage/.env.local and restart.`
+      : `${info.label} has no base URL. Set one in Settings.`;
+  }
   if (!info.local && info.configurable === false && !s.apiKey) {
     return `${info.keyEnv} is not set. Add it to apps/triage/.env.local and restart.`;
   }
@@ -98,8 +102,11 @@ export async function publicModelSettings() {
         local: info.local,
         configurable: info.configurable,
         keyEnv: info.keyEnv,
+        baseUrlEnv: info.baseUrlEnv,
+        coldStart: Boolean(info.coldStart),
         hasKey: Boolean(endpoint.apiKey),
         glimmer: info.glimmer,
+        sparkOpen: info.sparkOpen,
         spark: info.spark,
       };
     }),

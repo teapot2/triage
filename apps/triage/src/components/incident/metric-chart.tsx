@@ -177,8 +177,13 @@ export function MetricChart({
           />
         )}
         {!compact &&
-          markers.map((m) => {
+          markers.toSorted((a, b) => Date.parse(a.t) - Date.parse(b.t)).map((m, i) => {
             const x = nearestPoint(series, m.t);
+            // Neighbouring labels take turns on two rows so close markers
+            // don't overprint; in the right quarter a label sits left of its
+            // line so the chart's edge doesn't cut it off.
+            const t0 = Date.parse(series[0].t);
+            const right = x && (Date.parse(x) - t0) / (Date.parse(series[series.length - 1].t) - t0) > 0.75;
             return (
               x && (
                 <ReferenceLine
@@ -190,7 +195,8 @@ export function MetricChart({
                   strokeDasharray="2 3"
                   label={{
                     value: m.label,
-                    position: "insideTopLeft",
+                    position: right ? "insideTopRight" : "insideTopLeft",
+                    offset: i % 2 ? 19 : 5,
                     fill: "var(--muted-foreground)",
                     fontSize: 11,
                   }}

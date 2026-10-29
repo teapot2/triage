@@ -1,6 +1,7 @@
 import { type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
-import { languageModel } from "../../models/client";
+import { languageModel, modelOptions, wakeProvider } from "../../models/client";
+import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
@@ -15,9 +16,14 @@ import { proveFix } from "./prove";
 const MAX_STEPS = 16;
 const MAX_SUBMISSIONS = 4;
 const MAX_NUDGES = 2;
-const NUDGE = "You have not submitted a proven fix yet. Read what you need, then call submit_fix.";
+const NUDGE =
+  "You have not submitted a proven fix yet. Read what you need, then call submit_fix, or decline_fix if the diagnosis isn't a code defect.";
 
 const instructions = `You are Triage, an SRE. You diagnosed a production incident; now fix it and prove the fix.
+
+Scope:
+- Fix the diagnosed root cause, and only it. The hypotheses the investigation ruled out are listed with it: don't fix those, and don't fix other bugs you notice while reading the code.
+- If the diagnosis isn't a defect a code change should fix (a false alarm, an outage somewhere else, a capacity or configuration problem outside the code), call decline_fix with the reason instead of changing anything.
 
 How a fix is checked, in a sandbox copy of the app (never production):
 1. Your regression test is added and run against the current code. It must FAIL there, on an assertion: that proves it reproduces the bug.
@@ -41,22 +47,25 @@ The regression test:
 - Write it as an ordinary, readable file: one statement per line, indented, as a person would.
 - test.name is the test's title exactly, saying what must hold (e.g. "returns the default when the row is missing").
 
-Finish by calling submit_fix.`;
+Finish by calling submit_fix, or decline_fix.`;
 
 function prompt(incident: Incident, sourceFiles: string[]): string {
   const report = incident.report!;
   const verdict = report.verdict;
   const leading = verdict.kind === "root_cause" ? report.hypotheses.find((h) => h.id === verdict.hypothesisId) : undefined;
   const chain = leading?.causalChain;
+  const ruledOut = report.hypotheses.filter((h) => h.status === "rejected").map((h) => `- ${h.title}`);
   return `Incident: ${incident.title}
 Diagnosis: ${report.summary ?? ""}
 Root cause: ${leading?.title ?? "unknown"}
 - Symptom: ${chain?.symptom.text ?? ""}
 - Propagation: ${chain?.propagation.text ?? ""}
 - Root cause: ${chain?.rootCause.text ?? ""}
+Ruled out by the investigation (not to be fixed):
+${ruledOut.join("\n") || "- none"}
 Files the investigation read: ${sourceFiles.join(", ") || "none"}
 
-Write the fix and its regression test, then call submit_fix.`;
+Write the fix for this root cause and its regression test, then call submit_fix. If it isn't a code defect, call decline_fix.`;
 }
 
 const editSchema = z.object({
@@ -122,6 +131,8 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
   }
 
   let accepted: Accepted | undefined;
+  // Why the model chose not to change code, if it did.
+  let declined: string | undefined;
   let lastProblems: string[] = [];
   const reject = (problems: string[]) => {
     lastProblems = problems;
@@ -175,6 +186,18 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
         return { accepted: true };
       },
     }),
+    decline_fix: tool({
+      description:
+        "Decline to change code: the diagnosed root cause isn't a defect a code change should fix (a false alarm, an outage elsewhere, a capacity or configuration problem outside the code). Ends the fix stage; the diagnosis stands.",
+      inputSchema: z.object({
+        reason: z.string().min(1).max(400).describe("Why no code change fixes this diagnosis, in a plain sentence"),
+      }),
+      execute: async ({ reason }) => {
+        if (accepted) return { declined: false, problems: ["a fix was already accepted"] };
+        declined = reason.trim();
+        return { declined: true };
+      },
+    }),
   };
 
   let steps = 0;
@@ -182,9 +205,13 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
   let outputTokens = 0;
   const agent = new ToolLoopAgent({
     model: languageModel(stage),
+    providerOptions: modelOptions(stage),
     instructions,
     tools,
-    stopWhen: [() => steps >= MAX_STEPS, () => accepted !== undefined || fixRun.attempt >= MAX_SUBMISSIONS],
+    stopWhen: [
+      () => steps >= MAX_STEPS,
+      () => accepted !== undefined || declined !== undefined || fixRun.attempt >= MAX_SUBMISSIONS,
+    ],
     prepareStep: () => {
       steps += 1;
       return {};
@@ -192,11 +219,22 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
   });
 
   try {
+    // As in the investigation: a scaled-to-zero host is woken first. After
+    // an investigation on the same host it's warm, and this is instant.
+    if (providers[stage.provider].coldStart) {
+      setFixRun({ wakingSince: new Date().toISOString() });
+      await wakeProvider(stage);
+      setFixRun({ wakingSince: undefined });
+    }
     const sourceFiles = [
       ...new Set(recorder.incident.evidence.flatMap((e) => (e.kind === "source" ? [e.file] : []))),
     ];
     const messages: ModelMessage[] = [{ role: "user", content: prompt(recorder.incident, sourceFiles) }];
-    for (let attempt = 0; attempt <= MAX_NUDGES && !accepted && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS; attempt++) {
+    for (
+      let attempt = 0;
+      attempt <= MAX_NUDGES && !accepted && !declined && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS;
+      attempt++
+    ) {
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
       const result = await agent.generate({ messages });
       messages.push(...result.responseMessages);
@@ -208,7 +246,13 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
     lastProblems = [err instanceof Error ? err.message : String(err)];
   }
 
-  const finished = { finishedAt: new Date().toISOString(), modelSteps: steps, inputTokens, outputTokens };
+  const finished = {
+    finishedAt: new Date().toISOString(),
+    wakingSince: undefined,
+    modelSteps: steps,
+    inputTokens,
+    outputTokens,
+  };
   if (accepted) {
     fixRun = { ...fixRun, ...finished, status: "proven", error: undefined };
     recorder.update({
@@ -217,6 +261,10 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
       status: "awaiting_approval",
       approval: { state: "pending", requestedAt: new Date().toISOString() },
     });
+  } else if (declined) {
+    // The incident stays diagnosed: nothing to approve.
+    fixRun = { ...fixRun, ...finished, status: "declined", declinedBecause: declined, error: undefined };
+    recorder.update({ fixRun });
   } else {
     const why = lastProblems[0]?.split("\n")[0] ?? `no fix submitted in ${steps} model steps`;
     fixRun = { ...fixRun, ...finished, status: "failed", error: why };

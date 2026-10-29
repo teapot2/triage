@@ -28,7 +28,12 @@ export function IncidentView({ incident }: { incident: Incident }) {
   const { report } = incident;
   // Also while the fix is being written and proven, after the verdict.
   const fixing = incident.fixRun?.status === "writing" || incident.fixRun?.status === "testing";
-  useRefreshWhile(incident.status === "investigating" || fixing || incident.approval?.prState === "opening");
+  // And while a mitigation runs and its recovery is watched.
+  const mitigating =
+    incident.mitigation?.state === "approved" ||
+    incident.mitigation?.state === "running" ||
+    incident.mitigation?.recovery?.status === "watching";
+  useRefreshWhile(incident.status === "investigating" || fixing || mitigating || incident.approval?.prState === "opening");
   // Whatever happened up to now has been seen; a run that finishes while
   // this page is open is seen as the refresh brings it in.
   const latest = activityAt(incident);

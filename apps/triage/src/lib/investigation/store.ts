@@ -33,6 +33,29 @@ export async function getIncident(id: string): Promise<Incident | undefined> {
   return (await readStored(id)) ?? exampleIncidents.find((i) => i.id === id);
 }
 
+// Writes to one incident, chained so a read and its write never interleave
+// with another's. On globalThis: one chain per id across dev hot reloads.
+const g = globalThis as unknown as { triageIncidentWrites?: Map<string, Promise<unknown>> };
+const writes = (g.triageIncidentWrites ??= new Map());
+
+export function withIncidentLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const run = (writes.get(id) ?? Promise.resolve()).then(fn);
+  writes.set(id, run.catch(() => {}));
+  return run;
+}
+
+// Read, change and save one incident, for routes that change part of it
+// (the mitigation) while something else may be saving the rest.
+export function patchIncident(id: string, fn: (incident: Incident) => Incident): Promise<Incident> {
+  return withIncidentLock(id, async () => {
+    const incident = await getIncident(id);
+    if (!incident) throw new Error(`unknown incident: ${id}`);
+    const next = fn(incident);
+    await saveIncident(next);
+    return next;
+  });
+}
+
 export async function listIncidents(): Promise<Incident[]> {
   let names: string[] = [];
   try {

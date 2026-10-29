@@ -1,3 +1,4 @@
+import { proposeMitigation } from "./mitigation/propose";
 import { type Incident, incidentSchema, type MetricPoint } from "./schema";
 
 // Mock incidents for building the UI before the agent exists. Parsed through
@@ -144,8 +145,8 @@ const poolLeak: Incident = {
       status: "completed",
       startedAt: "2026-10-23T02:14:09Z",
       durationMs: 140,
-      summary: "Deploy of a1b9c4e at 01:58, 11 min before the pool saturated",
-      evidenceIds: ["ev_commit_stock"],
+      summary: "Deploy of a1b9c4e at 01:58; FF_STOCK_DIRECT_QUERY turned on at 02:00",
+      evidenceIds: ["ev_commit_stock", "ev_commit_flag"],
     },
     {
       id: "step_8",
@@ -284,6 +285,17 @@ const poolLeak: Incident = {
       files: ["src/lib/stock.ts", "src/app/api/products/[id]/route.ts"],
     },
     {
+      id: "ev_commit_flag",
+      kind: "commit",
+      tool: "deploy_history",
+      summary: "Config change on shopfront at 02:00: 'ops: FF_STOCK_DIRECT_QUERY turned on'",
+      observedAt: "2026-10-23T02:00:00Z",
+      sha: "config:FF_STOCK_DIRECT_QUERY",
+      author: "unknown",
+      message: "ops: FF_STOCK_DIRECT_QUERY turned on",
+      files: [],
+    },
+    {
       id: "ev_source_stock",
       kind: "source",
       tool: "read_source",
@@ -325,8 +337,8 @@ const poolLeak: Incident = {
             evidenceIds: ["ev_metric_pool", "ev_db_activity", "ev_span_slow"],
           },
           rootCause: {
-            text: "Commit a1b9c4e added getStockLevel, which returns early on a missing stock row without calling client.release(). Each miss leaks one connection.",
-            evidenceIds: ["ev_source_stock", "ev_commit_stock", "ev_log_stock_miss"],
+            text: "Commit a1b9c4e added getStockLevel, which returns early on a missing stock row without calling client.release(); turning on FF_STOCK_DIRECT_QUERY at 02:00 put it on the request path. Each miss leaks one connection.",
+            evidenceIds: ["ev_source_stock", "ev_commit_stock", "ev_commit_flag", "ev_log_stock_miss"],
           },
         },
       },
@@ -428,6 +440,9 @@ const poolLeak: Incident = {
     requestedAt: "2026-10-23T02:16:30Z",
   },
 };
+
+// What proposeMitigation makes of the report once it lands, as a run stores it.
+poolLeak.mitigation = proposeMitigation(poolLeak.report!, poolLeak.evidence, poolLeak.service, "2026-10-23T02:14:12Z");
 
 const controlRun: Incident = {
   id: "inc_control",

@@ -3,7 +3,9 @@
 export const providerLabels: Record<string, string> = {
   meta: "Meta Model API",
   openrouter: "OpenRouter",
+  baseten: "Baseten",
   fireworks: "Fireworks",
+  modal: "Modal",
   lmstudio: "LM Studio",
   ollama: "Ollama",
   llamacpp: "llama.cpp server",

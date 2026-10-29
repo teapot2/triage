@@ -509,11 +509,14 @@ export const CodeBlock = ({
 // so code keeps its layout until someone asks for it to fit. Its tooltip,
 // like the copy button's, isn't hoverable: they sit side by side, and a
 // hoverable one would stay open over its neighbour and block its tooltip.
-export const CodeBlockWrapButton = ({
+// The wrap-lines toggle code viewers share (this block's header, the diff
+// viewer's toolbar): pressed while long lines wrap.
+export const WrapLinesButton = ({
+  wrap,
+  onWrapChange,
   className,
   ...props
-}: ComponentProps<typeof Button>) => {
-  const { wrap, setWrap } = useContext(CodeBlockContext);
+}: ComponentProps<typeof Button> & { wrap: boolean; onWrapChange: (wrap: boolean) => void }) => {
   const label = wrap ? "Don't wrap lines" : "Wrap lines";
 
   return (
@@ -523,7 +526,7 @@ export const CodeBlockWrapButton = ({
           aria-label={label}
           aria-pressed={wrap}
           className={cn("shrink-0", wrap && "bg-muted text-foreground", className)}
-          onClick={() => setWrap(!wrap)}
+          onClick={() => onWrapChange(!wrap)}
           size="icon"
           variant="ghost"
           {...props}
@@ -534,6 +537,11 @@ export const CodeBlockWrapButton = ({
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
+};
+
+export const CodeBlockWrapButton = (props: ComponentProps<typeof Button>) => {
+  const { wrap, setWrap } = useContext(CodeBlockContext);
+  return <WrapLinesButton wrap={wrap} onWrapChange={setWrap} {...props} />;
 };
 
 export type CodeBlockCopyButtonProps = ComponentProps<typeof Button> & {

@@ -191,12 +191,14 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
 export function ApproveDialog({
   fix,
   opensPr,
+  mitigated,
   open,
   onOpenChange,
   onConfirm,
 }: {
   fix: Fix;
   opensPr: boolean;
+  mitigated: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -217,6 +219,7 @@ export function ApproveDialog({
             ) : (
               <>This is a bundled example, so approving only records the decision. No PR is opened.</>
             )}
+            {mitigated && " Service was restored by the mitigation; this PR is the permanent fix."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -12,7 +12,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ruleStatuses } from "@/components/watch/rule-filters";
 import { useWatchState } from "@/components/watch/watch-client";
 import { WatchHeader } from "@/components/watch/watch-header";
@@ -28,6 +28,7 @@ import {
   type LiveRoute,
   type LiveSnapshot,
   type LiveWindow,
+  liveService,
   liveWindows,
 } from "@/lib/live/types";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,9 @@ function useSecondClock() {
 const ago = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`);
 
 export function LiveService({ service }: { service: string }) {
+  // Only the live service is watched and can be investigated from here; on
+  // any other the charts are for looking, without rules or range selection.
+  const watched = service === liveService;
   const [range, setRange] = useState<LiveWindow>("5m");
   const [paused, setPaused] = useState(false);
   // The request whose trace is open; it stays open across polls.
@@ -69,9 +73,13 @@ export function LiveService({ service }: { service: string }) {
   // A window change keeps the last snapshot on screen until the new one
   // arrives, so the charts don't flash empty.
   const snapshot = data?.service === service ? data : undefined;
-  const silentFor = snapshot?.lastDataAt === undefined ? undefined : now - snapshot.lastDataAt;
+  // How long the service had been quiet: as of now while live, but as of
+  // the held snapshot while paused, so holding still isn't read as silence.
+  const asOf = frozen && snapshot ? snapshot.generatedAt : now;
+  const silentFor = snapshot?.lastDataAt === undefined ? undefined : asOf - snapshot.lastDataAt;
   const stale = snapshot && (silentFor === undefined || silentFor > STALE_MS);
   const markers: ChartMarker[] = (snapshot?.incidents ?? []).map((i) => ({ t: i.detectedAt, label: "Incident" }));
+  const onSelect = watched ? setSelection : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -107,7 +115,7 @@ export function LiveService({ service }: { service: string }) {
         <LiveIndicator paused={frozen} stale={!!stale} hasData={!!snapshot} />
         {updatedAt && <span>Updated {ago(now - updatedAt)} ago</span>}
         <span>· Times in UTC</span>
-        <RuleStates />
+        {watched && <RuleStates />}
       </WatchHeader>
 
       {error && (
@@ -140,7 +148,7 @@ export function LiveService({ service }: { service: string }) {
               onClear={() => setSelection(undefined)}
             />
           ) : (
-            <p className="text-muted-foreground text-xs">Drag across a chart to select a range to investigate.</p>
+            watched && <p className="text-muted-foreground text-xs">Drag across a chart to select a range to investigate.</p>
           )}
           {snapshot.incidents.length > 0 && <IncidentList incidents={snapshot.incidents} />}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -151,7 +159,7 @@ export function LiveService({ service }: { service: string }) {
               series={snapshot.series.perSecond}
               markers={markers}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={onSelect}
             />
             <ChartCard
               title="p95 latency"
@@ -160,7 +168,7 @@ export function LiveService({ service }: { service: string }) {
               series={snapshot.series.p95Ms}
               markers={markers}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={onSelect}
               threshold={snapshot.limits.p95Ms}
               note={snapshot.limits.p95Ms ? "All routes together; the line is the API latency rule's limit." : undefined}
             />
@@ -171,7 +179,7 @@ export function LiveService({ service }: { service: string }) {
               series={snapshot.series.errorPercent}
               markers={markers}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={onSelect}
               threshold={snapshot.limits.errorPercent}
             />
             <ChartCard
@@ -181,17 +189,16 @@ export function LiveService({ service }: { service: string }) {
               series={snapshot.series.poolUsed}
               markers={markers}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={onSelect}
               threshold={snapshot.limits.poolMax}
               note={waitingNote(snapshot.series.poolWaiting)}
+              empty="No connection pool readings in this window"
             />
           </div>
           <Section title="Routes">
             <RouteTable routes={snapshot.routes} />
           </Section>
-          <Section title="Activity">
-            <Feed requests={snapshot.requests} logs={snapshot.logs} onOpenRequest={setTraced} />
-          </Section>
+          <ActivitySection requests={snapshot.requests} logs={snapshot.logs} onOpenRequest={setTraced} />
         </>
       )}
       <TraceSheet request={traced} onClose={() => setTraced(undefined)} />
@@ -291,14 +298,19 @@ function RuleStates() {
       {watch.rules.map((r) => {
         const status = ruleStatuses.find((s) => s.id === r.status) ?? ruleStatuses[0];
         return (
-          <Link key={r.id} href={`/watch/${r.id}`} title={r.summary ?? r.description}>
-            <StatusBadge tone={status.tone} pulse={r.status === "breaching"} className="hover:bg-muted">
-              {r.name}
-              <span className="text-muted-foreground">
-                {r.status === "breaching" && r.checks ? `${status.label} · ${r.checks} of ${r.needed}` : status.label}
-              </span>
-            </StatusBadge>
-          </Link>
+          <Tooltip key={r.id}>
+            <TooltipTrigger asChild>
+              <Link href={`/watch/${r.id}`}>
+                <StatusBadge tone={status.tone} pulse={r.status === "breaching"} className="hover:bg-muted">
+                  {r.name}
+                  <span className="text-muted-foreground">
+                    {r.status === "breaching" && r.checks ? `${status.label} · ${r.checks} of ${r.needed}` : status.label}
+                  </span>
+                </StatusBadge>
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent>{r.summary ?? r.description}</TooltipContent>
+          </Tooltip>
         );
       })}
     </span>
@@ -376,6 +388,7 @@ function ChartCard({
   selection,
   onSelect,
   note,
+  empty = "No requests in this window",
 }: {
   title: string;
   value?: number;
@@ -386,6 +399,8 @@ function ChartCard({
   selection?: TimeRange;
   onSelect?: (range: TimeRange | undefined) => void;
   note?: string;
+  // What to say when every point is a gap.
+  empty?: string;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2 rounded-lg border p-4">
@@ -396,7 +411,7 @@ function ChartCard({
         </span>
       </div>
       {series.every((p) => p.value === null) ? (
-        <div className="flex h-40 items-center justify-center text-muted-foreground text-sm">No requests in this window</div>
+        <div className="flex h-40 items-center justify-center text-muted-foreground text-sm">{empty}</div>
       ) : (
         <MetricChart
           series={series}
@@ -413,10 +428,15 @@ function ChartCard({
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+// A titled part of the page; `actions` sit at the right of the title's row,
+// for controls that change what the section shows.
+function Section({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="font-medium text-sm">{title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-medium text-sm">{title}</h2>
+        {actions}
+      </div>
       {children}
     </section>
   );
@@ -467,9 +487,15 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
                   "text-right font-mono text-xs tabular-nums",
                   r.limitMs !== undefined && r.p95Ms > r.limitMs && "text-destructive",
                 )}
-                title={r.limitMs !== undefined ? `Limit ${r.limitMs} ms` : undefined}
               >
-                {r.p95Ms} ms
+                {r.limitMs === undefined ? (
+                  `${r.p95Ms} ms`
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger className="cursor-default">{r.p95Ms} ms</TooltipTrigger>
+                    <TooltipContent>Limit {r.limitMs} ms</TooltipContent>
+                  </Tooltip>
+                )}
               </TableCell>
               <TableCell
                 className={cn("text-right font-mono text-xs tabular-nums", r.errorPercent > 0 && "text-destructive")}
@@ -491,7 +517,11 @@ const levelBadge: Record<LiveLog["level"], "destructive" | "warning" | "secondar
   debug: "outline",
 };
 
-function Feed({
+type ActivityView = "requests" | "logs";
+
+// The newest requests or logs, picked with the same kind of switch as the
+// page's time window, on the section's title row.
+function ActivitySection({
   requests,
   logs,
   onOpenRequest,
@@ -500,14 +530,24 @@ function Feed({
   logs: LiveLog[];
   onOpenRequest: (request: LiveRequest) => void;
 }) {
+  const [view, setView] = useState<ActivityView>("requests");
   return (
-    <Tabs defaultValue="requests">
-      <TabsList>
-        <TabsTrigger value="requests">Requests</TabsTrigger>
-        <TabsTrigger value="logs">Logs</TabsTrigger>
-      </TabsList>
-      <TabsContent value="requests">
-        {requests.length === 0 ? (
+    <Section
+      title="Activity"
+      actions={
+        <SegmentedControl
+          aria-label="Activity to show"
+          value={view}
+          onValueChange={setView}
+          options={[
+            { value: "requests", label: "Requests" },
+            { value: "logs", label: "Logs" },
+          ]}
+        />
+      }
+    >
+      {view === "requests" ? (
+        requests.length === 0 ? (
           <p className="py-2 text-muted-foreground text-sm">No requests in this window.</p>
         ) : (
           <ol className="divide-y rounded-lg border font-mono text-xs">
@@ -531,33 +571,30 @@ function Feed({
               </li>
             ))}
           </ol>
-        )}
-      </TabsContent>
-      <TabsContent value="logs">
-        {logs.length === 0 ? (
-          <p className="py-2 text-muted-foreground text-sm">No logs in this window.</p>
-        ) : (
-          <ol className="divide-y rounded-lg border text-xs">
-            {logs.map((l, i) => (
-              <li
-                // Logs have no id; time and position tell them apart.
-                key={`${l.time}-${i}`}
-                className={cn(
-                  "grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-start gap-3 px-3 py-1.5",
-                  l.level === "error" && "bg-destructive/5",
-                )}
-              >
-                <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
-                <Badge variant={levelBadge[l.level]} className="uppercase">
-                  {l.level}
-                </Badge>
-                <span className="break-words font-mono">{l.body}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </TabsContent>
-    </Tabs>
+        )
+      ) : logs.length === 0 ? (
+        <p className="py-2 text-muted-foreground text-sm">No logs in this window.</p>
+      ) : (
+        <ol className="divide-y rounded-lg border text-xs">
+          {logs.map((l, i) => (
+            <li
+              // Logs have no id; time and position tell them apart.
+              key={`${l.time}-${i}`}
+              className={cn(
+                "grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-start gap-3 px-3 py-1.5",
+                l.level === "error" && "bg-destructive/5",
+              )}
+            >
+              <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
+              <Badge variant={levelBadge[l.level]} className="uppercase">
+                {l.level}
+              </Badge>
+              <span className="break-words font-mono">{l.body}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </Section>
   );
 }
 

@@ -13,6 +13,7 @@ import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Incident } from "@/lib/investigation/schema";
+import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { FailedRunNotice } from "./failed-run-notice";
@@ -20,6 +21,7 @@ import { FixProgress, FixProof, FixView } from "./fix-panel";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
+import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
 
 type SectionId = "overview" | "fix" | "investigation";
@@ -43,7 +45,7 @@ export function IncidentReport({
   unknownEvidenceIds: string[];
   cited: string[];
 }) {
-  const { report, fix, validation, steps, evidence, trigger, run } = incident;
+  const { report, fix, validation, steps, evidence, trigger, run, mitigation } = incident;
   const running = incident.status === "investigating";
 
   // A verdict that arrives while the page is open rises in, the fix just
@@ -89,7 +91,9 @@ export function IncidentReport({
             <div className="flex flex-col items-start gap-2">
               <p className="flex items-center gap-2 text-muted-foreground text-sm">
                 <LoaderCircleIcon className="size-4 animate-spin" />
-                Investigating. The verdict appears once the report passes validation.
+                {run?.wakingSince
+                  ? `Starting the ${providerLabels[run.provider ?? ""] ?? "model's"} deployment. After it scales to zero, its first start takes a few minutes; the investigation begins once it answers.`
+                  : "Investigating. The verdict appears once the report passes validation."}
               </p>
               <Button variant="outline" size="sm" onClick={() => setSelected("investigation")}>
                 Watch the investigation <ArrowRightIcon />
@@ -98,10 +102,14 @@ export function IncidentReport({
           )
         )}
 
+        {mitigation && (
+          <MitigationCard incident={incident} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+        )}
+
         {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} />}
 
         {fix && (
-          <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-75 fill-mode-backwards"])}>
+          <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-150 fill-mode-backwards"])}>
             <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
               <WrenchIcon className="size-3.5" />
               Proposed fix · {fix.risk} risk
@@ -125,17 +133,21 @@ export function IncidentReport({
             <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
           </div>
           <MetricChart
-            series={trigger.series}
+            series={[...trigger.series, ...(mitigation?.recovery?.series ?? [])]}
             label={metricLabel(trigger.metric)}
             unit={trigger.unit}
             threshold={trigger.threshold}
-            markers={report ? citedDeploys(report, evidence) : []}
+            markers={[...(report ? citedDeploys(report, evidence) : []), mitigationMarker(mitigation)].filter(
+              (m) => m !== undefined,
+            )}
           />
         </div>
       </div>
     ),
     fix: () => fix && <FixView fix={fix} validation={validation} fixRun={incident.fixRun} />,
-    investigation: () => <InvestigationTimeline steps={steps} cited={cited} running={running} run={run} />,
+    investigation: () => (
+      <InvestigationTimeline steps={steps} thoughts={incident.thoughts} cited={cited} running={running} run={run} />
+    ),
   };
 
   return (

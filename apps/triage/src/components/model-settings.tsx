@@ -157,20 +157,28 @@ export function ModelSettings() {
   );
 }
 
-// Applies one model to every stage: Muse Spark on Meta's API, or Glimmer on
-// any provider that has it. The selection is an action, not a value, so the
-// select stays empty.
+// Applies one model to every stage: Muse Spark on Meta's API, Spark Open on
+// a host that serves it (Baseten, OpenRouter), or Glimmer on any provider
+// that has it (Modal, Fireworks, a local server...). Switching hosts for the
+// same open weights is one pick. The selection is an action, not a value,
+// so the select stays empty.
 function PresetRow({ providers, onSave }: { providers: Provider[]; onSave: SaveModelSettings }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
   const spark = providers.find((p) => p.id === "meta");
-  const presets = [
-    ...(spark?.spark ? [{ value: "spark", label: "Muse Spark · Meta API", provider: spark.id, model: spark.spark }] : []),
-    ...providers.flatMap((p) =>
+  const groups = [
+    spark?.spark ? [{ value: "spark", label: "Muse Spark · Meta API", provider: spark.id, model: spark.spark }] : [],
+    providers.flatMap((p) =>
+      p.sparkOpen
+        ? [{ value: `spark-open:${p.id}`, label: `Spark Open · ${p.label}`, provider: p.id, model: p.sparkOpen }]
+        : [],
+    ),
+    providers.flatMap((p) =>
       p.glimmer ? [{ value: `glimmer:${p.id}`, label: `Glimmer · ${p.label}`, provider: p.id, model: p.glimmer }] : [],
     ),
-  ];
+  ].filter((g) => g.length > 0);
+  const presets = groups.flat();
 
   async function apply(value: string) {
     const preset = presets.find((p) => p.value === value);
@@ -198,10 +206,14 @@ function PresetRow({ providers, onSave }: { providers: Provider[]; onSave: SaveM
               <SelectValue placeholder="Apply a preset" />
             </SelectTrigger>
             <SelectContent>
-              {presets.map((p, i) => (
-                <div key={p.value}>
-                  {i === 1 && <SelectSeparator />}
-                  <SelectItem value={p.value}>{p.label}</SelectItem>
+              {groups.map((group, g) => (
+                <div key={group[0].value}>
+                  {g > 0 && <SelectSeparator />}
+                  {group.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
                 </div>
               ))}
             </SelectContent>
@@ -273,13 +285,18 @@ type RowProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-// A hosted provider. Its key comes from the server's env, so the editor only
-// says where, and tests the provider once the key is set.
+// A hosted provider. Its key (and for your own deployment, its URL) comes
+// from the server's env, so the editor only says where, and tests the
+// provider once both are set.
 function HostedProvider({ provider, usedBy, ...row }: RowProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<Verify>();
   const [copied, setCopied] = useState(false);
-  const line = `${provider.keyEnv}=`;
+  const needsUrl = Boolean(provider.baseUrlEnv) && !provider.baseUrl;
+  const line = [needsUrl && `${provider.baseUrlEnv}=`, !provider.hasKey && `${provider.keyEnv}=`]
+    .filter(Boolean)
+    .join("\n");
+  const ready = provider.hasKey && !needsUrl;
 
   async function test() {
     setTesting(true);
@@ -301,15 +318,25 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
     <DisclosureRow
       title={provider.label}
       tag={usedBy.join(" · ") || undefined}
-      subtitle={<span className="font-mono">{provider.baseUrl}</span>}
-      status={provider.hasKey ? <StatusBadge tone="success">Ready</StatusBadge> : <StatusBadge tone="warning">Needs key</StatusBadge>}
+      subtitle={
+        <span className="font-mono">{needsUrl ? `Your deployment's URL, from ${provider.baseUrlEnv}` : provider.baseUrl}</span>
+      }
+      status={
+        ready ? (
+          <StatusBadge tone="success">Ready</StatusBadge>
+        ) : (
+          <StatusBadge tone="warning">{needsUrl ? "Needs URL" : "Needs key"}</StatusBadge>
+        )
+      }
       {...row}
     >
       <div className="flex flex-col gap-1.5">
-        <span className="font-medium text-xs">API key</span>
+        <span className="font-medium text-xs">{provider.baseUrlEnv ? "URL and API key" : "API key"}</span>
         <div className="flex min-h-9 items-center gap-2 rounded-lg bg-muted px-3 py-1.5">
-          <span className="min-w-0 flex-1 truncate font-mono text-sm">{provider.hasKey ? provider.keyEnv : line}</span>
-          {provider.hasKey ? (
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-sm">
+            {ready ? [provider.baseUrlEnv, provider.keyEnv].filter(Boolean).join(", ") : line}
+          </span>
+          {ready ? (
             <Badge variant="success">set</Badge>
           ) : (
             <Button variant="ghost" size="xs" onClick={copy}>
@@ -318,19 +345,30 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
           )}
         </div>
         <span className="text-muted-foreground text-xs">
-          {provider.hasKey
+          {ready
             ? "Read from the server's environment. Change it in apps/triage/.env.local and restart."
-            : "Add this line to apps/triage/.env.local with your key, then restart the server."}
+            : needsUrl
+              ? "Deploy infra/modal/glimmer.py, then add its URL (ending in /v1) and the key it checks to apps/triage/.env.local and restart the server."
+              : "Add this line to apps/triage/.env.local with your key, then restart the server."}
         </span>
       </div>
       <TestResult result={result} onDismiss={() => setResult(undefined)} />
-      {provider.hasKey && (
-        <div>
+      {ready && (
+        <div className="flex flex-col items-start gap-1.5">
           <Button variant="outline" size="sm" onClick={test} disabled={testing}>
             {testing && <LoaderCircleIcon className="animate-spin" />}
             Test connection
             <span className="sr-only"> to {provider.label}</span>
           </Button>
+          {/* A scaled-to-zero deployment answers slowly the first time;
+              the test waits for it, and so starts it. */}
+          {provider.coldStart && (
+            <span className="text-muted-foreground text-xs">
+              {testing
+                ? "Waking the deployment. After it scales to zero, its first start takes a few minutes."
+                : "Scales to zero when idle. Testing starts it, and investigations wait for it to start."}
+            </span>
+          )}
         </div>
       )}
     </DisclosureRow>

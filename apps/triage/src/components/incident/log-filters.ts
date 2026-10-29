@@ -5,17 +5,22 @@ import { metricLabel } from "./metric-labels";
 // trace viewers do it: free text plus Status / Tool / Service / Evidence.
 // Values within a facet are OR'd; facets are AND'd.
 
-export type Facet = "status" | "tool" | "service" | "evidence";
+// `kind` is the step-by-step view's Type: the model's thoughts or its tool
+// calls. Every step is a tool call; the timeline shows thoughts by it.
+export type Facet = "kind" | "status" | "tool" | "service" | "evidence";
 export type Filters = Record<Facet, string[]>;
 
-export const emptyFilters: Filters = { status: [], tool: [], service: [], evidence: [] };
+export const emptyFilters: Filters = { kind: [], status: [], tool: [], service: [], evidence: [] };
 
 export const facetLabels: Record<Facet, string> = {
+  kind: "Type",
   status: "Status",
   tool: "Tool",
   service: "Service",
   evidence: "Evidence",
 };
+
+const kindLabels: Record<string, string> = { thought: "Thoughts", tool: "Tool calls" };
 
 const statusLabels: Record<InvestigationStep["status"], string> = {
   completed: "Completed",
@@ -33,6 +38,7 @@ const evidenceLabels: Record<EvidenceKind, string> = {
 };
 
 export function valueLabel(facet: Facet, value: string): string {
+  if (facet === "kind") return kindLabels[value] ?? value;
   if (facet === "status") return statusLabels[value as InvestigationStep["status"]] ?? value;
   if (facet === "evidence") return evidenceLabels[value as EvidenceKind] ?? value;
   return value;
@@ -49,6 +55,8 @@ function serviceOf(step: InvestigationStep): string | undefined {
 
 export function facetValues(step: InvestigationStep, facet: Facet): string[] {
   switch (facet) {
+    case "kind":
+      return ["tool"];
     case "status":
       return [step.status];
     case "tool":

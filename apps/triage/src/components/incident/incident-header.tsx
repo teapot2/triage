@@ -1,9 +1,10 @@
 "use client";
 
-import { CheckIcon, XIcon } from "lucide-react";
+import { CheckIcon, ShieldIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
+import { Badge } from "@/components/ui/badge";
 import type { Incident } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, useApprovalDecision } from "./approval-card";
@@ -19,7 +20,11 @@ const BAR_HEIGHT = 48;
 // and when, and how far past the limit. Once it scrolls away, a compact bar
 // keeps the title, status and approval in view.
 export function IncidentHeader({ incident }: { incident: Incident }) {
-  const { trigger, fix, approval } = incident;
+  const { trigger, fix, approval, mitigation } = incident;
+  const mitigated = mitigation?.state === "applied";
+  const recovered = mitigated && mitigation.recovery?.status === "recovered";
+  // Once recovered, the value now rather than the one that fired the alert.
+  const observed = (recovered ? mitigation.recovery?.series.at(-1)?.value : undefined) ?? trigger.observed;
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
   const opensPr = incident.fixRun?.status === "proven";
   const { decision, decide, error } = useApprovalDecision(incident.id, approval?.state, opensPr);
@@ -115,7 +120,13 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
                 then where and when, as text. */}
             <IncidentStatusBadge status={incident.status} />
             <SeverityBadge severity={incident.severity} />
-            <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
+            {mitigated && (
+              <Badge variant="secondary" className="gap-1">
+                {recovered ? <CheckIcon /> : <ShieldIcon />}
+                {recovered ? "Recovered" : "Mitigated"}
+              </Badge>
+            )}
+            <MetricBadges observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
             {/* The dots only separate items on one line; on phones the line
                 wraps and they'd dangle at line ends, so spacing does it. */}
             <span className="sm:ml-1">{incident.service}</span>
@@ -129,7 +140,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
         </div>
       </header>
       {fix && (
-        <ApproveDialog fix={fix} opensPr={opensPr} open={confirming} onOpenChange={setConfirming} onConfirm={() => void decide("approved")} />
+        <ApproveDialog fix={fix} opensPr={opensPr} mitigated={mitigated} open={confirming} onOpenChange={setConfirming} onConfirm={() => void decide("approved")} />
       )}
     </>
   );

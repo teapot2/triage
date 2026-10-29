@@ -1,19 +1,11 @@
 "use client";
 
 import { ArrowRightIcon, LoaderCircleIcon } from "lucide-react";
-import {
-  CodeBlock,
-  CodeBlockActions,
-  CodeBlockCopyButton,
-  CodeBlockFilename,
-  CodeBlockHeader,
-  CodeBlockTitle,
-  CodeBlockWrapButton,
-} from "@/components/ai-elements/code-block";
 import { Terminal } from "@/components/ai-elements/terminal";
+import { DiffViewer } from "@/components/diff-viewer";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Fix, FixRun, SandboxRun } from "@/lib/investigation/schema";
-import { modelLabel } from "@/lib/models/labels";
+import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { HttpStatusBadge, TestResultBadge } from "./outcome-badges";
 
 // One line of proof the fix works, before -> after in the sandbox: the
@@ -51,9 +43,21 @@ export function FixProof({ validation }: { validation?: SandboxRun[] }) {
   );
 }
 
-// Stages 3 and 4 before there's a fix to show: what Triage is doing, or why
-// it couldn't prove one. A proven fix shows as the fix itself instead.
+// Stages 3 and 4 before there's a fix to show: what Triage is doing, why it
+// couldn't prove one, or why it chose not to change code. A proven fix shows
+// as the fix itself instead.
 export function FixProgress({ fixRun }: { fixRun: FixRun }) {
+  if (fixRun.status === "declined") {
+    return (
+      <div className="flex flex-col gap-1.5 rounded-lg border p-4">
+        <span className="text-muted-foreground text-xs">No code change</span>
+        <p className="text-sm leading-relaxed">
+          Triage judged this isn&apos;t a defect a code change should fix. The diagnosis above still stands.
+        </p>
+        {fixRun.declinedBecause && <p className="text-muted-foreground text-sm">{fixRun.declinedBecause}</p>}
+      </div>
+    );
+  }
   if (fixRun.status === "failed") {
     return (
       <div className="flex flex-col gap-1.5 rounded-lg border p-4">
@@ -68,8 +72,9 @@ export function FixProgress({ fixRun }: { fixRun: FixRun }) {
     );
   }
   if (fixRun.status === "proven") return null;
-  const text =
-    fixRun.status === "testing"
+  const text = fixRun.wakingSince
+    ? `Starting the ${providerLabels[fixRun.provider ?? ""] ?? "model's"} deployment. After it scales to zero, its first start takes a few minutes.`
+    : fixRun.status === "testing"
       ? `Testing attempt ${fixRun.attempt} in a sandbox: the regression test must fail on the current code, then pass with the fix.`
       : fixRun.attempt > 0
         ? `Attempt ${fixRun.attempt} didn't pass the sandbox checks. Writing attempt ${fixRun.attempt + 1}.`
@@ -117,17 +122,7 @@ export function FixView({ fix, validation, fixRun }: { fix: Fix; validation?: Sa
           {validation && <TabsTrigger value="sandbox">Sandbox output</TabsTrigger>}
         </TabsList>
         <TabsContent value="diff">
-          <CodeBlock code={fix.patch} language="diff">
-            <CodeBlockHeader>
-              <CodeBlockTitle>
-                <CodeBlockFilename>{fix.files.join(", ")}</CodeBlockFilename>
-              </CodeBlockTitle>
-              <CodeBlockActions>
-                <CodeBlockWrapButton />
-                <CodeBlockCopyButton />
-              </CodeBlockActions>
-            </CodeBlockHeader>
-          </CodeBlock>
+          <DiffViewer patch={fix.patch} />
         </TabsContent>
         {validation && (
           <TabsContent value="sandbox" className="flex flex-col gap-2">

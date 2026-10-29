@@ -267,7 +267,17 @@ export const poolLeak: Scenario = {
     ...commonCommits(now),
   ],
   deploys: [
+    {
+      service: "shopfront",
+      sha: "config:FF_STOCK_DIRECT_QUERY",
+      kind: "config",
+      message: "ops: FF_STOCK_DIRECT_QUERY turned on",
+      // Right after the deploy, before the first missing-row log at 15.5 min.
+      deployedAt: minutesBefore(now, deployedMinutesAgo - 0.25),
+    },
     { service: "shopfront", sha: "a1b9c4e", deployedAt: minutesBefore(now, deployedMinutesAgo) },
     { service: "shopfront", sha: "7d02e11", deployedAt: minutesBefore(now, 60 * 21) },
   ],
+  // The flag off and held connections recycled: the queue drains in minutes.
+  recovery: [2910, 1480, 520, 210, 140, 121].map((value, i) => ({ t: minutesBefore(now, -i), value })),
 };

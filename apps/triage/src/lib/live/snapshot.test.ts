@@ -98,6 +98,13 @@ describe("summarize", () => {
     assert.equal(s.routes.find((r) => r.route === "/")?.limitMs, undefined);
   });
 
+  it("draws the watch rules' limits only for the service they watch", () => {
+    const spans = [request(END - 10_000, { route: "/api/slow", ms: 900, service: "checkout-api" })];
+    const s = summarize(input({ spans }), "checkout-api", "5m", NOW);
+    assert.deepEqual(s.limits, { p95Ms: undefined, errorPercent: undefined, poolMax: undefined });
+    assert.equal(s.routes[0]?.limitMs, undefined);
+  });
+
   it("ignores other services and the demo harness", () => {
     const spans = [request(END - 10_000, { service: "other" }), request(END - 10_000, { route: "/api/ops" })];
     const s = summarize(input({ spans }), "shopfront", "5m", NOW);

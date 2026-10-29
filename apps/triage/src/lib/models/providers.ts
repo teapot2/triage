@@ -10,7 +10,17 @@ import { providerLabels } from "./labels";
 // a custom endpoint, the key is saved server-side in .data/settings.json
 // and never sent back to the browser.
 
-export const providerIds = ["meta", "openrouter", "fireworks", "lmstudio", "ollama", "llamacpp", "custom"] as const;
+export const providerIds = [
+  "meta",
+  "openrouter",
+  "baseten",
+  "fireworks",
+  "modal",
+  "lmstudio",
+  "ollama",
+  "llamacpp",
+  "custom",
+] as const;
 export const providerIdSchema = z.enum(providerIds);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -19,15 +29,24 @@ export type ProviderInfo = {
   // Default base URL; for local and custom providers it can be changed in
   // Settings.
   baseUrl: string;
+  // Env var that holds the base URL, for a hosted provider whose URL is your
+  // own deployment's (Modal), so there's no default to fall back on.
+  baseUrlEnv?: string;
   // Env var that holds the key, for hosted providers.
   keyEnv?: string;
+  // The deployment scales to zero when idle (Modal), so its first request
+  // can take minutes while a GPU starts and loads the model. Triage wakes it
+  // (see wakeProvider) before relying on it.
+  coldStart?: boolean;
   local: boolean;
   // Whether Settings lets you change the base URL and save a key.
   configurable: boolean;
   // Which of the provider's /models to offer. Everything, when absent.
   listFilter?: (id: string) => boolean;
-  // Model IDs for the presets: Glimmer, and Spark where the provider has it.
+  // Model IDs for the presets: Glimmer, Spark Open (Spark's open weights)
+  // and Spark, where the provider has them.
   glimmer?: string;
+  sparkOpen?: string;
   spark?: string;
 };
 
@@ -53,7 +72,20 @@ export const providers: Record<ProviderId, ProviderInfo> = {
     configurable: false,
     listFilter: (id) => id.startsWith("meta/") && !id.endsWith("-contributor"),
     glimmer: "meta/muse-glimmer-30b",
+    sparkOpen: "meta/muse-spark-open",
     spark: "meta/muse-spark-1.3",
+  },
+  // The hackathon grant: Muse Spark Open on Baseten's shared Model APIs. The
+  // grant's key only answers for the dated model name, not Baseten docs'
+  // "meta-models/muse-spark-open".
+  baseten: {
+    label: providerLabels.baseten,
+    baseUrl: process.env.BASETEN_API_BASE_URL ?? "https://inference.baseten.co/v1",
+    keyEnv: "BASETEN_API_KEY",
+    local: false,
+    configurable: false,
+    listFilter: (id) => id.includes("muse"),
+    sparkOpen: "meta-models/muse-spark-open-1026",
   },
   fireworks: {
     label: providerLabels.fireworks,
@@ -63,6 +95,19 @@ export const providers: Record<ProviderId, ProviderInfo> = {
     configurable: false,
     listFilter: (id) => id.includes("muse"),
     glimmer: "accounts/fireworks/models/muse-glimmer-30b",
+  },
+  // Glimmer on your own Modal deployment (infra/modal/glimmer.py): vLLM
+  // behind an OpenAI-compatible URL that's yours, so it comes from the env
+  // along with the key the deployment checks.
+  modal: {
+    label: providerLabels.modal,
+    baseUrl: process.env.MODAL_BASE_URL ?? "",
+    baseUrlEnv: "MODAL_BASE_URL",
+    keyEnv: "MODAL_API_KEY",
+    local: false,
+    configurable: false,
+    coldStart: true,
+    glimmer: "muse-glimmer-30b",
   },
   lmstudio: {
     label: providerLabels.lmstudio,

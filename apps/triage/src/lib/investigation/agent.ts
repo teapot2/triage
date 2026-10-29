@@ -1,13 +1,16 @@
 import { type ModelMessage, ToolLoopAgent } from "ai";
-import { languageModel } from "../models/client";
+import { languageModel, modelOptions, reasoningKind, wakeProvider } from "../models/client";
+import { providers } from "../models/providers";
 import { stageModel, stageProblem } from "../models/settings";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
+import { liveService } from "../live/types";
+import { proposeMitigation } from "./mitigation/propose";
 import { readTelemetry } from "./live/otlp-files";
 import { InvestigationRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
-import type { Incident } from "./schema";
+import type { Incident, Thought } from "./schema";
 import type { MetricSeries, TelemetrySource } from "./source";
 import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
@@ -35,6 +38,7 @@ Rules:
 - For a root_cause verdict give at least 3 hypotheses: one leading, the others plausible or rejected, each rejection with rejectedBecause citing evidence.
 - Confidence is a calibrated probability between 0 and 1; the hypotheses' confidences should roughly sum to 1.
 - If every signal is at baseline, the verdict is healthy. Do not invent a cause. If evidence is insufficient, the verdict is inconclusive and lists what is missing.
+- A breach with no fault behind it is also healthy: a false alarm, a one-off slow request that recovered (a dev server compiling a route on its first request), or too little traffic for the metric to mean anything. Put that in the healthy verdict's rationale. A root_cause verdict names a fault in the system (code, config, data, a dependency) that caused the breach.
 - Keep claims short and specific: name the file, function, metric, or commit.
 - The report's summary is for a human skimming the alert, not for you: plain English, under 40 words, no metric or tool names. Claims carry the specifics.
 - Finish by calling submit_report. If it is rejected, fix the listed problems and submit again.`;
@@ -104,19 +108,23 @@ export async function createLiveIncident(
 
 // An incident for a range a person selected on the live page: the route
 // they picked, or the slowest one in the range, charted against its p95
-// limit, with the range on the incident for the agent to focus on.
+// limit, with the range on the incident for the agent to focus on. Only
+// the live service can be investigated, so it's always that one's routes.
 export async function createRangeIncident(
   source: TelemetrySource,
   focus: { from: string; to: string; route?: string },
 ): Promise<Incident> {
   const from = Date.parse(focus.from);
   const to = Date.parse(focus.to);
-  const requests = requestSamples((await readTelemetry()).spans, from, to).filter((r) => r.service === "shopfront");
+  const requests = requestSamples((await readTelemetry()).spans, from, to).filter((r) => r.service === liveService);
+  if (focus.route && !requests.some((r) => r.route === focus.route)) {
+    throw new Error(`No ${liveService} requests on ${focus.route} in the selected range to investigate.`);
+  }
   const byRoute = Map.groupBy(requests, (r) => r.route);
   const route =
     focus.route ??
     [...byRoute.entries()].sort(([, a], [, b]) => p95(b.map((r) => r.durationMs)) - p95(a.map((r) => r.durationMs)))[0]?.[0];
-  if (!route) throw new Error("No Shopfront requests in the selected range to investigate.");
+  if (!route) throw new Error(`No ${liveService} requests in the selected range to investigate.`);
 
   const rule = (await readRules()).find((r) => r.enabled && r.condition.metric === "p95" && matchesTarget(r.target, route));
   const threshold = rule?.condition.metric === "p95" ? rule.condition.aboveMs : liveAlert.threshold;
@@ -126,7 +134,7 @@ export async function createRangeIncident(
   const clock = (iso: string) => iso.slice(11, 19);
   return saveNewIncident(source, alert, {
     title: `Investigate ${method} ${route}, ${clock(focus.from)} to ${clock(focus.to)} UTC`,
-    service: "shopfront",
+    service: liveService,
     severity: "sev3",
     threshold,
     openedBy: "person",
@@ -197,6 +205,28 @@ async function saveNewIncident(
 // verdict. With `appDir` (the app's code on disk, so live runs only), a
 // root-cause verdict goes on to Stages 3 and 4: write a fix and prove it.
 // Never throws; failures are recorded on the incident.
+// The model's thinking, recorded as it happens: a thought starts with each
+// model call (shown as "Thinking…") and fills in with its reasoning and any
+// text when the call ends, before the tool calls it asked for run. The SDK's
+// callId is shared by every call in one generate(), so each thought gets its
+// own id; an agent's calls run one at a time, so the open one is the last.
+function recordThoughts(recorder: InvestigationRecorder, kind: Thought["reasoningKind"]) {
+  let open: string | undefined;
+  const joined = (content: ReadonlyArray<{ type: string; text?: string }>, type: string) =>
+    content.flatMap((p) => (p.type === type && p.text?.trim() ? [p.text.trim()] : [])).join("\n\n") || undefined;
+  return {
+    onLanguageModelCallStart: () => {
+      open = `th_${crypto.randomUUID().slice(0, 8)}`;
+      recorder.startThought(open);
+    },
+    onLanguageModelCallEnd: ({ content }: { content: ReadonlyArray<{ type: string; text?: string }> }) => {
+      if (!open) return;
+      recorder.endThought(open, { reasoning: joined(content, "reasoning"), reasoningKind: kind, text: joined(content, "text") });
+      open = undefined;
+    },
+  };
+}
+
 export async function runInvestigation(
   incident: Incident,
   source: TelemetrySource,
@@ -223,6 +253,8 @@ export async function runInvestigation(
   let stepsUsed = 0;
   const agent = new ToolLoopAgent({
     model: languageModel(stage),
+    providerOptions: modelOptions(stage),
+    ...recordThoughts(recorder, reasoningKind(stage.provider)),
     instructions,
     tools,
     stopWhen: [() => stepsUsed >= MAX_STEPS, () => recorder.report !== undefined],
@@ -235,6 +267,13 @@ export async function runInvestigation(
   });
 
   try {
+    // A host that scales to zero gets its GPU started before the first
+    // model call, which would otherwise outwait its request timeout.
+    if (providers[stage.provider].coldStart) {
+      recorder.update({ run: { ...recorder.incident.run!, wakingSince: new Date().toISOString() } });
+      await wakeProvider(stage);
+      recorder.update({ run: { ...recorder.incident.run!, wakingSince: undefined } });
+    }
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, source) }];
     let inputTokens = 0;
     let outputTokens = 0;
@@ -259,18 +298,24 @@ export async function runInvestigation(
         error: report ? undefined : `No accepted report after ${stepsUsed} model steps`,
       },
     });
+    if (report?.verdict.kind === "root_cause") {
+      const mitigation = proposeMitigation(report, recorder.evidence, incident.service);
+      if (mitigation) recorder.update({ mitigation });
+    }
   } catch (err) {
     console.error("[triage] investigation failed", incident.id, err);
     recorder.update({
       status: "failed",
       run: {
         ...recorder.incident.run!,
+        wakingSince: undefined,
         finishedAt: new Date().toISOString(),
         rejectedReports: recorder.rejectedReports,
         error: err instanceof Error ? err.message : String(err),
       },
     });
   }
+  recorder.dropUnfinishedThoughts();
   if (opts.appDir && recorder.incident.status === "diagnosed" && recorder.report?.verdict.kind === "root_cause") {
     await runFixStage(recorder, source, opts.appDir);
   }

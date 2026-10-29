@@ -50,7 +50,8 @@ export function citedDeploys(report: InvestigationReport, evidence: Evidence[]):
   const markers = new Map<string, ChartMarker>();
   for (const e of evidence) {
     if (e.kind === "commit" && e.tool === "deploy_history" && e.observedAt && shas.has(e.sha)) {
-      markers.set(e.sha, { t: e.observedAt, label: `${e.sha.slice(0, 7)} deployed` });
+      const flag = e.sha.startsWith("config:") && e.sha.slice("config:".length);
+      markers.set(e.sha, { t: e.observedAt, label: flag ? `${flag} turned on` : `${e.sha.slice(0, 7)} deployed` });
     }
   }
   return [...markers.values()];

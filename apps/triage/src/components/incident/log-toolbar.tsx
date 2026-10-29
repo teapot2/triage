@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleDotIcon, FileSearchIcon, type LucideIcon, ServerIcon, WrenchIcon } from "lucide-react";
+import { CircleDotIcon, FileSearchIcon, type LucideIcon, ServerIcon, ShapesIcon, WrenchIcon } from "lucide-react";
 import type { RefObject } from "react";
 import { type FilterFacet, FilterChips, FilterMenu } from "@/components/list-controls/filter-menu";
 import { SearchInput } from "@/components/list-controls/search-input";
@@ -8,13 +8,14 @@ import type { InvestigationStep } from "@/lib/investigation/schema";
 import { activeFilterCount, emptyFilters, type Facet, type Filters, facetLabels, facetOptions, valueLabel } from "./log-filters";
 
 const facetIcons: Record<Facet, LucideIcon> = {
+  kind: ShapesIcon,
   status: CircleDotIcon,
   tool: WrenchIcon,
   service: ServerIcon,
   evidence: FileSearchIcon,
 };
 
-const facets: Facet[] = ["status", "tool", "service", "evidence"];
+const facets: Facet[] = ["kind", "status", "tool", "service", "evidence"];
 
 // Search box plus a Filter menu (one submenu per facet, values with counts),
 // after Sentry's and Vercel's log search and Browserbase's filter menu.
@@ -27,6 +28,8 @@ export function LogToolbar({
   filters,
   onFiltersChange,
   shown,
+  total = steps.length,
+  thoughtCount = 0,
   inputRef,
 }: {
   steps: InvestigationStep[];
@@ -35,14 +38,28 @@ export function LogToolbar({
   filters: Filters;
   onFiltersChange: (filters: Filters) => void;
   shown: number;
+  // Rows the list has, when it shows more than tool calls.
+  total?: number;
+  // The model's thoughts on show beside the tool calls; with any, the menu
+  // offers Type (thoughts or tool calls). Without, there's nothing to pick.
+  thoughtCount?: number;
   inputRef: RefObject<HTMLInputElement | null>;
 }) {
+  const options = (facet: Facet) =>
+    facet === "kind"
+      ? thoughtCount > 0
+        ? [
+            { value: "thought", count: thoughtCount },
+            { value: "tool", count: steps.length },
+          ]
+        : []
+      : facetOptions(steps, facet);
   const menuFacets: FilterFacet[] = facets.map((facet) => ({
     id: facet,
     label: facetLabels[facet],
     icon: facetIcons[facet],
     mono: facet === "tool",
-    options: facetOptions(steps, facet).map(({ value, count }) => ({ value, label: valueLabel(facet, value), count })),
+    options: options(facet).map(({ value, count }) => ({ value, label: valueLabel(facet, value), count })),
   }));
   const setFilters = (values: Record<string, string[]>) => onFiltersChange({ ...emptyFilters, ...values });
   const filtering = activeFilterCount(filters) > 0 || query.trim() !== "";
@@ -70,7 +87,7 @@ export function LogToolbar({
             onFiltersChange(emptyFilters);
           }}
           shown={shown}
-          total={steps.length}
+          total={total}
         />
       )}
     </div>

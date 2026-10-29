@@ -11,10 +11,20 @@ export function rootCauseTitle(incident: Incident): string | undefined {
 }
 
 // When the incident last changed in a way worth telling someone about: the
-// alert, its run starting or finishing, a decision on the fix. Drives the
+// alert, its run starting or finishing, a decision on the fix or the
+// mitigation, the mitigation landing or the alert recovering. Drives the
 // sidebar's "new" markers.
 export function activityAt(incident: Incident): string {
-  const times = [incident.detectedAt, incident.run?.startedAt, incident.run?.finishedAt, incident.approval?.decidedAt];
+  const { run, approval, mitigation } = incident;
+  const times = [
+    incident.detectedAt,
+    run?.startedAt,
+    run?.finishedAt,
+    approval?.decidedAt,
+    mitigation?.decidedAt,
+    mitigation?.appliedAt,
+    mitigation?.recovery?.recoveredAt,
+  ];
   return times
     .filter((t): t is string => t !== undefined)
     .reduce((latest, t) => (Date.parse(t) > Date.parse(latest) ? t : latest));
@@ -33,11 +43,12 @@ export function incidentPreview(i: Incident): IncidentPreview {
   return { takeaway: rootCauseTitle(i) ?? i.report?.summary ?? i.run?.error?.split("\n")[0] };
 }
 
-// One line on what Triage concluded (or why it couldn't).
+// One line on what Triage concluded (or why it couldn't). Nothing when the
+// status already says it: a healthy run's status reads "No issue found".
 export function incidentHeadline(incident: Incident): string | undefined {
   const verdict = incident.report?.verdict;
   if (!verdict) return incident.run?.error;
-  if (verdict.kind === "healthy") return "No issue found";
+  if (verdict.kind === "healthy") return incident.status === "healthy" ? undefined : "No issue found";
   if (verdict.kind === "inconclusive") return "Inconclusive";
   return rootCauseTitle(incident);
 }

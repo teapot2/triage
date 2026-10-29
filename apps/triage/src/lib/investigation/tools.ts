@@ -245,7 +245,7 @@ export function createInvestigationTools(source: TelemetrySource, recorder: Inve
 
     submit_report: tool({
       description:
-        "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses, and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
+        "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses and must name a fault (if nothing is wrong, the verdict is healthy), and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
       inputSchema: investigationReportSchema.omit({ servicesQueried: true }).extend({ summary: reportSummarySchema }),
       execute: async (input) => {
         const report = { ...input, servicesQueried: [...recorder.queriedServices].sort() };

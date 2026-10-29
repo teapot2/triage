@@ -4,6 +4,11 @@ import type { ChartPoint } from "@/lib/investigation/schema";
 // collector's files (see snapshot.ts). No server imports, so the page's
 // client components can use the types and the window options.
 
+// The service Triage watches and can investigate live: its telemetry feeds
+// the watch rules, and live runs read its code. Other services only have
+// recorded incidents.
+export const liveService = "shopfront";
+
 export const liveWindows = [
   { id: "1m", label: "1m", ms: 60_000, bucketMs: 2_000 },
   { id: "5m", label: "5m", ms: 5 * 60_000, bucketMs: 5_000 },
