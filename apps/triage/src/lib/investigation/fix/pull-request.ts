@@ -116,11 +116,21 @@ export async function openPullRequest(incident: Incident, target: PullRequestTar
   const patchFile = path.join(os.tmpdir(), `${path.basename(dir)}.patch`);
   try {
     await git(root, ["worktree", "add", "-B", branch, dir, `origin/${base}`]);
-    await writeFile(patchFile, `${incident.fix.patch}\n`);
-    try {
+    const apply = async (patch: string) => {
+      await writeFile(patchFile, `${patch}\n`);
       await git(dir, ["apply", "-p1", ...(prefix ? [`--directory=${prefix}`] : []), patchFile]);
+    };
+    try {
+      await apply(incident.fix.patch);
     } catch (err) {
-      throw new Error(`the patch no longer applies to ${base}; the code changed since the fix was proven (${why(err)})`);
+      // A fix proven in a checkout made with core.autocrlf=true diffs CRLF
+      // files, while this worktree has the repository's LF ones: try again
+      // with the line endings the base branch has.
+      const lf = incident.fix.patch.replace(/\r\n/g, "\n");
+      const retried = lf !== incident.fix.patch && (await apply(lf).then(() => true, () => false));
+      if (!retried) {
+        throw new Error(`the patch no longer applies to ${base}; the code changed since the fix was proven (${why(err)})`);
+      }
     }
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", title, "-m", incident.fix.summary]);
