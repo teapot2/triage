@@ -6,7 +6,9 @@ import { stageModel, stageProblem } from "../../models/settings";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
 import type { TelemetrySource } from "../source";
-import { proveFix } from "./prove";
+import { type DeniedFix, feedbackBlock, repeatsDenied } from "./feedback";
+import { applyEdits, proveFix } from "./prove";
+import { unifiedDiff } from "./sandbox";
 
 // Stage 3: after a root-cause verdict, the model writes a fix and a
 // regression test for it, and Stage 4 proves them in a sandbox (see
@@ -49,12 +51,13 @@ The regression test:
 
 Finish by calling submit_fix, or decline_fix.`;
 
-function prompt(incident: Incident, sourceFiles: string[]): string {
+function prompt(incident: Incident, sourceFiles: string[], feedback: DeniedFix[]): string {
   const report = incident.report!;
   const verdict = report.verdict;
   const leading = verdict.kind === "root_cause" ? report.hypotheses.find((h) => h.id === verdict.hypothesisId) : undefined;
   const chain = leading?.causalChain;
   const ruledOut = report.hypotheses.filter((h) => h.status === "rejected").map((h) => `- ${h.title}`);
+  const denied = feedbackBlock(feedback);
   return `Incident: ${incident.title}
 Diagnosis: ${report.summary ?? ""}
 Root cause: ${leading?.title ?? "unknown"}
@@ -64,7 +67,7 @@ Root cause: ${leading?.title ?? "unknown"}
 Ruled out by the investigation (not to be fixed):
 ${ruledOut.join("\n") || "- none"}
 Files the investigation read: ${sourceFiles.join(", ") || "none"}
-
+${denied ? `\n${denied}\n` : ""}
 Write the fix for this root cause and its regression test, then call submit_fix. If it isn't a code defect, call decline_fix.`;
 }
 
@@ -114,8 +117,16 @@ function formatProblems(input: z.infer<typeof submitSchema>): string[] {
 }
 
 // Never throws: the outcome is recorded on the incident. A proven fix moves
-// the incident to awaiting_approval.
-export async function runFixStage(recorder: InvestigationRecorder, source: TelemetrySource, appDir: string) {
+// the incident to awaiting_approval. On a rerun after a deny, `feedback`
+// carries every denied attempt; the prompt says what to do differently and
+// a submission repeating a denied patch is turned back before the sandbox.
+export async function runFixStage(
+  recorder: InvestigationRecorder,
+  source: TelemetrySource,
+  appDir: string,
+  opts: { feedback?: DeniedFix[] } = {},
+) {
+  const feedback = opts.feedback ?? [];
   const startedAt = new Date().toISOString();
   const stage = await stageModel("fix");
   let fixRun: FixRun = { status: "writing", attempt: 0, startedAt, provider: stage.provider, model: stage.model };
@@ -142,6 +153,24 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
   let lastRuns: SandboxRun[] = [];
   const allowed = new Set(await source.listSourceFiles());
 
+  // The denied attempt a submission repeats, if any: the same patch as the
+  // sandbox would produce, from the files as they stand. An edit that
+  // doesn't apply is nobody's repeat; the sandbox reports it.
+  const repeatedAttempt = async (input: z.infer<typeof submitSchema>): Promise<number> => {
+    const before = new Map<string, string>();
+    for (const file of new Set(input.edits.map((e) => e.file))) {
+      const text = (await source.readSource(file))?.content;
+      if (text !== undefined) before.set(file, text);
+    }
+    const applied = applyEdits(before, input.edits);
+    if (applied.problems.length) return 0;
+    const patch = await unifiedDiff(`${recorder.incident.id}-denied`, [
+      ...[...applied.files].map(([file, after]) => ({ file, before: before.get(file) ?? null, after })),
+      { file: input.test.file, before: null, after: input.test.content },
+    ]);
+    return repeatsDenied(patch, feedback);
+  };
+
   const tools = {
     read_source: tool({
       description: "Read an application source file, whole. Paths are relative to the app root.",
@@ -164,6 +193,19 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
         // go back before the sandbox and don't use up a submission.
         const format = formatProblems(input);
         if (format.length) return { accepted: false, problems: format };
+        // Nor does a fix the reviewer already turned down: its patch is
+        // worked out here from the files as they are, before any sandbox.
+        if (feedback.length) {
+          const repeated = await repeatedAttempt(input);
+          if (repeated) {
+            return {
+              accepted: false,
+              problems: [
+                `this is the patch a reviewer denied (attempt ${repeated}): '${feedback[repeated - 1].reason}'. Change the fix as the feedback asks.`,
+              ],
+            };
+          }
+        }
         setFixRun({ status: "testing", attempt: fixRun.attempt + 1 });
         const outside = input.edits.map((e) => e.file).filter((f) => !allowed.has(f));
         if (outside.length) {
@@ -229,7 +271,10 @@ export async function runFixStage(recorder: InvestigationRecorder, source: Telem
     const sourceFiles = [
       ...new Set(recorder.incident.evidence.flatMap((e) => (e.kind === "source" ? [e.file] : []))),
     ];
-    const messages: ModelMessage[] = [{ role: "user", content: prompt(recorder.incident, sourceFiles) }];
+    const messages: ModelMessage[] = [{ role: "user", content: prompt(recorder.incident, sourceFiles, feedback) }];
+    if (feedback.length) {
+      console.log(`[triage] fix stage rerun for ${recorder.incident.id} with the reviewer's feedback:\n${feedbackBlock(feedback)}`);
+    }
     for (
       let attempt = 0;
       attempt <= MAX_NUDGES && !accepted && !declined && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS;

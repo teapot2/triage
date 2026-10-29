@@ -18,7 +18,7 @@ import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { FailedRunNotice } from "./failed-run-notice";
-import { FixProgress, FixProof, FixView } from "./fix-panel";
+import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
@@ -49,7 +49,7 @@ export function IncidentReport({
   cited: string[];
   ask: Ask;
 }) {
-  const { report, fix, validation, steps, evidence, trigger, run, mitigation } = incident;
+  const { report, fix, validation, steps, evidence, trigger, run, mitigation, fixAttempts } = incident;
   const running = incident.status === "investigating";
 
   // A verdict that arrives while the page is open rises in, the fix just
@@ -61,7 +61,8 @@ export function IncidentReport({
   const arrive = arrived && "animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out motion-reduce:animate-none";
 
   const sections: ReportSection[] = [{ id: "overview", label: "Overview", icon: LayoutListIcon }];
-  if (fix) sections.push({ id: "fix", label: "Fix", icon: WrenchIcon });
+  // Also while a new attempt is written after a deny: the denied ones stay.
+  if (fix || fixAttempts?.length) sections.push({ id: "fix", label: "Fix", icon: WrenchIcon });
   if (steps.length > 0) {
     sections.push({ id: "investigation", label: "Investigation", icon: RouteIcon, count: steps.length });
   }
@@ -127,13 +128,14 @@ export function IncidentReport({
           <MitigationCard incident={incident} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
         )}
 
-        {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} />}
+        {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
 
         {fix && (
           <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-150 fill-mode-backwards"])}>
-            <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+            <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
               <WrenchIcon className="size-3.5" />
               Proposed fix · {fix.risk} risk
+              <AttemptBadge attempts={fixAttempts} />
             </span>
             <p className="text-sm leading-relaxed">{fix.summary}</p>
             <FixProof validation={validation} />
@@ -165,7 +167,15 @@ export function IncidentReport({
         </div>
       </div>
     ),
-    fix: () => fix && <FixView fix={fix} validation={validation} fixRun={incident.fixRun} />,
+    fix: () =>
+      fix ? (
+        <FixView fix={fix} validation={validation} fixRun={incident.fixRun} attempts={fixAttempts} />
+      ) : (
+        <div className="flex flex-col gap-4">
+          {incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
+          <EarlierAttempts attempts={fixAttempts} />
+        </div>
+      ),
     investigation: () => (
       <InvestigationTimeline steps={steps} thoughts={incident.thoughts} cited={cited} running={running} run={run} />
     ),

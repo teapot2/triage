@@ -1,11 +1,14 @@
 "use client";
 
-import { ArrowRightIcon, LoaderCircleIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronRightIcon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { Terminal } from "@/components/ai-elements/terminal";
 import { DiffViewer } from "@/components/diff-viewer";
+import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { Fix, FixRun, SandboxRun } from "@/lib/investigation/schema";
+import type { Fix, FixAttempt, FixRun, SandboxRun } from "@/lib/investigation/schema";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
+import { cn } from "@/lib/utils";
 import { HttpStatusBadge, TestResultBadge } from "./outcome-badges";
 
 // One line of proof the fix works, before -> after in the sandbox: the
@@ -43,10 +46,23 @@ export function FixProof({ validation }: { validation?: SandboxRun[] }) {
   );
 }
 
+// Which attempt the current fix is, once a reviewer has denied one with
+// feedback: the denied ones count before it.
+export function AttemptBadge({ attempts, className }: { attempts?: FixAttempt[]; className?: string }) {
+  if (!attempts?.length) return null;
+  return (
+    <Badge variant="outline" className={className}>
+      Attempt {attempts.length + 1}
+    </Badge>
+  );
+}
+
 // Stages 3 and 4 before there's a fix to show: what Triage is doing, why it
 // couldn't prove one, or why it chose not to change code. A proven fix shows
-// as the fix itself instead.
-export function FixProgress({ fixRun }: { fixRun: FixRun }) {
+// as the fix itself instead. After a deny with feedback, the new attempt is
+// written with it.
+export function FixProgress({ fixRun, attempts }: { fixRun: FixRun; attempts?: FixAttempt[] }) {
+  const denied = attempts?.length ?? 0;
   if (fixRun.status === "declined") {
     return (
       <div className="flex flex-col gap-1.5 rounded-lg border p-4">
@@ -64,8 +80,8 @@ export function FixProgress({ fixRun }: { fixRun: FixRun }) {
         <span className="text-muted-foreground text-xs">No proven fix</span>
         <p className="text-sm leading-relaxed">
           Triage couldn&apos;t write a fix that passed the sandbox checks
-          {fixRun.attempt > 0 && ` in ${fixRun.attempt} ${fixRun.attempt === 1 ? "attempt" : "attempts"}`}. The diagnosis
-          above still stands.
+          {fixRun.attempt > 0 && ` in ${fixRun.attempt} ${fixRun.attempt === 1 ? "attempt" : "attempts"}`}
+          {denied > 0 && " after your feedback"}. The diagnosis above still stands.
         </p>
         {fixRun.error && <code className="break-words font-mono text-muted-foreground text-xs">{fixRun.error}</code>}
       </div>
@@ -78,7 +94,9 @@ export function FixProgress({ fixRun }: { fixRun: FixRun }) {
       ? `Testing attempt ${fixRun.attempt} in a sandbox: the regression test must fail on the current code, then pass with the fix.`
       : fixRun.attempt > 0
         ? `Attempt ${fixRun.attempt} didn't pass the sandbox checks. Writing attempt ${fixRun.attempt + 1}.`
-        : "Writing a fix and a regression test for it.";
+        : denied > 0
+          ? `Writing a new fix that follows your feedback on attempt ${denied}, and a regression test for it.`
+          : "Writing a fix and a regression test for it.";
   return (
     <p className="flex items-center gap-2 text-muted-foreground text-sm">
       <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
@@ -87,15 +105,71 @@ export function FixProgress({ fixRun }: { fixRun: FixRun }) {
   );
 }
 
+// The fixes a reviewer denied with feedback, oldest first, folded away: each
+// one's summary, the feedback it got, and its diff.
+export function EarlierAttempts({ attempts, className }: { attempts?: FixAttempt[]; className?: string }) {
+  if (!attempts?.length) return null;
+  return (
+    <Collapsible className={cn("group/attempts flex flex-col gap-3", className)}>
+      <CollapsibleTrigger className="flex w-fit items-center gap-1.5 text-muted-foreground text-xs hover:text-foreground">
+        <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/attempts:rotate-90 motion-reduce:transition-none" />
+        Earlier attempts
+        <span className="font-mono tabular-nums">{attempts.length}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ol className="flex flex-col gap-3">
+          {attempts.map((attempt, i) => (
+            <li key={i} className="flex flex-col gap-2 rounded-lg border p-4">
+              <div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
+                <span className="font-medium text-foreground">Attempt {i + 1}</span>
+                <Badge variant="secondary" className="gap-1">
+                  <XIcon />
+                  Denied
+                </Badge>
+                <span>
+                  {attempt.fix.risk} risk · {attempt.fix.files.length} files
+                  {attempt.fixRun.model && ` · written by ${modelLabel(attempt.fixRun.model, attempt.fixRun.provider)}`}
+                </span>
+              </div>
+              <p className="text-sm leading-relaxed">{attempt.fix.summary}</p>
+              {attempt.approval.reason && (
+                <p className="text-sm">
+                  <span className="text-muted-foreground">Feedback: </span>
+                  {attempt.approval.reason}
+                </p>
+              )}
+              <FixProof validation={attempt.validation} />
+              <DiffViewer patch={attempt.fix.patch} className="mt-1" />
+            </li>
+          ))}
+        </ol>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 // The Fix section: what changes, the proof, then the diff and raw sandbox
-// output behind underline tabs.
-export function FixView({ fix, validation, fixRun }: { fix: Fix; validation?: SandboxRun[]; fixRun?: FixRun }) {
+// output behind underline tabs, and the denied attempts before it, folded.
+export function FixView({
+  fix,
+  validation,
+  fixRun,
+  attempts,
+}: {
+  fix: Fix;
+  validation?: SandboxRun[];
+  fixRun?: FixRun;
+  attempts?: FixAttempt[];
+}) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <span className="text-muted-foreground text-xs">
-          {fix.risk} risk{fix.touchesData && " · touches data"} · {fix.files.length} files
-          {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider)}`}
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground text-xs">
+          <AttemptBadge attempts={attempts} />
+          <span>
+            {fix.risk} risk{fix.touchesData && " · touches data"} · {fix.files.length} files
+            {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider)}`}
+          </span>
         </span>
         <p className="text-sm leading-relaxed">{fix.summary}</p>
         <FixProof validation={validation} />
@@ -132,6 +206,8 @@ export function FixView({ fix, validation, fixRun }: { fix: Fix; validation?: Sa
           </TabsContent>
         )}
       </Tabs>
+
+      <EarlierAttempts attempts={attempts} className="border-t pt-4" />
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 import { CheckIcon, ExternalLinkIcon, GitPullRequestIcon, LoaderCircleIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import type { Decision } from "@/lib/investigation/approval";
@@ -26,30 +27,41 @@ import { cn } from "@/lib/utils";
 // right away; the server then saves it and the page refreshes, so the status
 // badge and the sidebar's Needs attention group follow. If saving fails (for
 // example another tab decided first), the click is undone, the error shows,
-// and the refresh brings in whatever was actually saved.
+// and the refresh brings in whatever was actually saved. A deny can carry
+// feedback; on a fix that can be written again the server then starts a new
+// attempt (rerun in its response), and the refresh shows the fix stage
+// writing.
 export function useApprovalDecision(incidentId: string, saved: Approval["state"] | undefined, opensPr: boolean) {
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<Decision>();
   const [error, setError] = useState<string | null>(null);
 
-  async function decide(decision: Decision) {
+  async function decide(decision: Decision, feedback?: string) {
+    const reason = feedback?.trim() || undefined;
     setOptimistic(decision);
     setError(null);
     try {
       const res = await fetch(`/api/incidents/${incidentId}/approval`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify({ decision, ...(reason ? { feedback: reason } : {}) }),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as { error?: string; rerun?: boolean };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       // Confirms the save; a failure shows inline, beside the buttons.
       if (decision === "approved") {
         toast.success("Fix approved", {
           description: opensPr ? "Opening a draft pull request with the patch and its test." : "A bundled example, so no PR is opened.",
         });
+      } else if (data.rerun) {
+        toast("Fix denied, writing a new one", { description: "Triage is writing a fix that follows your feedback." });
+      } else {
+        toast("Fix denied", {
+          description: reason
+            ? "The diagnosis stands; your feedback is recorded and no new attempt follows."
+            : "The diagnosis stands; no change will be made.",
+        });
       }
-      else toast("Fix denied", { description: "The diagnosis stands; no change will be made." });
     } catch (err) {
       setOptimistic(undefined);
       setError(err instanceof Error ? err.message : String(err));
@@ -61,9 +73,9 @@ export function useApprovalDecision(incidentId: string, saved: Approval["state"]
 }
 
 // The write gate, as header actions. The header owns the decision, since the
-// actions show in both the header and its sticky bar. Approve asks first
-// (onApprove opens the header's confirm dialog); Deny changes nothing, so it
-// doesn't.
+// actions show in both the header and its sticky bar. Both ask first:
+// onApprove opens the header's confirm dialog, onDeny its deny dialog, where
+// the reviewer can say what the next fix should do differently.
 export function ApprovalActions({
   incidentId,
   fix,
@@ -98,11 +110,20 @@ export function ApprovalActions({
     );
   }
   if (decision === "denied") {
-    return (
+    const badge = (
       <Badge variant="secondary" className={cn("gap-1", land)}>
         <XIcon />
         Denied
       </Badge>
+    );
+    if (!approval?.reason) return badge;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-default">{badge}</span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-80">{approval.reason}</TooltipContent>
+      </Tooltip>
     );
   }
   return (
@@ -225,6 +246,82 @@ export function ApproveDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={onConfirm}>Approve fix</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// Why feedback on a deny starts no new attempt here (see canRerunFix).
+export type NoRerunReason = "example" | "scenario" | "unproven";
+
+const noRerunNotes: Record<NoRerunReason, string> = {
+  example: "This is a bundled example: the feedback is recorded, no new attempt follows.",
+  scenario: "This is a recorded scenario: the feedback is recorded, no new attempt follows.",
+  unproven: "This fix was never proven in a sandbox: the feedback is recorded, no new attempt follows.",
+};
+
+// Denying, with a say in what comes next. Empty, it records the decision as
+// before. With feedback on a fix that can be written again, Triage keeps
+// this attempt as history and writes another one that follows the feedback.
+export function DenyDialog({
+  noRerun,
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  // Why feedback starts no new attempt here, or undefined when it does.
+  noRerun?: NoRerunReason;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (feedback: string) => void;
+}) {
+  const [feedback, setFeedback] = useState("");
+  const id = useId();
+  const retries = feedback.trim().length > 0 && !noRerun;
+  const confirm = () => {
+    onConfirm(feedback);
+    setFeedback("");
+  };
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setFeedback("");
+        onOpenChange(next);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Deny this fix?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {noRerun
+              ? noRerunNotes[noRerun]
+              : "The diagnosis stands. Say what the next fix should do differently and Triage writes and proves a new one that follows it, or leave it empty to deny without another attempt."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={id} className="font-medium text-sm">
+            What should Triage do differently? <span className="font-normal text-muted-foreground">(optional)</span>
+          </label>
+          <Textarea
+            id={id}
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            maxLength={500}
+            rows={3}
+            placeholder="Don't change the query, only release the connection."
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                confirm();
+              }
+            }}
+          />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={confirm}>{retries ? "Deny and try again" : "Deny"}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
