@@ -26,9 +26,13 @@ Each app owns its env file; commit only `.env.example` templates. Infrastructure
 
 After a root-cause verdict, Triage proposes one mitigation from the evidence the diagnosis cites: turn off the cited feature flag, or roll back the cited deploy (proposed only: Shopfront has no deploy pipeline to run it against). Once a person approves it, Triage applies it through Shopfront's ops API (on in development; `OPS_ENABLED=1` in a production build; `SHOPFRONT_URL` if the store runs elsewhere) and re-reads the alert's metric until it recovers. Turning the flag off stops new leaks but frees none of the pooled connections the leak already holds, so the flag-off also recycles them. The tested patch still follows as the permanent fix.
 
+## Ask Triage
+
+After the report, a person can ask Triage follow-up questions on the incident page and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
+
 ## Models and providers
 
-Each stage that calls a model (**Investigate** and **Fix**) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
+Each stage that calls a model (**Investigate**, **Fix** and **Ask**) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
 
 | Provider | Endpoint | Key |
 | --- | --- | --- |

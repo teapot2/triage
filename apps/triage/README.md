@@ -41,6 +41,16 @@ pnpm check:sandbox  # proves a known-good fix in the sandbox, no model calls
 - **Off switch:** `TRIAGE_WATCH=0` keeps it off.
 - **Restarts:** at startup, incidents a restart cut off mid-run are marked failed (`recover.ts`).
 
+## Ask Triage
+
+Once an incident has a report, its **Questions** section (also "Ask a follow-up" on the verdict card and "Ask Triage" in the command palette) takes follow-up questions such as "Why was the cache ruled out?" or "Show me the slowest request", with suggestions built from the report.
+
+- **What it answers from:** the incident (alert, verdict, leading and ruled-out hypotheses, mitigation and fix state), its recorded evidence and the last 6 questions and answers. When the run's telemetry can be read again (`source-for.ts`: a recorded scenario, or the live Shopfront anchored at the alert), the agent also has the investigation's read-only tools, and their results become the question's own evidence (`ev_q<n>_…`). Every claim cites an evidence ID; cited IDs that don't exist are listed on `unknownIds` and struck in the answer instead of shown as chips.
+- **Evidence-only mode:** a bundled example (or any incident whose run can't be rebuilt) answers from the recorded evidence alone, with no tools (`mode: "evidence_only"`). The first question on a bundled example saves a copy of it to `.data/`.
+- **Model:** the **Ask** stage in Settings → Models (`src/lib/investigation/ask/agent.ts`). Until it is changed it uses the Investigate stage's model.
+- **Streaming:** `POST /api/incidents/<id>/questions` with `{ "text": "…" }` returns a UI message stream over SSE (header `x-question-id`), so the asking tab shows tool calls and the answer token by token. The same deltas are saved to `incident.questions` at most every 300 ms, and the stream is consumed to the end even if the tab closes: a reload or another tab shows the answer growing, and closing the tab mid-answer still leaves a complete answer.
+- **Limits:** one question answering per incident at a time (a second gets 409), 500 characters per question, 10 model steps per answer with one nudge if it stops without text, and the request's 120 s limit. Every tool is read-only; an answer can point at the mitigation or fix cards but never acts.
+
 ## Investigation agent
 
 `src/lib/investigation/` holds Stage 2: a `ToolLoopAgent` on the Investigate stage's model (Settings → Models) with seven telemetry tools and a `submit_report` tool. Reports are validated (schema, `reportProblems`, unknown evidence IDs, every service queried); rejections go back to the model to fix. Tools read from a `TelemetrySource`; today that is a recorded scenario in `scenarios/`, and the live telemetry store will implement the same interface.
@@ -64,6 +74,8 @@ Approving a proven fix opens a draft PR (`fix/pull-request.ts`, run after the ap
 3. Run `gh pr create --draft` with the diagnosis and sandbox proof as the description.
 
 The checkout you work in is never touched, and nothing merges by itself. The incident shows the PR's progress, its link, or why it failed with a Retry (`POST /api/incidents/<id>/pull-request`). Only fixes Triage proved get a PR; approving a bundled example only records the decision.
+
+**Deny with feedback.** Deny opens a dialog with one optional field, "What should Triage do differently?" (up to 500 characters). Empty, it denies as before. With text, the feedback is saved as the approval's reason and, when the fix was proven on the live Shopfront, the button reads "Deny and try again": the denied attempt (fix, proof, run and approval) is archived on `incident.fixAttempts`, the incident goes back to diagnosed, and the fix stage runs again (`fix/rerun.ts`) with every denied attempt's feedback and patch in its prompt (`fix/feedback.ts`). `submit_fix` turns back a patch that repeats a denied one (byte-equal, or the same code hunks ignoring the test file) before the sandbox, without spending a submission. A proven rerun arrives as "Attempt 2", awaiting approval as usual; the Fix section lists earlier attempts with their feedback, proof and diff. On a bundled example or a recorded scenario the feedback is recorded and the dialog says no new attempt follows.
 
 PRs are drafts so they can't be merged by accident. Don't merge them into the main branch: that removes the planted bug, and the commit message would put the answer in the history Triage reads.
 
