@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "./fixtures";
 import type { Incident } from "./schema";
-import { sourceFor, sourceKind } from "./source-for";
+import { sourceFor } from "./source-for";
+import { sourceKind } from "./source-kind";
 
 const withSource = (source: string | undefined): Incident => ({
   ...structuredClone(exampleIncidents[0]),
@@ -27,6 +28,7 @@ describe("sourceFor", () => {
   it("has none for the bundled examples, unknown scenarios and other sources", async () => {
     for (const incident of exampleIncidents) assert.equal(await sourceFor(incident), undefined);
     assert.equal(await sourceFor(withSource("scenario:nope")), undefined);
+    assert.equal(sourceKind(withSource("scenario:nope")), undefined);
     assert.equal(await sourceFor(withSource("otlp:elsewhere")), undefined);
     assert.equal(await sourceFor(withSource(undefined)), undefined);
   });

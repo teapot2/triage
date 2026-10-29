@@ -2,17 +2,7 @@ import { createLiveSource } from "./live/live-source";
 import { createScenarioSource, getScenario } from "./scenarios";
 import type { Incident } from "./schema";
 import type { TelemetrySource } from "./source";
-
-// Where a finished incident's telemetry can be read again, from the source
-// its run recorded: a recorded scenario, rebuilt from its ID exactly as the
-// investigation saw it, or the live Shopfront, anchored at the alert. The
-// bundled examples (no run) and anything else have none.
-export function sourceKind(incident: Incident): "scenario" | "live" | undefined {
-  const id = incident.run?.source ?? "";
-  if (id.startsWith("scenario:")) return getScenario(id.slice("scenario:".length)) ? "scenario" : undefined;
-  if (id === "live:shopfront") return "live";
-  return undefined;
-}
+import { sourceKind } from "./source-kind";
 
 // The incident's telemetry source, or undefined for an incident without
 // one: a question on it is answered from the recorded evidence alone. The

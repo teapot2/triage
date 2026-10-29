@@ -2,7 +2,7 @@ import { z } from "zod";
 import { answerQuestion } from "@/lib/investigation/ask/agent";
 import { askRefusal, MAX_QUESTION_CHARS, nextQuestionId } from "@/lib/investigation/ask/rules";
 import type { Incident, Question } from "@/lib/investigation/schema";
-import { sourceKind } from "@/lib/investigation/source-for";
+import { sourceKind } from "@/lib/investigation/source-kind";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
 import { stageModel, stageProblem } from "@/lib/models/settings";
 

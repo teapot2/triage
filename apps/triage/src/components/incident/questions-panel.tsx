@@ -19,6 +19,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { askRefusal, MAX_QUESTION_CHARS } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
+import { sourceKind } from "@/lib/investigation/source-kind";
 import { modelLabel } from "@/lib/models/labels";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
@@ -309,10 +310,11 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     <div className="flex flex-col gap-5">
       {views.length === 0 ? (
         <div className="flex flex-col gap-3">
-          {/* A bundled example has no run to read again: its answers come
-              from the recorded evidence alone (evidence_only). */}
+          {/* Without a source to read again (a bundled example, or a run
+              whose scenario is gone) answers come from the recorded
+              evidence alone (evidence_only), as the route decides. */}
           <p className="text-muted-foreground text-sm leading-relaxed">
-            {incident.run
+            {sourceKind(incident)
               ? "Ask Triage about this incident. It answers with the investigation's read-only tools over the alert's window and cites its evidence, like the report."
               : "Ask Triage about this incident. It answers from the evidence the investigation recorded and cites it, like the report."}
           </p>
