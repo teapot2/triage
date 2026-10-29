@@ -309,9 +309,12 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     <div className="flex flex-col gap-5">
       {views.length === 0 ? (
         <div className="flex flex-col gap-3">
+          {/* A bundled example has no run to read again: its answers come
+              from the recorded evidence alone (evidence_only). */}
           <p className="text-muted-foreground text-sm leading-relaxed">
-            Ask Triage about this incident. It answers with the investigation&apos;s read-only tools over the
-            alert&apos;s window and cites its evidence, like the report.
+            {incident.run
+              ? "Ask Triage about this incident. It answers with the investigation's read-only tools over the alert's window and cites its evidence, like the report."
+              : "Ask Triage about this incident. It answers from the evidence the investigation recorded and cites it, like the report."}
           </p>
           <ul className="flex flex-wrap gap-1.5" aria-label="Suggested questions">
             {suggestedQuestions(incident).map((q) => (
