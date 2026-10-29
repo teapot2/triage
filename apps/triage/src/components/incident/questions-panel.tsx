@@ -394,7 +394,11 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     <div ref={boxRef} className="flex flex-col @2xl:max-h-[var(--chat-max,calc(100dvh_-_6.5rem))]">
       <div
         ref={threadRef}
-        className="@2xl:-mr-3 @2xl:min-h-0 @2xl:flex-1 @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pr-3 @2xl:scrollbar-subtle"
+        // Wider than the column by a gutter each side, padded back in: a
+        // scroll box clips what overflows it, and the copy button (pulled
+        // left to line up with the text) and focus rings sit just outside
+        // the text; on the right the gutter holds the scrollbar.
+        className="@2xl:-mr-3 @2xl:-ml-2 @2xl:min-h-0 @2xl:flex-1 @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pr-3 @2xl:pl-2 @2xl:scrollbar-subtle"
       >
         <ol aria-label="Conversation with Triage" className="flex flex-col gap-9">
           {views.map((v) => (
