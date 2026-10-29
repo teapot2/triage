@@ -10,16 +10,19 @@ import { EvidenceProvider } from "./evidence";
 import { IncidentCommands } from "./incident-commands";
 import { IncidentHeader } from "./incident-header";
 import { IncidentReport } from "./incident-report";
+import { useAskQuestion } from "./questions-panel";
 
 // While the agent works, re-render from the server every couple of seconds;
-// it saves each step as it goes.
-function useRefreshWhile(active: boolean) {
+// it saves each step as it goes. Every second while a question is being
+// answered: its answer is saved as it streams, so a second tab (or this
+// one after a reload) reads along.
+function useRefreshWhile(active: boolean, intervalMs = 2000) {
   const router = useRouter();
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => router.refresh(), 2000);
+    const timer = setInterval(() => router.refresh(), intervalMs);
     return () => clearInterval(timer);
-  }, [active, router]);
+  }, [active, intervalMs, router]);
 }
 
 // A summary header with the facts that matter, then the report: a section
@@ -33,7 +36,14 @@ export function IncidentView({ incident }: { incident: Incident }) {
     incident.mitigation?.state === "approved" ||
     incident.mitigation?.state === "running" ||
     incident.mitigation?.recovery?.status === "watching";
-  useRefreshWhile(incident.status === "investigating" || fixing || mitigating || incident.approval?.prState === "opening");
+  const answering = incident.questions?.some((q) => q.status === "answering") ?? false;
+  useRefreshWhile(
+    incident.status === "investigating" || fixing || mitigating || incident.approval?.prState === "opening" || answering,
+    answering ? 1000 : 2000,
+  );
+  // This tab's own question streams here, above the sections, so switching
+  // sections mid-answer keeps the stream.
+  const ask = useAskQuestion(incident);
   // Whatever happened up to now has been seen; a run that finishes while
   // this page is open is seen as the refresh brings it in.
   const latest = activityAt(incident);
@@ -44,14 +54,20 @@ export function IncidentView({ incident }: { incident: Incident }) {
     [report, incident.evidence],
   );
   const order = useMemo(() => (report ? citationOrder(report) : []), [report]);
+  // A chip in an answer opens the same panel as one in the report: the
+  // investigation's evidence, then each question's, in the order asked.
+  const evidence = useMemo(
+    () => [...incident.evidence, ...(incident.questions ?? []).flatMap((q) => q.evidence)],
+    [incident.evidence, incident.questions],
+  );
 
   return (
-    <EvidenceProvider evidence={incident.evidence} order={order}>
+    <EvidenceProvider evidence={evidence} order={order}>
       <IncidentCommands incident={incident} />
       <IncidentHeader incident={incident} />
       {/* A container, so the report lays out by its own width. */}
       <div className="@container mx-auto w-full max-w-6xl px-4 pt-8 pb-8 sm:px-6">
-        <IncidentReport incident={incident} unknownEvidenceIds={unknownEvidenceIds} cited={order} />
+        <IncidentReport incident={incident} unknownEvidenceIds={unknownEvidenceIds} cited={order} ask={ask} />
       </div>
     </EvidenceProvider>
   );

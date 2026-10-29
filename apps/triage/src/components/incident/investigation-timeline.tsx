@@ -463,7 +463,7 @@ export function InvestigationTimeline({
   );
 }
 
-function StepRow({
+export function StepRow({
   step,
   offsetMs,
   query,

@@ -6,6 +6,7 @@ import {
   LayoutListIcon,
   LoaderCircleIcon,
   type LucideIcon,
+  MessageSquareTextIcon,
   RouteIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -23,8 +24,9 @@ import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
+import { type Ask, QuestionsPanel, requestComposerFocus } from "./questions-panel";
 
-type SectionId = "overview" | "fix" | "investigation";
+type SectionId = "overview" | "fix" | "investigation" | "questions";
 
 interface ReportSection {
   id: SectionId;
@@ -40,10 +42,12 @@ export function IncidentReport({
   incident,
   unknownEvidenceIds,
   cited,
+  ask,
 }: {
   incident: Incident;
   unknownEvidenceIds: string[];
   cited: string[];
+  ask: Ask;
 }) {
   const { report, fix, validation, steps, evidence, trigger, run, mitigation } = incident;
   const running = incident.status === "investigating";
@@ -60,6 +64,15 @@ export function IncidentReport({
   if (fix) sections.push({ id: "fix", label: "Fix", icon: WrenchIcon });
   if (steps.length > 0) {
     sections.push({ id: "investigation", label: "Investigation", icon: RouteIcon, count: steps.length });
+  }
+  // Questions open once there's a report to ask about. The count is the
+  // questions asked, this tab's in-flight one included (it's saved on the
+  // incident a beat later).
+  const savedQuestions = incident.questions ?? [];
+  const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
+  if (report) {
+    const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
+    sections.push({ id: "questions", label: "Questions", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
 
   // The open section lives in the URL (?section=fix), so it can be linked
@@ -85,7 +98,15 @@ export function IncidentReport({
       <div className="flex flex-col gap-8">
         {incident.status === "failed" && run?.error && <FailedRunNotice run={{ ...run, error: run.error }} />}
         {report ? (
-          <VerdictCard report={report} unknownEvidenceIds={unknownEvidenceIds} className={arrive || undefined} />
+          <VerdictCard
+            report={report}
+            unknownEvidenceIds={unknownEvidenceIds}
+            className={arrive || undefined}
+            onAsk={() => {
+              setSelected("questions");
+              requestComposerFocus();
+            }}
+          />
         ) : (
           running && (
             <div className="flex flex-col items-start gap-2">
@@ -148,6 +169,7 @@ export function IncidentReport({
     investigation: () => (
       <InvestigationTimeline steps={steps} thoughts={incident.thoughts} cited={cited} running={running} run={run} />
     ),
+    questions: () => <QuestionsPanel incident={incident} ask={ask} />,
   };
 
   return (
@@ -173,7 +195,7 @@ export function IncidentReport({
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                   )}
                 >
-                  {s.id === "investigation" && running ? (
+                  {(s.id === "investigation" && running) || (s.id === "questions" && answering) ? (
                     <LoaderCircleIcon className="size-4 animate-spin" />
                   ) : (
                     <Icon className="size-4" />

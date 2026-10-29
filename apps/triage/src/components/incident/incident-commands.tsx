@@ -1,11 +1,12 @@
 "use client";
 
-import { LayoutListIcon, LinkIcon, RouteIcon, WrenchIcon } from "lucide-react";
+import { LayoutListIcon, LinkIcon, MessageSquareTextIcon, RouteIcon, WrenchIcon } from "lucide-react";
 import { toast } from "sonner";
 import { type PaletteCommand, useRegisterCommands } from "@/components/command-registry";
 import type { Incident } from "@/lib/investigation/schema";
 import { evidenceIcons, useEvidence } from "./evidence";
 import { evidenceTitle } from "./metric-labels";
+import { requestComposerFocus } from "./questions-panel";
 
 export const THIS_INCIDENT = "This incident";
 
@@ -34,6 +35,22 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
             icon: RouteIcon,
             pinned: true,
             run: section("investigation"),
+          },
+        ]
+      : []),
+    ...(incident.report
+      ? [
+          {
+            id: "ask",
+            group: THIS_INCIDENT,
+            label: "Ask Triage",
+            icon: MessageSquareTextIcon,
+            keywords: "question follow-up",
+            pinned: true,
+            run: () => {
+              section("questions")();
+              requestComposerFocus();
+            },
           },
         ]
       : []),
