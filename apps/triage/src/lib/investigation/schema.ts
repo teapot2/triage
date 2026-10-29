@@ -310,6 +310,43 @@ export const runSchema = z.object({
 });
 export type Run = z.infer<typeof runSchema>;
 
+// A follow-up question on a finished incident, answered by a small,
+// bounded investigation with the same read-only tools. Its steps and
+// evidence live on the question; evidence IDs carry the question's ID
+// (ev_q2_span_1) so they never collide with the investigation's. `answer`
+// grows while it streams; the citations are parsed from it at the end.
+export const questionSchema = z.object({
+  id: z.string().regex(/^q_\d+$/).describe("Sequential per incident; also the evidence ID prefix"),
+  text: z.string().min(1).max(500),
+  askedAt: timestamp,
+  answeredAt: timestamp.optional().describe("Set on finish or failure"),
+  status: z.enum(["answering", "answered", "failed"]),
+  error: z.string().optional(),
+  answer: z.string().describe("Inline [ev_…] citations; grows while streaming"),
+  citedIds: z.array(z.string()),
+  unknownIds: z.array(z.string()),
+  steps: z.array(investigationStepSchema),
+  evidence: z.array(evidenceSchema),
+  thoughts: z.array(thoughtSchema).optional(),
+  // evidence_only: no telemetry source to rebuild (bundled examples), so the
+  // answer comes from the recorded evidence without tools.
+  mode: z.enum(["tools", "evidence_only"]),
+  provider: z.string().optional(),
+  model: z.string(),
+  inputTokens: z.number().int().optional(),
+  outputTokens: z.number().int().optional(),
+});
+export type Question = z.infer<typeof questionSchema>;
+
+// A fix a reviewer denied with feedback, kept when the fix stage reruns.
+export const fixAttemptSchema = z.object({
+  fix: fixSchema,
+  validation: z.array(sandboxRunSchema).optional(),
+  fixRun: fixRunSchema,
+  approval: approvalSchema,
+});
+export type FixAttempt = z.infer<typeof fixAttemptSchema>;
+
 export const incidentSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -345,8 +382,12 @@ export const incidentSchema = z.object({
   fixRun: fixRunSchema.optional(),
   approval: approvalSchema.optional(),
   run: runSchema.optional(),
+  // Follow-up questions, in the order asked.
+  questions: z.array(questionSchema).optional(),
+  // Fixes denied with feedback, oldest first; the current one is `fix`.
+  fixAttempts: z.array(fixAttemptSchema).optional(),
 });
-export type Incident = z.infer<typeof incidentSchema>;
+export type Incident =z.infer<typeof incidentSchema>;
 
 // Verifier: every evidence ID cited in the report must exist. Returns the
 // IDs that do not, so the UI can strike the claims that cite them.
