@@ -1,45 +1,82 @@
 import { openPullRequest } from "./fix/pull-request";
 import type { Approval, Incident } from "./schema";
-import { getIncident, saveIncident } from "./store";
+import { getIncident, saveIncident, withIncidentLock } from "./store";
 
 export type Decision = Extract<Approval["state"], "approved" | "denied">;
 
 export type DecideResult =
-  | { ok: true; incident: Incident }
+  // rerun: the denied fix was archived and the fix stage starts again with
+  // the reviewer's feedback (the route runs it after the response). Also
+  // the mitigation decision's result, which never reruns anything.
+  | { ok: true; incident: Incident; rerun?: boolean }
   | { ok: false; status: 404 | 409; error: string };
 
 // Only a fix Triage proved in its sandbox gets a PR. The bundled examples'
 // patches illustrate the UI and don't apply to any real code.
 export const canOpenPr = (incident: Incident) => incident.fixRun?.status === "proven";
 
+// Only a proven fix on the live Shopfront can be written again: the fix
+// stage needs real source files and a sandbox to prove the new one in. A
+// recorded scenario's files are fixtures, and a bundled example has none.
+export const canRerunFix = (incident: Incident) =>
+  incident.fixRun?.status === "proven" && incident.run?.source === "live:shopfront";
+
+// The incident after a deny with feedback that leads to a new attempt: the
+// denied fix, its proof and the decision move into fixAttempts (oldest
+// first), the current fix is cleared, and the fix stage is shown as
+// writing from attempt 0 until rerunFix picks it up. Pure, for the tests.
+export function archiveDeniedFix(incident: Incident, approval: Approval, now = new Date().toISOString()): Incident {
+  return {
+    ...incident,
+    status: "diagnosed",
+    fix: undefined,
+    validation: undefined,
+    approval: undefined,
+    fixRun: { status: "writing", attempt: 0, startedAt: now },
+    fixAttempts: [
+      ...(incident.fixAttempts ?? []),
+      { fix: incident.fix!, validation: incident.validation, fixRun: incident.fixRun!, approval },
+    ],
+  };
+}
+
 // Records a human's decision on the proposed fix. Only a pending approval can
 // be decided, so a second click or a stale tab can't overwrite the first
 // decision. Either way the incident stops awaiting approval and is
 // "diagnosed": still open, since nothing is resolved until a fix ships.
 // Approving a proven fix also marks its PR as opening; openPr does the work.
-export async function decideApproval(id: string, decision: Decision): Promise<DecideResult> {
-  const incident = await getIncident(id);
-  if (!incident) return { ok: false, status: 404, error: `unknown incident: ${id}` };
-  if (!incident.fix || !incident.approval) {
-    return { ok: false, status: 409, error: "this incident has no fix awaiting approval" };
-  }
-  if (incident.approval.state !== "pending") {
-    return { ok: false, status: 409, error: `the fix was already ${incident.approval.state}` };
-  }
+// A deny saves the reviewer's feedback as the reason; with feedback on a fix
+// that can be written again, the attempt is archived and a rerun starts.
+export function decideApproval(id: string, decision: Decision, feedback?: string): Promise<DecideResult> {
+  // Under the incident's lock, like every route write: the fix stage or a
+  // question may be saving at the same time.
+  return withIncidentLock(id, async () => {
+    const incident = await getIncident(id);
+    if (!incident) return { ok: false, status: 404, error: `unknown incident: ${id}` };
+    if (!incident.fix || !incident.approval) {
+      return { ok: false, status: 409, error: "this incident has no fix awaiting approval" };
+    }
+    if (incident.approval.state !== "pending") {
+      return { ok: false, status: 409, error: `the fix was already ${incident.approval.state}` };
+    }
 
-  const opening = decision === "approved" && canOpenPr(incident);
-  const decided: Incident = {
-    ...incident,
-    status: "diagnosed",
-    approval: {
+    const now = new Date().toISOString();
+    const opening = decision === "approved" && canOpenPr(incident);
+    const reason = decision === "denied" ? feedback?.trim() || undefined : undefined;
+    const approval: Approval = {
       ...incident.approval,
       state: decision,
-      decidedAt: new Date().toISOString(),
+      decidedAt: now,
+      ...(reason ? { reason } : {}),
       ...(opening ? { prState: "opening" as const } : {}),
-    },
-  };
-  await saveIncident(decided);
-  return { ok: true, incident: decided };
+    };
+    const rerun = decision === "denied" && reason !== undefined && canRerunFix(incident);
+    const decided: Incident = rerun
+      ? archiveDeniedFix(incident, approval, now)
+      : { ...incident, status: "diagnosed", approval };
+    await saveIncident(decided);
+    return { ok: true, incident: decided, rerun };
+  });
 }
 
 // Retrying a PR that failed to open (no repository yet, a push error).

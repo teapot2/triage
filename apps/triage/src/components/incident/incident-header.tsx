@@ -7,7 +7,7 @@ import { useRegisterCommands } from "@/components/command-registry";
 import { Badge } from "@/components/ui/badge";
 import type { Incident } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
-import { ApprovalActions, ApproveDialog, useApprovalDecision } from "./approval-card";
+import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
 import { MetricBadges } from "./outcome-badges";
@@ -15,6 +15,17 @@ import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 
 // Height of the sticky bar; the report's section menu sticks below it.
 const BAR_HEIGHT = 48;
+
+// Why a deny with feedback starts no new attempt on this incident, or
+// undefined when it does: the client's view of canRerunFix. Only a fix
+// proven on the live Shopfront can be written again; a bundled example has
+// no run, a recorded scenario's files are fixtures.
+export function noRerunReason(incident: Pick<Incident, "run" | "fixRun">): NoRerunReason | undefined {
+  if (!incident.run) return "example";
+  if (incident.run.source !== "live:shopfront") return "scenario";
+  if (incident.fixRun?.status !== "proven") return "unproven";
+  return undefined;
+}
 
 // The incident at a glance: the title, then one line with its state, where
 // and when, and how far past the limit. Once it scrolls away, a compact bar
@@ -28,10 +39,12 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
   const opensPr = incident.fixRun?.status === "proven";
   const { decision, decide, error } = useApprovalDecision(incident.id, approval?.state, opensPr);
-  // Approving goes through one confirm dialog, whether it's asked for from
-  // the header, its sticky bar or the search palette.
+  // Each decision goes through one dialog, whether it's asked for from the
+  // header, its sticky bar or the search palette: approving confirms,
+  // denying asks what the next fix should do differently.
   const [confirming, setConfirming] = useState(false);
-  // The same decision from the search palette, while it's still open.
+  const [denying, setDenying] = useState(false);
+  // The same decisions from the search palette, while it's still open.
   useRegisterCommands(
     "incident-approval",
     fix && decision === "pending"
@@ -45,7 +58,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             pinned: true,
             run: () => setConfirming(true),
           },
-          { id: "deny", group: THIS_INCIDENT, label: "Deny fix", icon: XIcon, pinned: true, run: () => void decide("denied") },
+          { id: "deny", group: THIS_INCIDENT, label: "Deny fix", icon: XIcon, pinned: true, run: () => setDenying(true) },
         ]
       : [],
   );
@@ -56,7 +69,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
       approval={approval}
       decision={decision}
       onApprove={() => setConfirming(true)}
-      onDeny={() => void decide("denied")}
+      onDeny={() => setDenying(true)}
       error={error}
     />
   );
@@ -140,7 +153,25 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
         </div>
       </header>
       {fix && (
-        <ApproveDialog fix={fix} opensPr={opensPr} mitigated={mitigated} open={confirming} onOpenChange={setConfirming} onConfirm={() => void decide("approved")} />
+        <>
+          <ApproveDialog
+            fix={fix}
+            opensPr={opensPr}
+            mitigated={mitigated}
+            open={confirming}
+            onOpenChange={setConfirming}
+            onConfirm={() => void decide("approved")}
+          />
+          <DenyDialog
+            noRerun={noRerunReason(incident)}
+            open={denying}
+            onOpenChange={setDenying}
+            onConfirm={(feedback) => {
+              setDenying(false);
+              void decide("denied", feedback);
+            }}
+          />
+        </>
       )}
     </>
   );
