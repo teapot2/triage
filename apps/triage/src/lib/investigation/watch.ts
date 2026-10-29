@@ -1,7 +1,7 @@
 import { stageModel, stageProblem } from "../models/settings";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
-import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched, type RuleResult } from "./watch-judge";
+import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
 import { describeRule, readRules, type WatchRule } from "./watch-rules";
 
 // Stage 1: Triage watches the live store and opens an incident on its own.
@@ -134,7 +134,7 @@ async function check() {
     // severe opens the incident, ties going to the rule listed first.
     const trips = results.filter((r) => r.trip).sort((a, b) => severityRank[a.rule.severity] - severityRank[b.rule.severity]);
 
-    let opening: (RuleResult & { rule: WatchRule }) | undefined;
+    const first = trips[0];
     if (state.status === "alerting") {
       // The open episode takes in whatever else trips. It ends once nothing
       // has been over a limit for HEALTHY_TO_REARM judged checks.
@@ -145,10 +145,19 @@ async function check() {
         state.tripped.clear();
         state.streaks.clear();
       }
-    } else if (trips.length > 0) {
-      for (const r of trips) state.tripped.add(r.rule.id);
-      Object.assign(state, { status: "alerting", healthy: 0 });
-      opening = trips[0];
+    } else if (first?.trip) {
+      // Alerting only once the incident is open. If it can't be, the rule
+      // stays breaching, so the next check tries again and the error stays up.
+      const opened = await open(first.rule, first.trip).catch((err: unknown) => {
+        state.error = `Couldn't open an incident: ${err instanceof Error ? err.message : String(err)}`;
+        return false;
+      });
+      if (opened) {
+        for (const r of trips) state.tripped.add(r.rule.id);
+        Object.assign(state, { status: "alerting", healthy: 0 });
+      } else {
+        state.status = "breaching";
+      }
     } else {
       state.status = breaching ? "breaching" : anyOk ? "ok" : "idle";
     }
@@ -164,7 +173,6 @@ async function check() {
         needed: r.rule.checksToOpen,
       }),
     );
-    if (opening?.trip) await open(opening.rule, opening.trip);
   } catch (err) {
     state.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -172,11 +180,12 @@ async function check() {
   }
 }
 
-async function open(rule: WatchRule, trip: { route: string; method: string }) {
+// Opens the incident and starts its run; false when no model can run it.
+async function open(rule: WatchRule, trip: { route: string; method: string }): Promise<boolean> {
   const problem = stageProblem(await stageModel("investigate"));
   if (problem) {
     state.error = `${problem} No incident was opened.`;
-    return;
+    return false;
   }
   const source = await createLiveSource();
   const incident = await createRuleIncident(source, { rule, ...trip });
@@ -184,4 +193,5 @@ async function open(rule: WatchRule, trip: { route: string; method: string }) {
   console.log(`[triage] watch rule ${rule.id} opened ${incident.id}: ${incident.title}`);
   // The pipeline runs on its own; the watch keeps checking meanwhile.
   void runInvestigation(incident, source, { appDir: shopfrontDir });
+  return true;
 }

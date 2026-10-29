@@ -14,7 +14,12 @@ const bodySchema = z.object({
   scenario: z.string(),
   // Live only: a range (and route) selected on the live telemetry page.
   focus: z
-    .object({ from: z.iso.datetime(), to: z.iso.datetime(), route: z.string().max(200).optional() })
+    .object({
+      service: z.string().max(100).default("shopfront"),
+      from: z.iso.datetime(),
+      to: z.iso.datetime(),
+      route: z.string().max(200).optional(),
+    })
     .refine((f) => Date.parse(f.from) < Date.parse(f.to), "focus.from must be before focus.to")
     .optional(),
 });

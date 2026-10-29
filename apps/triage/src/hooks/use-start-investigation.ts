@@ -32,8 +32,11 @@ export function useStartInvestigation() {
   const [error, setError] = useState<string | null>(null);
 
   // Resolves true once the run started and the page is navigating to it.
-  // `focus` narrows a live run to a range (and route) from the live page.
-  async function start(scenario: string, focus?: { from: string; to: string; route?: string }): Promise<boolean> {
+  // `focus` narrows a live run to a service's range (and route) from the live page.
+  async function start(
+    scenario: string,
+    focus?: { service: string; from: string; to: string; route?: string },
+  ): Promise<boolean> {
     setRequesting(true);
     setError(null);
     try {

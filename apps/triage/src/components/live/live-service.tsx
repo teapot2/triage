@@ -142,6 +142,7 @@ export function LiveService({ service }: { service: string }) {
           <Tiles snapshot={snapshot} />
           {selection ? (
             <SelectionBar
+              service={service}
               selection={selection}
               bucketMs={liveWindows.find((w) => w.id === snapshot.window)?.bucketMs ?? 5_000}
               routes={snapshot.routes}
@@ -227,11 +228,13 @@ const SLOWEST = "slowest";
 // The selected range, and starting an investigation of it: of one route,
 // or of whichever was slowest in the range (picked on the server).
 function SelectionBar({
+  service,
   selection,
   bucketMs,
   routes,
   onClear,
 }: {
+  service: string;
   selection: TimeRange;
   bucketMs: number;
   routes: LiveRoute[];
@@ -270,7 +273,7 @@ function SelectionBar({
             size="sm"
             disabled={pending}
             onClick={() =>
-              void start(LIVE_ID, { from: selection.from, to, route: route === SLOWEST ? undefined : route })
+              void start(LIVE_ID, { service, from: selection.from, to, route: route === SLOWEST ? undefined : route })
             }
           >
             {pending ? <LoaderCircleIcon className="animate-spin" /> : <SearchIcon />}

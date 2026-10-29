@@ -6,7 +6,7 @@ import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
 import { proposeMitigation } from "./mitigation/propose";
-import { readTelemetry } from "./live/otlp-files";
+import { readTelemetry, RETENTION_MS } from "./live/otlp-files";
 import { InvestigationRecorder, type ThoughtRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
@@ -112,8 +112,11 @@ export async function createLiveIncident(
 // the live service can be investigated, so it's always that one's routes.
 export async function createRangeIncident(
   source: TelemetrySource,
-  focus: { from: string; to: string; route?: string },
+  { service, ...focus }: { service: string; from: string; to: string; route?: string },
 ): Promise<Incident> {
+  // The page only offers a range on the live service; this keeps a request
+  // for another from opening a Shopfront incident.
+  if (service !== liveService) throw new Error(`Triage can only investigate ${liveService} for now, not ${service}.`);
   const from = Date.parse(focus.from);
   const to = Date.parse(focus.to);
   const requests = requestSamples((await readTelemetry()).spans, from, to).filter((r) => r.service === liveService);
@@ -124,19 +127,24 @@ export async function createRangeIncident(
   const route =
     focus.route ??
     [...byRoute.entries()].sort(([, a], [, b]) => p95(b.map((r) => r.durationMs)) - p95(a.map((r) => r.durationMs)))[0]?.[0];
-  if (!route) throw new Error(`No ${liveService} requests in the selected range to investigate.`);
+  const inRange = route ? byRoute.get(route) : undefined;
+  if (!route || !inRange) throw new Error(`No ${liveService} requests in the selected range to investigate.`);
 
   const rule = (await readRules()).find((r) => r.enabled && r.condition.metric === "p95" && matchesTarget(r.target, route));
   const threshold = rule?.condition.metric === "p95" ? rule.condition.aboveMs : liveAlert.threshold;
-  const alert = await source.queryMetric({ name: `http.server.request.duration.p95{route=${route}}`, windowMinutes: 30 });
+  // The chart reaches back past the start of the range, however long ago
+  // it was selected (telemetry is kept for RETENTION_MS).
+  const windowMinutes = Math.min(Math.max(30, Math.ceil((Date.now() - from) / 60_000) + 5), RETENTION_MS / 60_000);
+  const alert = await source.queryMetric({ name: `http.server.request.duration.p95{route=${route}}`, windowMinutes });
   if (!alert || alert.points.length === 0) throw new Error(`No latency series for ${route} to open an incident from.`);
-  const method = byRoute.get(route)?.[0]?.method ?? "GET";
   const clock = (iso: string) => iso.slice(11, 19);
   return saveNewIncident(source, alert, {
-    title: `Investigate ${method} ${route}, ${clock(focus.from)} to ${clock(focus.to)} UTC`,
+    title: `Investigate ${inRange[0].method} ${route}, ${clock(focus.from)} to ${clock(focus.to)} UTC`,
     service: liveService,
     severity: "sev3",
     threshold,
+    // What the range measured, not the minute the incident opened in.
+    observed: Math.round(p95(inRange.map((r) => r.durationMs))),
     openedBy: "person",
     focus: { ...focus, route },
   });
@@ -170,6 +178,8 @@ async function saveNewIncident(
     service: string;
     severity: Incident["severity"];
     threshold: number;
+    // The latest point of the series unless given.
+    observed?: number;
     openedBy?: Incident["openedBy"];
     rule?: Incident["trigger"]["rule"];
     focus?: Incident["trigger"]["focus"];
@@ -188,7 +198,7 @@ async function saveNewIncident(
       metric: alert.name,
       unit: alert.unit,
       threshold: a.threshold,
-      observed: alert.points[alert.points.length - 1].value,
+      observed: a.observed ?? alert.points[alert.points.length - 1].value,
       series: alert.points,
       rule: a.rule,
       focus: a.focus,
