@@ -347,6 +347,42 @@ export const fixAttemptSchema = z.object({
 });
 export type FixAttempt = z.infer<typeof fixAttemptSchema>;
 
+// An action item in the postmortem. Owner and due date are left for the
+// team: the export has blank columns for them.
+export const postmortemActionItemSchema = z.object({
+  title: z.string(),
+  kind: z.enum(["fix_this", "prevent_class", "detect_sooner", "mitigate_faster"]),
+  priority: z.enum(["P1", "P2", "P3"]),
+  evidenceIds: z.array(evidenceId).optional(),
+});
+export type PostmortemActionItem = z.infer<typeof postmortemActionItemSchema>;
+
+// The blameless postmortem's judgment, written by one model call over the
+// recorded evidence (postmortem/writer.ts). Everything else in the
+// document (impact numbers, timeline, fix, evidence appendix) is rendered
+// from the incident itself. One record; writing again replaces it. The
+// content fields are absent while it is being written or after a failure.
+export const postmortemSchema = z.object({
+  status: z.enum(["writing", "ready", "failed"]),
+  startedAt: timestamp,
+  finishedAt: timestamp.optional(),
+  error: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string(),
+  inputTokens: z.number().int().optional(),
+  outputTokens: z.number().int().optional(),
+  summary: z.string().optional().describe("Three sentences, under 80 words: what happened, impact, duration. No evidence IDs."),
+  impact: claimSchema.optional().describe("Who was affected and how, cited"),
+  contributingFactors: z.array(claimSchema).optional().describe("2 to 5 conditions that each had to hold, cited"),
+  wentWell: z.array(claimSchema).optional(),
+  wentBadly: z.array(claimSchema).optional(),
+  lucky: z.array(z.string()).optional().describe("What could have made it worse"),
+  actionItems: z.array(postmortemActionItemSchema).optional(),
+  citedIds: z.array(z.string()).optional(),
+  unknownIds: z.array(z.string()).optional(),
+});
+export type Postmortem = z.infer<typeof postmortemSchema>;
+
 export const incidentSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -386,6 +422,8 @@ export const incidentSchema = z.object({
   questions: z.array(questionSchema).optional(),
   // Fixes denied with feedback, oldest first; the current one is `fix`.
   fixAttempts: z.array(fixAttemptSchema).optional(),
+  // The blameless postmortem, written on request; writing again replaces it.
+  postmortem: postmortemSchema.optional(),
 });
 export type Incident =z.infer<typeof incidentSchema>;
 

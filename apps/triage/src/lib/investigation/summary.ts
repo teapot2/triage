@@ -25,6 +25,7 @@ export function activityAt(incident: Incident): string {
     mitigation?.appliedAt,
     mitigation?.recovery?.recoveredAt,
     ...(incident.questions ?? []).map((q) => q.answeredAt),
+    incident.postmortem?.finishedAt,
   ];
   return times
     .filter((t): t is string => t !== undefined)
