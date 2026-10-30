@@ -39,6 +39,7 @@ async function getStockLevelOrm(productId: number): Promise<number> {
 // building.
 async function getStockLevelDirect(productId: number): Promise<number> {
   const client = await pool.connect();
+  try {
   const { rows } = await client.query<{ on_hand: number }>(
     "SELECT on_hand FROM stock_levels WHERE product_id = $1",
     [productId],
@@ -47,6 +48,9 @@ async function getStockLevelDirect(productId: number): Promise<number> {
     logger.info("stock row missing, returning default", { "product.id": productId });
     return DEFAULT_STOCK;
   }
-  client.release();
-  return rows[0].on_hand;
+
+    return rows[0].on_hand;
+  } finally {
+    client.release();
+  }
 }
