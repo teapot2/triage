@@ -1,5 +1,5 @@
 import { metricLabel } from "@/components/incident/metric-labels";
-import type { Approval, FixRun, Incident } from "../schema";
+import type { Approval, FixRun, Incident, Reopening } from "../schema";
 
 // The postmortem's timeline and headline durations, built from the
 // timestamps the incident already records. Pure, so the incident page can
@@ -70,6 +70,12 @@ function fixRunEvents(fixRun: FixRun, n: number): TimelineEvent[] {
   return events;
 }
 
+export const reopenedBy: Record<Reopening["by"], string> = {
+  verification: "Triage's verification",
+  watch: "Triage's watch",
+  person: "a person",
+};
+
 const denied = (approval: Approval) => (approval.reason ? `denied: ${firstLine(approval.reason)}` : "denied");
 
 export function postmortemTimeline(incident: Incident): TimelineEvent[] {
@@ -124,6 +130,16 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
 
   for (const q of incident.questions ?? []) add(q.askedAt, `Question asked: ${q.text}`);
 
+  const { verification } = incident;
+  if (verification) {
+    add(
+      verification.startedAt,
+      `Verification started: watching ${metricLabel(verification.metric)} for ${verification.windowMinutes} min`,
+    );
+  }
+  for (const r of incident.reopenings ?? []) add(r.at, `Reopened by ${reopenedBy[r.by]}: ${firstLine(r.why)}`);
+  add(incident.resolvedAt, "Incident resolved");
+
   // Stable, so events at the same instant keep the order they happen in.
   return events
     .map((e, i) => ({ e, i, t: Date.parse(e.at) }))
@@ -140,6 +156,7 @@ export function durations(incident: Incident): Duration[] {
     ["Time to diagnose", incident.detectedAt, incident.run?.finishedAt],
     ["Time to mitigate", incident.detectedAt, incident.mitigation?.appliedAt],
     ["Time to recover", breach, incident.mitigation?.recovery?.recoveredAt],
+    ["Time to resolve", breach, incident.resolvedAt],
   ];
   return spans.flatMap(([label, from, to]) => {
     if (!from || !to) return [];

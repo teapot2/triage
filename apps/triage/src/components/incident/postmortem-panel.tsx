@@ -169,13 +169,18 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
     );
   }
 
+  // The judgment predates the resolution; the document around it doesn't.
+  const written = pm.finishedAt ?? pm.startedAt;
+  const stale = incident.resolvedAt !== undefined && Date.parse(incident.resolvedAt) > Date.parse(written);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <p className="min-w-0 text-muted-foreground text-xs">
-          Written <Timestamp date={pm.finishedAt ?? pm.startedAt} /> · {modelLabel(pm.model, pm.provider)}
+          Written <Timestamp date={written} /> · {modelLabel(pm.model, pm.provider)}
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}
           <WriteButton refusal={refusal} sending={sending} onClick={write} size="sm" variant="outline">
             Write again
           </WriteButton>

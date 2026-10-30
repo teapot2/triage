@@ -112,7 +112,10 @@ function header(incident: Incident): string {
   const facts = [
     incident.service,
     incident.severity.toUpperCase(),
-    statusInWords(incident),
+    // "resolved", with when once it's recorded.
+    incident.status === "resolved" && incident.resolvedAt
+      ? `resolved ${dateTime(incident.resolvedAt)} UTC`
+      : statusInWords(incident),
     `Detected ${dateTime(incident.detectedAt)} UTC${incident.openedBy === "watch" ? " by Triage's watch" : ""}`,
   ];
   if (pm?.status === "ready") {

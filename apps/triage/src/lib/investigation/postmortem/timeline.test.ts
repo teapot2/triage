@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Incident } from "../schema";
-import { mitigated, poolLeak } from "./test-incidents";
+import { mitigated, poolLeak, reopened, resolved } from "./test-incidents";
 import { durations, firstBreach, postmortemTimeline } from "./timeline";
 
 const at = (minutes: number) => new Date(Date.parse("2026-10-23T02:00:00.000Z") + minutes * 60_000).toISOString();
 
 describe("postmortemTimeline", () => {
   it("is sorted by time", () => {
-    for (const incident of [poolLeak(), mitigated()]) {
+    for (const incident of [poolLeak(), mitigated(), resolved(), reopened()]) {
       const times = postmortemTimeline(incident).map((e) => Date.parse(e.at));
       assert.deepEqual(times, [...times].sort((a, b) => a - b));
     }
@@ -40,6 +40,28 @@ describe("postmortemTimeline", () => {
     assert.equal(find("Mitigation approved")?.at, "2026-10-23T02:15:00.000Z");
     assert.equal(find("Mitigation applied")?.at, "2026-10-23T02:15:20.000Z");
     assert.equal(find("p95 latency back under 500 ms")?.at, "2026-10-23T02:18:00.000Z");
+  });
+
+  it("ends on the resolution, after the verification started", () => {
+    const events = postmortemTimeline(resolved());
+    assert.ok(
+      events.some(
+        (e) => e.at === "2026-10-23T02:18:05.000Z" && e.event === "Verification started: watching p95 latency for 5 min",
+      ),
+    );
+    assert.deepEqual(events.at(-1), { at: "2026-10-23T02:23:00.000Z", event: "Incident resolved" });
+  });
+
+  it("names who reopened it and why, and drops the undone resolution", () => {
+    const events = postmortemTimeline(reopened());
+    assert.deepEqual(events.at(-1), {
+      at: "2026-10-23T02:30:00.000Z",
+      event: "Reopened by Triage's watch: p95 latency back over 500 ms",
+    });
+    assert.ok(!events.some((e) => e.event === "Incident resolved"));
+    const byPerson = reopened();
+    byPerson.reopenings![0] = { ...byPerson.reopenings![0], by: "person", why: "errors are back\nsince 02:29" };
+    assert.ok(postmortemTimeline(byPerson).some((e) => e.event === "Reopened by a person: errors are back"));
   });
 
   it("says when the recovery watch gave up", () => {
@@ -169,6 +191,13 @@ describe("durations", () => {
     assert.equal(firstBreach(incident), at(4));
     incident.detectedAt = at(0);
     assert.equal(firstBreach(incident), at(1));
+  });
+
+  it("measures the time to resolve from the first breach, only while resolved", () => {
+    const resolve = (incident: Incident) => durations(incident).find((d) => d.label === "Time to resolve");
+    assert.deepEqual(resolve(resolved()), { label: "Time to resolve", ms: 13 * 60_000 });
+    assert.equal(resolve(reopened()), undefined);
+    assert.equal(resolve(mitigated()), undefined);
   });
 
   it("leaves out spans with a missing or reversed end", () => {

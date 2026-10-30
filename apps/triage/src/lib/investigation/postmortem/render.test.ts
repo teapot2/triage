@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { citationOrder } from "../citations";
 import type { Evidence, Incident } from "../schema";
 import { defaultTemplate, footnoteNumbers, postmortemMarkdown, statusInWords } from "./render";
-import { mitigated, poolLeak } from "./test-incidents";
+import { mitigated, poolLeak, reopened, resolved } from "./test-incidents";
 
 const headings: Record<(typeof defaultTemplate)[number], string> = {
   header: "# Postmortem: ",
@@ -88,6 +88,24 @@ describe("postmortemMarkdown", () => {
   it("says how long the metric was over the threshold, at least when it hasn't recovered", () => {
     assert.ok(section(postmortemMarkdown(poolLeak()), "## Impact").includes("for at least 10 min, from 02:10:00 UTC"));
     assert.ok(section(postmortemMarkdown(mitigated()), "## Impact").includes("for 8 min, from 02:10:00 UTC"));
+  });
+
+  it("says when it resolved, and ends the timeline there with the time to resolve", () => {
+    const md = postmortemMarkdown(resolved());
+    assert.ok(md.split("\n## ")[0].includes("shopfront · SEV2 · resolved 2026-10-23 02:23:00 UTC · Detected"));
+    const timeline = section(md, "## Timeline");
+    assert.ok(timeline.includes("| 02:18:05 | Verification started: watching p95 latency for 5 min |"));
+    assert.match(timeline, /\| 02:23:00 \| Incident resolved \|\n\n/);
+    assert.ok(timeline.includes("Time to resolve: 13 min"));
+  });
+
+  it("puts a reopening in the timeline and no resolution in the header", () => {
+    const md = postmortemMarkdown(reopened());
+    assert.ok(md.split("\n## ")[0].includes("shopfront · SEV2 · fix awaiting approval"));
+    const timeline = section(md, "## Timeline");
+    assert.ok(timeline.includes("| 02:30:00 | Reopened by Triage's watch: p95 latency back over 500 ms |"));
+    assert.ok(!timeline.includes("Incident resolved"));
+    assert.ok(!timeline.includes("Time to resolve"));
   });
 
   it("makes the fix action item 1, with the PR link once it is open", () => {
