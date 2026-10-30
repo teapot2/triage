@@ -254,6 +254,25 @@ describe("postmortemMarkdown", () => {
   });
 });
 
+describe("postmortemMarkdown for an uptime check", () => {
+  it("gives availability's lowest point and the time under the limit", () => {
+    const incident = poolLeak();
+    incident.trigger = {
+      ...incident.trigger,
+      metric: "uptime.availability{check=chk_abc123}",
+      unit: "%",
+      threshold: 100,
+      observed: 0,
+      series: [100, 100, 50, 0, 0, 0].map((value, i) => ({ t: new Date(Date.parse("2026-10-23T02:00:00.000Z") + i * 60_000).toISOString(), value })),
+    };
+    incident.detectedAt = "2026-10-23T02:05:00.000Z";
+    incident.mitigation = undefined;
+    const md = postmortemMarkdown(incident);
+    assert.match(md, /- Lowest Availability: 0%, against a threshold of 100%\./);
+    assert.match(md, /- Under the threshold for at least 4 min, from 02:02:00 UTC\./);
+  });
+});
+
 describe("footnoteNumbers", () => {
   it("numbers like EvidenceProvider: the report's citations, then the evidence, then the questions'", () => {
     const incident = withQuestion(poolLeak());

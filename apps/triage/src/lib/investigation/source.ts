@@ -1,8 +1,8 @@
 import type { MetricPoint } from "./schema";
 
 // What the investigation tools read from: a recorded scenario
-// (scenarios/scenario-source.ts) or the running Shopfront's telemetry
-// (live/live-source.ts). Queries return raw telemetry; the tools turn
+// (scenarios/scenario-source.ts), the running Shopfront's telemetry
+// (live/live-source.ts) or an uptime check's results (uptime/source.ts). Queries return raw telemetry; the tools turn
 // results into evidence.
 
 export interface LogGroup {
@@ -69,6 +69,10 @@ export interface SourceDescription {
   now: string;
   services: { name: string; dependsOn: string[] }[];
   metrics: { name: string; service: string; unit: string; description: string }[];
+  // An endpoint known only from Triage's own checks of it from outside
+  // (uptime/source.ts): there is no database, code or deploy history
+  // behind it to read, and the tools say so.
+  external?: { url: string };
 }
 
 export interface TelemetrySource {

@@ -99,10 +99,13 @@ export function slackMessage(
     case "resolved": {
       const open =
         incident.resolvedAt && took(Date.parse(incident.resolvedAt) - Date.parse(incident.detectedAt));
+      const v = incident.verification;
       const by =
-        incident.verification?.status === "resolved"
-          ? "Triage confirmed it: the metric stayed under its limit for the whole quiet window."
-          : "A person marked it resolved.";
+        v?.after === "uptime"
+          ? `Triage confirmed it: ${v.series.length} checks in a row answered in time.`
+          : v?.status === "resolved"
+            ? "Triage confirmed it: the metric stayed under its limit for the whole quiet window."
+            : "A person marked it resolved.";
       return message(
         `Resolved: ${esc(incident.title)}`,
         `*Incident resolved* · ${head}`,

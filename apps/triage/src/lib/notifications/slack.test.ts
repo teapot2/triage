@@ -85,6 +85,25 @@ describe("slackMessage", () => {
     assert.match(body(byPerson), /Open for 1 h 5 min\. A person marked it resolved\./);
   });
 
+  it("counts the healthy checks that confirmed an uptime incident's recovery", () => {
+    const point = (t: string) => ({ t, value: 184 });
+    const i = example({
+      status: "resolved",
+      resolvedAt: "2026-10-23T03:19:00.000Z",
+      verification: {
+        after: "uptime",
+        since: "2026-10-23T03:18:00.000Z",
+        windowMinutes: 1,
+        metric: "uptime.response_time{check=chk_abc123}",
+        threshold: 10_000,
+        series: [point("2026-10-23T03:18:00.000Z"), point("2026-10-23T03:18:30.000Z"), point("2026-10-23T03:19:00.000Z")],
+        status: "resolved",
+        startedAt: "2026-10-23T03:18:00.000Z",
+      },
+    });
+    assert.match(body(slackMessage("resolved", i, base)), /Open for 1 h 5 min\. Triage confirmed it: 3 checks in a row answered in time\./);
+  });
+
   it("escapes Slack's markup in text taken from the incident", () => {
     const m = slackMessage("incident_opened", example({ title: "<!channel> a & b > c", service: "<svc>" }), base);
     assert.ok(body(m).includes("|&lt;!channel&gt; a &amp; b &gt; c>"));

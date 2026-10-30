@@ -406,8 +406,10 @@ export type Reopening = z.infer<typeof reopeningSchema>;
 // The quiet window after a recovery: the alert's metric watched for
 // windowMinutes completed minutes under its threshold. Resolves the
 // incident when it completes; reopens it on the first minute over.
+// After an uptime check's healthy run, the window is that run: its samples'
+// response times, already judged, so the record is written resolved.
 export const verificationSchema = z.object({
-  after: z.enum(["mitigation", "fix", "manual"]),
+  after: z.enum(["mitigation", "fix", "manual", "uptime"]),
   since: timestamp,
   windowMinutes: z.number().int().positive(),
   metric: z.string(),
@@ -422,6 +424,19 @@ export const verificationSchema = z.object({
   note: z.string().optional(),
 });
 export type Verification = z.infer<typeof verificationSchema>;
+
+// The uptime check behind an incident it opened, and how its episode is
+// going: failing checks so far, the latest, and when a run of healthy ones
+// confirmed recovery while the investigation was still running (it
+// resolves once there is a report).
+export const uptimeEpisodeSchema = z.object({
+  checkId: z.string(),
+  rule: z.enum(["slow", "down"]),
+  failedChecks: z.number().int().nonnegative(),
+  lastFailedAt: timestamp.optional(),
+  recoveredAt: timestamp.optional(),
+});
+export type UptimeEpisode = z.infer<typeof uptimeEpisodeSchema>;
 
 export const incidentSchema = z.object({
   id: z.string(),
@@ -473,6 +488,8 @@ export const incidentSchema = z.object({
   resolvedAt: timestamp.optional(),
   // Every reopening, oldest first.
   reopenings: z.array(reopeningSchema).optional(),
+  // The uptime check that opened it. Missing on every other incident.
+  uptime: uptimeEpisodeSchema.optional(),
 });
 export type Incident =z.infer<typeof incidentSchema>;
 

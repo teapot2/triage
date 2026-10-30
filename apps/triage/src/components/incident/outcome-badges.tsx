@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { formatDuration } from "./format";
+import { lowerIsWorse } from "./metric-labels";
 
 type Tone = "success" | "warning" | "info" | "destructive" | "secondary";
 
@@ -34,12 +35,24 @@ const metricValue = (n: number, unit: string) =>
   unit === "ratio" ? `${Math.round(n * 100)}%` : `${Math.round(n)} ${unit}`;
 
 // An alert's measured value against its limit, as a pair like the test
-// results: the value red when over the limit (green when within it), then
-// the limit itself, quiet.
-export function MetricBadges({ observed, threshold, unit }: { observed: number; threshold: number; unit: string }) {
+// results: the value red when past the limit (over it, or under it for a
+// metric where less is worse) and green when within it, then the limit
+// itself, quiet.
+export function MetricBadges({
+  metric,
+  observed,
+  threshold,
+  unit,
+}: {
+  metric?: string;
+  observed: number;
+  threshold: number;
+  unit: string;
+}) {
+  const past = metric && lowerIsWorse(metric) ? observed < threshold : observed > threshold;
   return (
     <span className="inline-flex items-center gap-1.5">
-      <Badge variant={observed > threshold ? "destructive" : "success"} className="tabular-nums">
+      <Badge variant={past ? "destructive" : "success"} className="tabular-nums">
         {metricValue(observed, unit)}
       </Badge>
       <Badge variant="secondary" className="font-normal tabular-nums">

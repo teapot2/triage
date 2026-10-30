@@ -54,6 +54,14 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
   const metricList = description.metrics
     .map((m) => `- ${m.name} [${m.service}, ${m.unit}]: ${m.description}`)
     .join("\n");
+  // An endpoint Triage only checks from outside has none of these behind
+  // it; one line says so instead of an empty result that reads like
+  // "nothing wrong in the database".
+  const external = description.external;
+  const notConnected = (what: string): ToolRun => ({
+    summary: `No ${what} connected: ${external!.url} is an external endpoint, known only from Triage's own checks`,
+    evidence: [],
+  });
 
   // Wraps a tool body so every call is a recorded step with evidence IDs,
   // and the model only ever sees compact, ID-tagged results.
@@ -171,6 +179,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         "Inspect Postgres: 'activity' (pg_stat_activity: connection states and how long), 'locks' (blocked sessions), 'slow_queries' (pg_stat_statements by total time).",
       inputSchema: z.object({ check: z.enum(["activity", "locks", "slow_queries"]) }),
       execute: recorded("db_diagnostics", async ({ check }) => {
+        if (external) return notConnected("database");
         const result = await source.dbDiagnostics(check);
         const summary =
           result.rows.length === 0 ? `${check}: no rows` : `${check}: ${result.rows.length} rows`;
@@ -190,6 +199,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         endLine: z.number().int().min(1).optional(),
       }),
       execute: recorded("read_source", async ({ path, startLine = 1, endLine }) => {
+        if (external) return notConnected("source code");
         const file = await source.readSource(path);
         if (!file) {
           const files = await source.listSourceFiles();
@@ -214,6 +224,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         limit: z.number().int().min(1).max(20).optional(),
       }),
       execute: recorded("git_log", async ({ path, limit = 10 }) => {
+        if (external) return notConnected("git history");
         const commits = await source.gitLog({ path, limit });
         const evidence: EvidenceDraft[] = commits.map((c) => ({
           kind: "commit",
@@ -239,6 +250,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         sinceMinutes: z.number().int().min(1).max(60 * 24 * 7).optional().describe("Default 1440 (24 h)"),
       }),
       execute: recorded("deploy_history", async ({ service, sinceMinutes = 1440 }) => {
+        if (external) return notConnected("deploy history");
         const [deploys, commits] = await Promise.all([
           source.deployHistory({ service, sinceMinutes }),
           source.gitLog({ limit: 50 }),

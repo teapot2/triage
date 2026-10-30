@@ -8,6 +8,21 @@ import type { TelemetrySource } from "./source";
 
 export const cite = (c: Claim) => `${c.text} [${c.evidenceIds.join(", ")}]`;
 
+// The paragraph the investigation's prompt gains when an uptime check
+// opened the incident (uptime/source.ts): what its results are and, for an
+// endpoint with nothing else connected, that saying what is missing beats
+// guessing a cause. Empty for every other source.
+export function uptimeNote(source: TelemetrySource): string {
+  const d = source.describe();
+  if (!d.id.startsWith("uptime:")) return "";
+  const intro =
+    "This incident came from Triage's own external HTTP check of the endpoint: the uptime.* metrics, error logs of the failed checks and one span per check are its results.";
+  if (!d.external) {
+    return `${intro} The application's own telemetry is listed too; use both to find why the endpoint failed.`;
+  }
+  return `${intro} Nothing but the check results is available: no application logs, traces, database, source code or deploy history are connected. When the results alone cannot say why it failed, an inconclusive verdict naming what is missing (application logs, traces, a deploy history) is the right answer; do not guess a cause. Either way, the report must say what the results show: when it started, how it failed (timeouts, which statuses), and whether it is intermittent.`;
+}
+
 export function incidentBlock(incident: Incident, source: TelemetrySource | undefined): string {
   const { trigger, report } = incident;
   const lines = [

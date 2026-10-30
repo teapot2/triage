@@ -1,4 +1,4 @@
-import { metricLabel } from "@/components/incident/metric-labels";
+import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import type { Approval, FixRun, Incident, Reopening } from "../schema";
 
 // The postmortem's timeline and headline durations, built from the
@@ -14,19 +14,26 @@ export function withUnit(value: number | string, unit: string): string {
   return unit === "%" || unit === "" ? `${value}${unit}` : `${value} ${unit}`;
 }
 
+// Whether a value of the alert's metric breaches its threshold: at or over
+// it, or under it for a metric where less is worse (availability).
+export function breaches({ trigger }: Incident): (value: number) => boolean {
+  return lowerIsWorse(trigger.metric) ? (v) => v < trigger.threshold : (v) => v >= trigger.threshold;
+}
+
 // Where the episode that fired the alert began: the first point of the last
-// run at or above the threshold, at or before the alert, so an earlier
+// run breaching the threshold, at or before the alert, so an earlier
 // episode still in the series doesn't count. One healthy bucket between
-// two over the threshold doesn't end a run. With no breach by the alert,
-// the first one after it.
+// two breaching ones doesn't end a run. With no breach by the alert, the
+// first one after it.
 export function firstBreach(incident: Incident): string | undefined {
-  const { series, threshold } = incident.trigger;
-  const over = (i: number) => series[i].value >= threshold;
+  const { series } = incident.trigger;
+  const breach = breaches(incident);
+  const over = (i: number) => breach(series[i].value);
   const detected = Date.parse(incident.detectedAt);
   let i = series.findLastIndex((p) => Date.parse(p.t) <= detected);
   if (i < 0) i = series.length - 1;
   while (i >= 0 && !over(i)) i--;
-  if (i < 0) return series.find((p) => Date.parse(p.t) > detected && p.value >= threshold)?.t;
+  if (i < 0) return series.find((p) => Date.parse(p.t) > detected && breach(p.value))?.t;
   let start = i;
   for (let j = i - 1; j >= 0; j--) {
     if (over(j)) start = j;
@@ -86,7 +93,8 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
     if (at) events.push({ at, event });
   };
 
-  add(firstBreach(incident), `${label} crossed ${withUnit(trigger.threshold, trigger.unit)}`);
+  const crossed = lowerIsWorse(trigger.metric) ? "fell below" : "crossed";
+  add(firstBreach(incident), `${label} ${crossed} ${withUnit(trigger.threshold, trigger.unit)}`);
   add(
     incident.detectedAt,
     `Alert fired; incident opened by ${incident.openedBy === "watch" ? "Triage's watch" : "a person"}`,
@@ -131,7 +139,10 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
   for (const q of incident.questions ?? []) add(q.askedAt, `Question asked: ${q.text}`);
 
   const { verification } = incident;
-  if (verification) {
+  // An uptime check's recovery is a run of healthy checks, not a window.
+  if (verification?.after === "uptime") {
+    add(verification.startedAt, `Endpoint answering in time again; ${verification.series.length} checks in a row confirmed it`);
+  } else if (verification) {
     add(
       verification.startedAt,
       `Verification started: watching ${metricLabel(verification.metric)} for ${verification.windowMinutes} min`,

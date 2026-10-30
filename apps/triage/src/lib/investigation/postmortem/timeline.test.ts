@@ -200,6 +200,37 @@ describe("durations", () => {
     assert.equal(resolve(mitigated()), undefined);
   });
 
+  it("reads an uptime check's availability as breached under its limit, not over", () => {
+    const incident = resolved();
+    incident.trigger = {
+      ...incident.trigger,
+      metric: "uptime.availability{check=chk_abc123}",
+      unit: "%",
+      threshold: 100,
+      series: [100, 100, 50, 0, 0, 0].map((value, i) => ({ t: at(i), value })),
+    };
+    incident.detectedAt = at(5);
+    assert.equal(firstBreach(incident), at(2));
+    const events = postmortemTimeline(incident);
+    assert.deepEqual(events[0], { at: at(2), event: "Availability fell below 100%" });
+
+    incident.verification = {
+      after: "uptime",
+      since: at(12),
+      windowMinutes: 1,
+      metric: incident.trigger.metric,
+      threshold: 100,
+      series: [at(12), at(12.5), at(13)].map((t) => ({ t, value: 100 })),
+      status: "resolved",
+      startedAt: at(12),
+    };
+    assert.ok(
+      postmortemTimeline(incident).some(
+        (e) => e.at === at(12) && e.event === "Endpoint answering in time again; 3 checks in a row confirmed it",
+      ),
+    );
+  });
+
   it("leaves out spans with a missing or reversed end", () => {
     const incident = poolLeak();
     incident.trigger.series = incident.trigger.series.map((p) => ({ ...p, value: 0 }));

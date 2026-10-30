@@ -196,7 +196,7 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
           )}
           <span className="text-muted-foreground">
             {" "}
-            · {quiet} min under the limit
+            · {v.after === "uptime" ? `${v.series.length} checks in a row answered in time` : `${quiet} min under the limit`}
           </span>
         </span>
       </p>
@@ -231,6 +231,7 @@ const verifiedAfter: Record<Verification["after"], string> = {
   mitigation: "after the mitigation",
   fix: "after the merged fix",
   manual: "asked for by a person",
+  uptime: "by the endpoint's own checks",
 };
 
 // The verification on its own, where the mitigation card would be: after a
@@ -248,7 +249,8 @@ export function VerificationCard({
     <div className={cn("flex flex-col gap-2 rounded-lg border p-4", className)}>
       <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
         <ShieldCheckIcon className="size-3.5" />
-        Verification · {verifiedAfter[verification.after]} · {verification.windowMinutes} min quiet window
+        Verification · {verifiedAfter[verification.after]} ·{" "}
+        {verification.after === "uptime" ? `${verification.series.length} healthy checks` : `${verification.windowMinutes} min quiet window`}
       </span>
       <VerificationLine incident={incident} verification={verification} />
     </div>

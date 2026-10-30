@@ -1,8 +1,8 @@
-import { metricLabel } from "@/components/incident/metric-labels";
+import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder } from "../citations";
 import type { Claim, Evidence, Incident, PostmortemActionItem } from "../schema";
 import { type BuiltInSection, defaultTemplate, type TemplateSection } from "./template";
-import { durations, firstBreach, postmortemTimeline, withUnit } from "./timeline";
+import { breaches, durations, firstBreach, postmortemTimeline, withUnit } from "./timeline";
 
 // The blameless postmortem as one Markdown document: the header, the
 // sections of the template the postmortem was written with (the default for
@@ -118,33 +118,37 @@ function summary(incident: Incident): string {
   return `## Summary\n\n${incident.postmortem?.summary?.trim() || "Not written yet."}`;
 }
 
-// How long the alert's metric stayed over the threshold: from the first
+// How long the alert's metric stayed past the threshold: from the first
 // breach to the recovery, else to the end of the last breaching bucket.
-// `ongoing` when the series ends still over it, so it lasted at least that.
+// `ongoing` when the series ends still past it, so it lasted at least that.
 export function timeOverThreshold(incident: Incident): { ms: number; ongoing: boolean } | undefined {
-  const { series, threshold } = incident.trigger;
+  const { series } = incident.trigger;
+  const breach = breaches(incident);
   const start = firstBreach(incident);
   if (!start) return undefined;
   const recoveredAt = incident.mitigation?.recovery?.recoveredAt;
   if (recoveredAt) return { ms: Math.max(0, Date.parse(recoveredAt) - Date.parse(start)), ongoing: false };
   const bucket = series.length > 1 ? Date.parse(series[1].t) - Date.parse(series[0].t) : 60_000;
-  const lastOver = series.findLast((p) => p.value >= threshold)!;
-  const ongoing = (series.at(-1)?.value ?? 0) >= threshold;
+  const lastOver = series.findLast((p) => breach(p.value))!;
+  const ongoing = series.length > 0 && breach(series.at(-1)!.value);
   return { ms: Date.parse(lastOver.t) + bucket - Date.parse(start), ongoing };
 }
 
 function impact(incident: Incident, notes: Footnotes): string {
   const { trigger } = incident;
   const label = metricLabel(trigger.metric);
-  const peak = trigger.series.length ? Math.max(...trigger.series.map((p) => p.value)) : trigger.observed;
+  // The worst point: the highest, or the lowest where less is worse.
+  const low = lowerIsWorse(trigger.metric);
+  const values = trigger.series.map((p) => p.value);
+  const worst = values.length ? (low ? Math.min(...values) : Math.max(...values)) : trigger.observed;
   const items = [
-    `Peak ${label}: ${withUnit(num(peak), trigger.unit)}, against a threshold of ${withUnit(num(trigger.threshold), trigger.unit)}.`,
+    `${low ? "Lowest" : "Peak"} ${label}: ${withUnit(num(worst), trigger.unit)}, against a threshold of ${withUnit(num(trigger.threshold), trigger.unit)}.`,
   ];
   const over = timeOverThreshold(incident);
   const start = firstBreach(incident);
   if (over && start) {
     items.push(
-      `Over the threshold for ${over.ongoing ? "at least " : ""}${formatMinutes(over.ms)}, from ${time(start)} UTC.`,
+      `${low ? "Under" : "Over"} the threshold for ${over.ongoing ? "at least " : ""}${formatMinutes(over.ms)}, from ${time(start)} UTC.`,
     );
   }
   const baseline = incident.evidence.find((e) => e.kind === "metric" && e.metric === trigger.metric);

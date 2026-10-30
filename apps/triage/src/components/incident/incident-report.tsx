@@ -18,11 +18,12 @@ import type { ChartPoint, Incident } from "@/lib/investigation/schema";
 import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
+import { EndpointCard } from "./endpoint-card";
 import { FailedRunNotice } from "./failed-run-notice";
 import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { type ChartMarker, MetricChart } from "./metric-chart";
-import { metricLabel } from "./metric-labels";
+import { lowerIsWorse, metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
 import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
@@ -173,6 +174,8 @@ export function IncidentReport({
           </div>
         )}
 
+        <EndpointCard incident={incident} />
+
         {/* The alert, as a card like the verdict and fix above it: what fired
             on the left, how far past its limit on the right. */}
         <div className="flex flex-col gap-3 rounded-lg border p-4">
@@ -181,13 +184,14 @@ export function IncidentReport({
               <ChartLineIcon className="size-3.5" />
               {metricLabel(trigger.metric)}
             </span>
-            <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
+            <MetricBadges metric={trigger.metric} observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
           </div>
           <MetricChart
             series={chartSeries(incident, markers)}
             label={metricLabel(trigger.metric)}
             unit={trigger.unit}
             threshold={trigger.threshold}
+            lowerIsWorse={lowerIsWorse(trigger.metric)}
             markers={markers}
           />
         </div>

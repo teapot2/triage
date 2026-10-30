@@ -7,6 +7,7 @@ import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
 import { proposeMitigation } from "./mitigation/propose";
 import { readTelemetry, RETENTION_MS } from "./live/otlp-files";
+import { uptimeNote } from "./context";
 import { InvestigationRecorder, type ThoughtRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
@@ -49,12 +50,13 @@ function prompt(incident: Incident, source: TelemetrySource): string {
     .map((s) => `${s.name}${s.dependsOn.length ? ` -> ${s.dependsOn.join(", ")}` : ""}`)
     .join("; ");
   const rule = incident.trigger.rule;
+  const note = uptimeNote(source);
   return `Alert: ${incident.title}
 Service: ${incident.service}
 Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}
 Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
 Dependency path: ${services}
-
+${note ? `\n${note}\n` : ""}
 Investigate and submit your report.`;
 }
 
@@ -171,7 +173,9 @@ export async function createRuleIncident(
   });
 }
 
-async function saveNewIncident(
+// Saves a new incident charting `alert`, ready for runInvestigation. Shared
+// by every way one opens, uptime/incident.ts included.
+export async function saveNewIncident(
   source: TelemetrySource,
   alert: MetricSeries,
   a: {
@@ -185,6 +189,7 @@ async function saveNewIncident(
     rule?: Incident["trigger"]["rule"];
     route?: string;
     focus?: Incident["trigger"]["focus"];
+    uptime?: Incident["uptime"];
   },
 ): Promise<Incident> {
   const stage = await stageModel("investigate");
@@ -209,6 +214,7 @@ async function saveNewIncident(
     steps: [],
     evidence: [],
     run: { source: source.describe().id, provider: stage.provider, model: stage.model, startedAt: new Date().toISOString() },
+    uptime: a.uptime,
   };
   await saveIncident(incident);
   return incident;

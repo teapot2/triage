@@ -49,6 +49,7 @@ export function MetricChart({
   label,
   unit,
   threshold,
+  lowerIsWorse = false,
   markers = [],
   compact = false,
   onHover,
@@ -60,6 +61,8 @@ export function MetricChart({
   label: string;
   unit: string;
   threshold?: number;
+  // Past the limit is under it, as for availability.
+  lowerIsWorse?: boolean;
   // Events to mark on the time axis, such as the deploy behind the incident.
   markers?: ChartMarker[];
   // Sparkline: no axes, grid, labels or tooltip; pair it with onHover to show
@@ -112,8 +115,17 @@ export function MetricChart({
     if (max <= low) return 1;
     return Math.min(1, Math.max(0, (max - threshold) / (max - low)));
   };
-  const strokeSplit = split(min);
-  const fillSplit = split(0);
+  // Under the limit, where less is worse: red from just below it down. The
+  // margin keeps a line sitting on the limit (100 % available) unred.
+  const under = () => {
+    if (threshold === undefined || threshold <= min) return 1;
+    if (max <= min) return 0;
+    return Math.min(1, (max - threshold) / (max - min) + 0.02);
+  };
+  const strokeSplit = lowerIsWorse ? under() : split(min);
+  // The area under a line that dropped isn't what breached, so it stays plain.
+  const fillSplit = lowerIsWorse ? 0 : split(0);
+  const [above, below] = lowerIsWorse ? ["var(--color-value)", "var(--destructive)"] : ["var(--destructive)", "var(--color-value)"];
 
   return (
     <ChartContainer config={config} className={cn("aspect-auto h-40 w-full", className)}>
@@ -135,10 +147,10 @@ export function MetricChart({
       >
         <defs>
           <linearGradient id={strokeId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset={0} stopColor="var(--destructive)" />
-            <stop offset={strokeSplit} stopColor="var(--destructive)" />
-            <stop offset={strokeSplit} stopColor="var(--color-value)" />
-            <stop offset={1} stopColor="var(--color-value)" />
+            <stop offset={0} stopColor={above} />
+            <stop offset={strokeSplit} stopColor={above} />
+            <stop offset={strokeSplit} stopColor={below} />
+            <stop offset={1} stopColor={below} />
           </linearGradient>
           <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
             <stop offset={0} stopColor="var(--destructive)" stopOpacity={0.3} />

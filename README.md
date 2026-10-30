@@ -22,6 +22,10 @@ Triage runs on http://localhost:3000, Shopfront on http://localhost:3001.
 
 Each app owns its env file; commit only `.env.example` templates. Infrastructure uses `infra/docker-compose.yml`, not a root `.env`.
 
+## Endpoint checks
+
+Watch also checks public URLs from the outside, so a site with no SDK or telemetry connected still gets an incident: three slow responses in a row, or no acceptable response for five minutes, open one incident, confirmed recovery resolves it, and Slack hears at both ends. A check on Shopfront itself investigates with Shopfront's telemetry too, so the whole pipeline runs from an outside probe; a check on anything else reports what the results show and names what is missing. Private and loopback targets are refused (`TRIAGE_UPTIME_ALLOW_PRIVATE=1` allows them in development); see `apps/triage/README.md`.
+
 ## Mitigate first
 
 After a root-cause verdict, Triage proposes one mitigation from the evidence the diagnosis cites: turn off the cited feature flag, or roll back the cited deploy (proposed only: Shopfront has no deploy pipeline to run it against). Once a person approves it, Triage applies it through Shopfront's ops API (on in development; `OPS_ENABLED=1` in a production build; `SHOPFRONT_URL` if the store runs elsewhere) and re-reads the alert's metric until it recovers. Turning the flag off stops new leaks but frees none of the pooled connections the leak already holds, so the flag-off also recycles them. The tested patch still follows as the permanent fix.

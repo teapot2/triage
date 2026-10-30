@@ -44,9 +44,12 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
   const mitigated = mitigation?.state === "applied";
   const recovered = mitigated && mitigation.recovery?.status === "recovered";
   // Once recovered or being verified, the value now rather than the one
-  // that fired the alert.
+  // that fired the alert. A verification that resolved the incident speaks
+  // for it only while it stays resolved: reopened, the alert's value is
+  // the one that stands again.
+  const verified = verification && (verification.status !== "resolved" || incident.status === "resolved");
   const observed =
-    verification?.series.at(-1)?.value ??
+    (verified ? verification.series.at(-1)?.value : undefined) ??
     (recovered ? mitigation.recovery?.series.at(-1)?.value : undefined) ??
     trigger.observed;
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
@@ -178,7 +181,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             <IncidentStatusBadge status={incident.status} />
             <SeverityBadge severity={incident.severity} />
             <ProgressBadge incident={incident} mitigated={mitigated} recovered={recovered} />
-            <MetricBadges observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
+            <MetricBadges metric={trigger.metric} observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
             {/* The dots only separate items on one line; on phones the line
                 wraps and they'd dangle at line ends, so spacing does it. */}
             <span className="sm:ml-1">{incident.service}</span>

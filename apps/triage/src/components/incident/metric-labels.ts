@@ -13,7 +13,14 @@ const known: Record<string, string> = {
   "db.client.connection.pending_requests": "Requests waiting for a DB connection",
   "postgresql.backends": "Postgres backends",
   "postgresql.cpu.utilization": "Postgres CPU",
+  // An uptime check's results; the {check=…} label is an id, left off.
+  "uptime.response_time": "Response time",
+  "uptime.availability": "Availability",
 };
+
+// Metrics where less is worse, so an alert on one is under its limit, not
+// over it: an uptime check's availability.
+export const lowerIsWorse = (metric: string) => metric.startsWith("uptime.availability");
 
 export function metricLabel(metric: string): string {
   const parts = metric.match(/^([^{]+)(?:\{(.*)\})?$/);

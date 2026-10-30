@@ -4,6 +4,7 @@ import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
 import { incidentToReopen, isOpen } from "./reopen";
 import { listIncidents, patchIncident } from "./store";
+import { type EndpointState, startUptime, stopUptime, uptimeState } from "./uptime";
 import { reopened } from "./verify";
 import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
 import { describeRule, readRules, type WatchRule } from "./watch-rules";
@@ -53,9 +54,11 @@ export type WatchState = {
   // opening one.
   lastOpened?: { incidentId: string; at: string; rule: string; title?: string; reopened?: boolean };
   error?: string;
+  // The uptime checks (see uptime), which start and pause with the watch.
+  endpoints: EndpointState[];
 };
 
-type Internal = Omit<WatchState, "rules"> & {
+type Internal = Omit<WatchState, "rules" | "endpoints"> & {
   version: number;
   timer?: ReturnType<typeof setInterval>;
   checking: boolean;
@@ -96,7 +99,7 @@ g.triageWatchCheck = check;
 export function watchState(): WatchState {
   const { enabled, status, lastCheck, lastOpened, error } = state;
   const rules = enabled ? state.rules : state.rules.map((r) => ({ ...r, status: "paused" as const, summary: undefined }));
-  return { enabled, status, rules, lastCheck, lastOpened, error };
+  return { enabled, status, rules, lastCheck, lastOpened, error, endpoints: uptimeState() };
 }
 
 export function startWatch() {
@@ -106,6 +109,7 @@ export function startWatch() {
   state.tripped.clear();
   state.timer = setInterval(() => void g.triageWatchCheck?.(), CHECK_MS);
   void check();
+  startUptime();
 }
 
 export function stopWatch() {
@@ -113,6 +117,7 @@ export function stopWatch() {
   Object.assign(state, { timer: undefined, enabled: false, status: "paused", healthy: 0 });
   state.streaks.clear();
   state.tripped.clear();
+  stopUptime();
 }
 
 // Checks now rather than at the next tick: after the rules change.

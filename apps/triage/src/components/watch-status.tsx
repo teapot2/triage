@@ -10,6 +10,7 @@ import { StatusBadgeDot, type StatusTone } from "@/components/ui/badge";
 import { SidebarMenuAction, SidebarMenuButton, useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
+import { type EndpointState, endpointWord, inTrouble } from "@/components/watch/endpoint-client";
 import type { RuleState, WatchState } from "@/lib/investigation/watch";
 import { cn } from "@/lib/utils";
 
@@ -25,16 +26,25 @@ const look: Record<WatchState["status"], { label: string; tone: StatusTone; puls
   paused: { label: "Watch paused", tone: "muted" },
 };
 
+type State = WatchState;
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+// Unavailable or an incident open first, then slow.
+const trouble = (e: EndpointState) => (e.status === "unavailable" ? 2 : 1) + (e.status === "alerting" ? 2 : 0);
+
 // The second line: what the last check saw, in as few words as fit.
-function reading(s: WatchState, now: number): string {
+function reading(s: State, now: number): string {
   if (!s.enabled) return "Not checking shopfront";
   if (s.error) return s.status === "alerting" ? "Couldn't open an incident" : "Last check failed";
   if (s.status === "alerting" && s.lastOpened) {
     const ago = formatAgo(s.lastOpened.at, now);
     return `${s.lastOpened.reopened ? "Reopened" : "Opened"} ${ago === "now" ? "just now" : `${ago} ago`} · ${s.lastOpened.rule}`;
   }
+  // An endpoint in trouble, when no rule is: "Google · slow, check 2 of 3".
+  const ruleTrouble = s.rules.some((r) => r.status === "breaching" || r.status === "alerting");
+  const endpoint = ruleTrouble ? undefined : s.endpoints?.filter(inTrouble).sort((a, b) => trouble(b) - trouble(a))[0];
+  if (endpoint) return `${endpoint.name} · ${endpoint.summary}`;
   const c = s.lastCheck;
   if (!c) return "Starting…";
   if (c.requests === 0) return "No requests in the last minute";
@@ -56,7 +66,7 @@ const ruleWord: Record<RuleState["status"], string> = {
 
 // The full story, for the row's tooltip: the last minute's traffic, then
 // each rule, what it checks and what it last saw.
-function Detail({ s, label }: { s: WatchState; label: string }) {
+function Detail({ s, label }: { s: State; label: string }) {
   const headline = !s.enabled
     ? "Triage isn't watching the live store."
     : s.error
@@ -80,6 +90,16 @@ function Detail({ s, label }: { s: WatchState; label: string }) {
           ))}
         </ul>
       )}
+      {s.enabled && s.endpoints && s.endpoints.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {s.endpoints.map((e) => (
+            <li key={e.id}>
+              <span className="font-medium">{e.name}</span>: {endpointWord(e)}
+              {e.summary && <>, {e.summary}</>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -93,7 +113,7 @@ function Detail({ s, label }: { s: WatchState; label: string }) {
 export function WatchStatus() {
   const router = useRouter();
   const { setOpenMobile, isMobile } = useSidebar();
-  const [state, setState] = useState<WatchState | null>(null);
+  const [state, setState] = useState<State | null>(null);
   // For "opened 2m ago". No state renders on the server, so its clock is
   // never read there.
   const now = useNow(0);
@@ -107,7 +127,7 @@ export function WatchStatus() {
       try {
         const res = await fetch("/api/watch", { cache: "no-store" });
         if (!res.ok || stopped) return;
-        const next = (await res.json()) as WatchState;
+        const next = (await res.json()) as State;
         setState(next);
         const last = next.lastOpened;
         const opened = last && `${last.incidentId} ${last.at}`;
@@ -147,7 +167,7 @@ export function WatchStatus() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled: !state.enabled }),
     }).catch(() => null);
-    if (res?.ok) setState((await res.json()) as WatchState);
+    if (res?.ok) setState((await res.json()) as State);
   }
 
   const status = state?.status ?? "paused";
