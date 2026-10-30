@@ -60,16 +60,12 @@ export function SpeechSettings() {
       <SettingsSectionHeader
         id="speech"
         title="Speech"
-        description="Reads answers aloud with this browser's own voices. Nothing leaves the browser."
       />
       <div className="divide-y rounded-lg border">
         <div className={rowClass}>
           <div className="flex flex-col gap-0.5">
             <span id="voice-label" className="font-medium text-sm">
               Voice
-            </span>
-            <span className="text-muted-foreground text-sm">
-              The browser&apos;s installed voices. More come with the operating system&apos;s language packs.
             </span>
           </div>
           {supported ? (
@@ -98,7 +94,6 @@ export function SpeechSettings() {
             <span id="speed-label" className="font-medium text-sm">
               Speed
             </span>
-            <span className="text-muted-foreground text-sm">How fast answers are read.</span>
           </div>
           <SegmentedControl
             value={String(preferences.rate)}
@@ -110,7 +105,6 @@ export function SpeechSettings() {
         <div className={rowClass}>
           <div className="flex flex-col gap-0.5">
             <span className="font-medium text-sm">Preview</span>
-            <span className="text-muted-foreground text-sm">Hear the current voice and speed.</span>
             {previewError && <span className="text-destructive text-xs">{previewError}</span>}
           </div>
           <Button variant="outline" size="sm" disabled={!available} onClick={() => toggle(PREVIEW_KEY, PREVIEW_TEXT)}>

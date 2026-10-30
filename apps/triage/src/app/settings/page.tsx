@@ -33,9 +33,6 @@ export default function SettingsPage() {
               <span id="color-theme-label" className="font-medium text-sm">
                 Theme
               </span>
-              <span className="text-muted-foreground text-sm">
-                Colors from a popular editor or app, in its light or dark version to match the mode.
-              </span>
             </div>
             <ColorThemeSelect aria-labelledby="color-theme-label" />
           </div>
