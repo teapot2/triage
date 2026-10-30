@@ -1,28 +1,18 @@
 import { metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder } from "../citations";
 import type { Claim, Evidence, Incident, PostmortemActionItem } from "../schema";
+import { type BuiltInSection, defaultTemplate, type TemplateSection } from "./template";
 import { durations, firstBreach, postmortemTimeline, withUnit } from "./timeline";
 
-// The blameless postmortem as one Markdown document. The judgment (summary,
-// impact, factors, lessons, action items) comes from `incident.postmortem`;
-// everything else is rendered from the incident itself. Pure, so the
-// incident page builds it in the browser for Copy and Download.
+// The blameless postmortem as one Markdown document: the header, the
+// sections of the template the postmortem was written with (the default for
+// records from before templates), then the Evidence appendix. The judgment
+// (summary, impact, factors, lessons, action items, custom sections) comes
+// from `incident.postmortem`; everything else is rendered from the incident
+// itself. Pure, so the incident page builds it in the browser for Copy and
+// Download.
 //
 // Blameless: no commit author, no approver, only what happened and why.
-
-// The sections, in order. A saved template is this list as data.
-export const defaultTemplate = [
-  "header",
-  "summary",
-  "impact",
-  "timeline",
-  "factors",
-  "lessons",
-  "lucky",
-  "actions",
-  "evidence",
-] as const;
-export type PostmortemSection = (typeof defaultTemplate)[number];
 
 // Where the incident stands, in words: the most specific that holds.
 export function statusInWords(incident: Incident): string {
@@ -285,13 +275,18 @@ function evidence(incident: Incident, notes: Footnotes): string {
   return `## Evidence\n\n${lines.length ? lines.join("\n") : "_Nothing cited._"}`;
 }
 
-export function postmortemMarkdown(
-  incident: Incident,
-  template: readonly PostmortemSection[] = defaultTemplate,
-): string {
+// A section the template's author named: the model's text for it.
+function customSection(incident: Incident, section: Extract<TemplateSection, { kind: "custom" }>, notes: Footnotes): string {
+  const written = incident.postmortem?.custom?.find((c) => c.id === section.id);
+  const text = written?.text.trim();
+  const markers = text ? notes.markers(written?.evidenceIds) : "";
+  return `## ${section.name}\n\n${text ? (markers ? `${text} ${markers}` : text) : "_Not written yet._"}`;
+}
+
+export function postmortemMarkdown(incident: Incident): string {
   const notes = new Footnotes(footnoteNumbers(incident));
-  const render: Record<Exclude<PostmortemSection, "evidence">, () => string> = {
-    header: () => header(incident),
+  const template = incident.postmortem?.template ?? defaultTemplate;
+  const builtIn: Record<BuiltInSection, () => string> = {
     summary: () => summary(incident),
     impact: () => impact(incident, notes),
     timeline: () => timeline(incident),
@@ -300,10 +295,8 @@ export function postmortemMarkdown(
     lucky: () => lucky(incident),
     actions: () => actions(incident, notes),
   };
-  // Every other section first, so the appendix knows which footnotes they used.
-  const sections = new Map<PostmortemSection, string>();
-  for (const key of template) if (key !== "evidence") sections.set(key, render[key]());
-  if (template.includes("evidence")) sections.set("evidence", evidence(incident, notes));
-  const body = template.map((key) => sections.get(key)!).join("\n\n");
+  // The sections first, so the appendix knows which footnotes they used.
+  const sections = template.sections.map((s) => (s.kind === "builtin" ? builtIn[s.key]() : customSection(incident, s, notes)));
+  const body = [header(incident), ...sections, evidence(incident, notes)].join("\n\n");
   return `${body}\n\n---\n\nWritten by Triage from incident \`${incident.id}\`. A draft until the team has read it.\n`;
 }

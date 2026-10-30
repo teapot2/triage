@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { citationOrder } from "../citations";
 import type { Evidence, Incident } from "../schema";
-import { defaultTemplate, footnoteNumbers, postmortemMarkdown, statusInWords } from "./render";
+import { footnoteNumbers, postmortemMarkdown, statusInWords } from "./render";
+import { type BuiltInSection, builtInSections, type Template } from "./template";
 import { mitigated, poolLeak, reopened, resolved } from "./test-incidents";
 
-const headings: Record<(typeof defaultTemplate)[number], string> = {
+const headings: Record<BuiltInSection | "header" | "evidence", string> = {
   header: "# Postmortem: ",
   summary: "## Summary",
   impact: "## Impact",
@@ -16,6 +17,45 @@ const headings: Record<(typeof defaultTemplate)[number], string> = {
   actions: "## Action items",
   evidence: "## Evidence",
 };
+
+// Lucky dropped, Action items above Lessons, and a section of the team's own.
+const teamTemplate: Template = {
+  sections: [
+    { kind: "builtin", key: "summary" },
+    { kind: "builtin", key: "impact" },
+    { kind: "builtin", key: "timeline" },
+    { kind: "builtin", key: "factors" },
+    { kind: "builtin", key: "actions" },
+    {
+      kind: "custom",
+      id: "customer-communication",
+      name: "Customer communication",
+      instructions: "Who was told what and when, from the record; say if nothing was recorded",
+    },
+    { kind: "builtin", key: "lessons" },
+  ],
+};
+
+function withTemplate(template: Template, custom = true): Incident {
+  const incident = poolLeak();
+  incident.postmortem = {
+    ...incident.postmortem!,
+    template,
+    custom: custom
+      ? [
+          {
+            id: "customer-communication",
+            name: "Customer communication",
+            text: "The status page was updated at 02:12 UTC; no customer message is recorded.",
+            evidenceIds: ["ev_log_timeout", "ev_metric_p95"],
+          },
+        ]
+      : undefined,
+  };
+  return incident;
+}
+
+const headingsOf = (md: string) => [...md.matchAll(/^#{1,2} .*$/gm)].map((m) => m[0]);
 
 const section = (md: string, heading: string) => md.slice(md.indexOf(heading)).split(/\n## /)[0];
 
@@ -52,19 +92,71 @@ function withQuestion(incident: Incident): Incident {
 }
 
 describe("postmortemMarkdown", () => {
-  it("renders the sections in defaultTemplate order", () => {
+  it("renders the default sections in order, between the header and the appendix", () => {
     const md = postmortemMarkdown(poolLeak());
-    const positions = defaultTemplate.map((key) => md.indexOf(headings[key]));
+    const keys = ["header", ...builtInSections, "evidence"] as const;
+    const positions = keys.map((key) => md.indexOf(headings[key]));
     assert.ok(positions.every((p) => p >= 0), `missing a section: ${positions}`);
     assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
     assert.ok(md.trimEnd().endsWith("A draft until the team has read it."));
   });
 
-  it("follows a custom template", () => {
-    const md = postmortemMarkdown(poolLeak(), ["header", "actions", "summary"]);
-    assert.ok(md.indexOf("## Action items") < md.indexOf("## Summary"));
-    assert.ok(!md.includes("## Timeline"));
-    assert.ok(!md.includes("## Evidence"));
+  it("renders an old record, without a template, as the default", () => {
+    const old = poolLeak();
+    assert.equal(old.postmortem!.template, undefined);
+    const saved = withTemplate({ sections: builtInSections.map((key) => ({ kind: "builtin" as const, key })) }, false);
+    assert.equal(postmortemMarkdown(old), postmortemMarkdown(saved));
+  });
+
+  it("follows the record's template: dropped, moved and custom sections", () => {
+    const md = postmortemMarkdown(withTemplate(teamTemplate));
+    assert.deepEqual(
+      headingsOf(md).map((h) => h.replace(/^# Postmortem: .*/, "# Postmortem")),
+      [
+        "# Postmortem",
+        "## Summary",
+        "## Impact",
+        "## Timeline",
+        "## Contributing factors",
+        "## Action items",
+        "## Customer communication",
+        "## Lessons",
+        "## Evidence",
+      ],
+    );
+    assert.ok(!md.includes("## Where we got lucky"));
+  });
+
+  it("renders a custom section's text with footnote markers, listed in the appendix", () => {
+    const incident = withTemplate(teamTemplate);
+    const md = postmortemMarkdown(incident);
+    const numbers = footnoteNumbers(incident);
+    const markers = ["ev_log_timeout", "ev_metric_p95"]
+      .map((id) => numbers.get(id)!)
+      .sort((a, b) => a - b)
+      .map((n) => `[${n}]`)
+      .join("");
+    assert.ok(section(md, "## Customer communication").includes(`no customer message is recorded. ${markers}`));
+    for (const id of ["ev_log_timeout", "ev_metric_p95"]) {
+      assert.ok(section(md, "## Evidence").includes(`- [${numbers.get(id)}] `));
+    }
+  });
+
+  it("says a custom section is not written yet when the record has no text for it", () => {
+    const md = postmortemMarkdown(withTemplate(teamTemplate, false));
+    assert.equal(section(md, "## Customer communication").trim(), "## Customer communication\n\n_Not written yet._");
+  });
+
+  it("has no Contributing factors heading when the template dropped Factors", () => {
+    const template: Template = { sections: teamTemplate.sections.filter((s) => !(s.kind === "builtin" && s.key === "factors")) };
+    const md = postmortemMarkdown(withTemplate(template));
+    assert.ok(!md.includes("## Contributing factors"));
+    assert.ok(md.includes("## Summary"));
+  });
+
+  it("keeps the header and appendix when the template keeps one section", () => {
+    const md = postmortemMarkdown(withTemplate({ sections: [{ kind: "builtin", key: "actions" }] }, false));
+    assert.deepEqual(headingsOf(md).map((h) => h.slice(0, 11)), ["# Postmorte", "## Action i", "## Evidence"]);
   });
 
   it("has the status in words in the header, and not the commit author", () => {
