@@ -24,7 +24,7 @@ import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
-import { type Ask, QuestionsPanel, requestComposerFocus } from "./questions-panel";
+import { type Ask, QuestionsPanel } from "./questions-panel";
 
 type SectionId = "overview" | "fix" | "investigation" | "questions";
 
@@ -73,7 +73,7 @@ export function IncidentReport({
   const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
   if (report) {
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
-    sections.push({ id: "questions", label: "Ask Triage", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
+    sections.push({ id: "questions", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
 
   // The open section lives in the URL (?section=fix), so it can be linked
@@ -103,10 +103,6 @@ export function IncidentReport({
             report={report}
             unknownEvidenceIds={unknownEvidenceIds}
             className={arrive || undefined}
-            onAsk={() => {
-              setSelected("questions");
-              requestComposerFocus();
-            }}
           />
         ) : (
           running && (
@@ -211,9 +207,10 @@ export function IncidentReport({
                     <Icon className="size-4" />
                   )}
                   {s.label}
-                  {s.count !== undefined && (
+                  {/* None yet says nothing worth a "0". */}
+                  {s.count ? (
                     <span className="ml-auto pl-2 font-mono text-muted-foreground text-xs tabular-nums">{s.count}</span>
-                  )}
+                  ) : null}
                 </button>
               </li>
             );

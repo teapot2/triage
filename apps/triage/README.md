@@ -43,7 +43,7 @@ pnpm check:sandbox  # proves a known-good fix in the sandbox, no model calls
 
 ## Ask Triage
 
-Once an incident has a report, its **Questions** section (also "Ask a follow-up" on the verdict card and "Ask Triage" in the command palette) takes follow-up questions such as "Why was the cache ruled out?" or "Show me the slowest request", with suggestions built from the report.
+Once an incident has a report, its **Ask** section (also "Ask Triage" in the command palette) takes follow-up questions such as "Why was the cache ruled out?" or "Show me the slowest request", with suggestions built from the report.
 
 - **What it answers from:** the incident (alert, verdict, leading and ruled-out hypotheses, mitigation and fix state), its recorded evidence and the last 6 questions and answers. When the run's telemetry can be read again (`source-for.ts`: a recorded scenario, or the live Shopfront anchored at the alert), the agent also has the investigation's read-only tools, and their results become the question's own evidence (`ev_q<n>_…`). Every claim cites an evidence ID; cited IDs that don't exist are listed on `unknownIds` and struck in the answer instead of shown as chips.
 - **Evidence-only mode:** a bundled example (or any incident whose run can't be rebuilt) answers from the recorded evidence alone, with no tools (`mode: "evidence_only"`). The first question on a bundled example saves a copy of it to `.data/`.

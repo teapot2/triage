@@ -27,7 +27,7 @@ export async function readRules(): Promise<WatchRule[]> {
     return rulesSchema.parse(JSON.parse(text).rules);
   } catch (err) {
     const why = err instanceof z.ZodError ? z.prettifyError(err) : err instanceof Error ? err.message : String(err);
-    throw new Error(`apps/triage/.data/watch-rules.json isn't valid (${why}). Fix it, or delete it to use the default rules.`);
+    throw new Error(`${file} isn't valid (${why}). Fix it, or delete it to use the default rules.`);
   }
 }
 

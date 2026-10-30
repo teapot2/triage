@@ -6,10 +6,8 @@ import {
   CircleHelpIcon,
   CircleXIcon,
   CrosshairIcon,
-  MessageSquareTextIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { useCountUp } from "@/hooks/use-count-up";
@@ -73,13 +71,10 @@ export function VerdictCard({
   report,
   unknownEvidenceIds,
   className,
-  onAsk,
 }: {
   report: InvestigationReport;
   unknownEvidenceIds: string[];
   className?: string;
-  // Opens the Questions section, to ask Triage a follow-up on the verdict.
-  onAsk?: () => void;
 }) {
   const { verdict } = report;
   const leading =
@@ -141,12 +136,6 @@ export function VerdictCard({
           <div className="shrink-0 sm:pt-0.5">{aside}</div>
         </div>
         <p className="text-muted-foreground text-sm leading-relaxed">{body}</p>
-        {onAsk && (
-          <Button variant="outline" size="sm" className="mt-1 self-start" onClick={onAsk}>
-            <MessageSquareTextIcon />
-            Ask a follow-up
-          </Button>
-        )}
       </div>
 
       {hasReasoning && (

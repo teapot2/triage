@@ -427,7 +427,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
           </Alert>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           {isNew ? <span /> : <DeleteRule name={base.name} onConfirm={() => void remove()} disabled={saving} />}
           <div className="flex gap-2">
             <Button type="button" variant="ghost" onClick={cancel}>

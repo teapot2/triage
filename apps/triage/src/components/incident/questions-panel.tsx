@@ -12,6 +12,7 @@ import {
   CircleXIcon,
   CopyIcon,
   CornerDownLeftIcon,
+  EllipsisIcon,
   GitCommitHorizontalIcon,
   LoaderCircleIcon,
   type LucideIcon,
@@ -32,18 +33,18 @@ import {
   useState,
 } from "react";
 import { Timestamp } from "@/components/timestamp";
-import { TriageMark } from "@/components/triage-mark";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { askRefusal, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
-import { modelLabel } from "@/lib/models/labels";
+import { providerLabels } from "@/lib/models/labels";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
-import { formatDuration, formatTime } from "./format";
+import { formatDuration } from "./format";
 import { StepRow } from "./investigation-timeline";
 
 // Follow-up questions on a finished incident: the thread oldest first, then
@@ -92,11 +93,12 @@ export function useAskQuestion(incident: Incident): Ask {
 
   // The saved copy takes over once it has caught up: after the stream ends
   // it is final (the server saves before closing the stream), and after a
-  // broken stream it keeps growing through the page's refresh.
+  // broken stream it keeps growing through the page's refresh. Without an
+  // ID (the response lost its header) there's no copy to wait for.
   const saved = live?.id ? incident.questions?.find((q) => q.id === live.id) : undefined;
   useEffect(() => {
-    if (!live || !saved) return;
-    if (live.status === "failed" || (live.status === "done" && saved.status !== "answering")) {
+    if (!live || (live.status !== "done" && live.status !== "failed")) return;
+    if (!live.id || (saved && (live.status === "failed" || saved.status !== "answering"))) {
       setLive(undefined);
       busy.current = false;
     }
@@ -165,8 +167,8 @@ function composerRefusal(incident: Incident): string | undefined {
   return "Wait for the current question to finish";
 }
 
-// Whoever opens the Questions section to ask (the verdict card's button,
-// the palette) focuses the composer, which may still be mounting.
+// Whoever opens the Ask section to ask (the palette) focuses the
+// composer, which may still be mounting.
 const FOCUS_EVENT = "triage:focus-composer";
 let focusPending = false;
 
@@ -307,10 +309,10 @@ function liveView(live: LiveQuestion): QuestionView {
 export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask }) {
   const { live } = ask;
   // This tab's question is shown from its stream, not its saved copy; while
-  // the POST is in flight the copy has no ID here yet, so any answering one
-  // is it.
+  // the copy has no ID here (the POST is in flight, or the header was lost)
+  // any answering one is it.
   const saved = (incident.questions ?? []).filter(
-    (q) => !live || (q.id !== live.id && !(live.status === "posting" && q.status === "answering")),
+    (q) => !live || !(live.id ? q.id === live.id : q.status === "answering"),
   );
   const views = [...saved.map(savedView), ...(live ? [liveView(live)] : [])];
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -412,7 +414,9 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
         ref={endRef}
         className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:pb-0"
       >
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-6 h-6 bg-linear-to-t from-background" />
+        {/* Under what follows (-z-10), so it doesn't cut the top of their
+            focus rings; still over the conversation, as this row is z-10. */}
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-6 -z-10 h-6 bg-linear-to-t from-background" />
         {last?.status === "answered" && followUps.length > 0 && (
           <FollowUps suggestions={followUps} disabled={ask.refusal !== undefined} onPick={ask.send} />
         )}
@@ -592,8 +596,8 @@ const enterMotion = "animate-in fade-in-0 slide-in-from-bottom-1 duration-200 ea
 // One exchange in the conversation: the question as the person's message,
 // on the right; Triage's reply under it, on the left, without a bubble.
 // The work behind the reply (tool calls, thoughts) folds into one line
-// above it, open while it runs; its time, model and a copy button sit under
-// it, shown for the latest reply and on hover for earlier ones.
+// above it, open while it runs; a copy button and its details (model, time)
+// sit under it, shown for the latest reply and on hover for earlier ones.
 function ChatTurn({
   view,
   latest,
@@ -625,11 +629,6 @@ function ChatTurn({
       : thoughts > 0
         ? `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`
         : undefined;
-  const meta = [
-    view.model && modelLabel(view.model, view.provider),
-    view.mode === "evidence_only" && "from the recorded evidence",
-  ].filter(Boolean);
-
   const list = (
     <ol className="-mx-2 flex flex-col">
       {rows.map((row) =>
@@ -662,10 +661,7 @@ function ChatTurn({
       {rows.length > 0 ? "Working" : "Thinking"}
     </>
   ) : (
-    <>
-      <TriageMark className="size-3.5" />
-      {[view.status === "failed" ? "Stopped" : took ? `Worked for ${took}` : "Answered", folded].filter(Boolean).join(" · ")}
-    </>
+    [view.status === "failed" ? "Stopped" : took ? `Worked for ${took}` : "Answered", folded].filter(Boolean).join(" · ")
   );
 
   return (
@@ -712,21 +708,20 @@ function ChatTurn({
         {view.status === "answered" && (
           <div
             className={cn(
-              "-ml-2 flex min-w-0 items-center gap-2 text-muted-foreground text-xs transition-opacity",
+              "-ml-2 flex items-center gap-0.5 text-muted-foreground transition-opacity",
               // Under an earlier reply it floats in the gap before the next
               // question, so it takes no room while hidden. It stays shown
               // while one of its tooltips is open (the trigger's data-state
-              // is delayed-open or instant-open), since the pointer can move
-              // onto the tooltip and so off the turn.
+              // is delayed-open or instant-open) or its details are (the
+              // trigger's aria-expanded: the tooltip's data-state wins on a
+              // trigger that has both), since the pointer can move onto them
+              // and so off the turn.
               !latest &&
-                "absolute inset-x-0 top-full pt-1 opacity-0 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100 has-[[data-state$=open]]:opacity-100",
+                "absolute inset-x-0 top-full pt-1 opacity-0 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100 has-[[data-state$=open]]:opacity-100 has-[[aria-expanded=true]]:opacity-100",
             )}
           >
             <CopyAnswer answer={view.answer} />
-            <Timestamp date={view.askedAt} className="shrink-0">
-              {formatTime(view.askedAt)} UTC
-            </Timestamp>
-            {meta.length > 0 && <span className="truncate">· {meta.join(" · ")}</span>}
+            <ReplyDetails view={view} />
           </div>
         )}
       </div>
@@ -734,28 +729,68 @@ function ChatTurn({
   );
 }
 
-// Copies a reply as plain text, without its citations.
+// Copies a reply as plain text, without its citations. The clipboard is
+// missing outside a secure context (http on a LAN address) and a write can
+// be denied; either says so instead of throwing.
 function CopyAnswer({ answer }: { answer: string }) {
-  const [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<"copied" | "failed">();
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
+    if (!result) return;
+    const timer = setTimeout(() => setResult(undefined), 1500);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [result]);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(plainAnswer(answer));
+      setResult("copied");
+    } catch {
+      setResult("failed");
+    }
+  };
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Copy answer"
-          onClick={() => void navigator.clipboard.writeText(plainAnswer(answer)).then(() => setCopied(true))}
-        >
-          {copied ? <CheckIcon /> : <CopyIcon />}
+        <Button variant="ghost" size="icon-sm" aria-label="Copy answer" onClick={() => void copy()}>
+          {result === "copied" ? <CheckIcon /> : result === "failed" ? <CircleXIcon /> : <CopyIcon />}
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{copied ? "Copied" : "Copy answer"}</TooltipContent>
+      <TooltipContent>{result === "copied" ? "Copied" : result === "failed" ? "Couldn't copy" : "Copy answer"}</TooltipContent>
     </Tooltip>
+  );
+}
+
+// The reply's details behind a "⋯", so the row under it stays quiet: the
+// model that wrote it, where it read from, and when it was asked.
+function ReplyDetails({ view }: { view: QuestionView }) {
+  const rows: [string, ReactNode][] = [];
+  if (view.model) rows.push(["Model", view.model]);
+  if (view.provider) rows.push(["Provider", providerLabels[view.provider] ?? view.provider]);
+  if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
+  rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="Reply details">
+              <EllipsisIcon />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>Details</TooltipContent>
+      </Tooltip>
+      {/* Above, off the composer that sits under the latest reply. */}
+      <PopoverContent side="top" align="start" className="w-auto min-w-56 max-w-80 p-3">
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
+          {rows.map(([label, value]) => (
+            <div key={label} className="contents">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="truncate">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </PopoverContent>
+    </Popover>
   );
 }
 

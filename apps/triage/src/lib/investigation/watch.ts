@@ -152,6 +152,8 @@ async function check() {
         state.error = `Couldn't open an incident: ${err instanceof Error ? err.message : String(err)}`;
         return false;
       });
+      // Paused while it opened: the pause stands.
+      if (!state.enabled) return;
       if (opened) {
         for (const r of trips) state.tripped.add(r.rule.id);
         Object.assign(state, { status: "alerting", healthy: 0 });
