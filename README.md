@@ -30,9 +30,13 @@ After a root-cause verdict, Triage proposes one mitigation from the evidence the
 
 After the report, a person can ask Triage follow-up questions on the incident page and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
 
+## Postmortem
+
+Once an incident has a finished report, Triage writes a blameless postmortem from the incident's record on request: summary, impact, timeline, contributing factors, what went well, where we got lucky and action items, each claim citing the evidence behind it. It shows in the incident page's **Postmortem** section and can be copied or downloaded as Markdown. The model is the **Postmortem** stage in Settings → Models, which uses Ask's model until it is changed; see `apps/triage/README.md`.
+
 ## Models and providers
 
-Each stage that calls a model (**Investigate**, **Fix** and **Ask**) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
+Each stage that calls a model (**Investigate**, **Fix**, **Ask** and **Postmortem**) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
 
 | Provider | Endpoint | Key |
 | --- | --- | --- |
