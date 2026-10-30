@@ -167,6 +167,7 @@ export async function createRuleIncident(
     threshold,
     openedBy: "watch",
     rule: { id: trip.rule.id, name: trip.rule.name, description: describeRule(trip.rule) },
+    route: trip.route,
   });
 }
 
@@ -182,6 +183,7 @@ async function saveNewIncident(
     observed?: number;
     openedBy?: Incident["openedBy"];
     rule?: Incident["trigger"]["rule"];
+    route?: string;
     focus?: Incident["trigger"]["focus"];
   },
 ): Promise<Incident> {
@@ -201,6 +203,7 @@ async function saveNewIncident(
       observed: a.observed ?? alert.points[alert.points.length - 1].value,
       series: alert.points,
       rule: a.rule,
+      route: a.route,
       focus: a.focus,
     },
     steps: [],

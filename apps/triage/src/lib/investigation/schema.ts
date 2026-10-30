@@ -436,6 +436,9 @@ export const incidentSchema = z.object({
     // The watch rule that opened it, in words. Missing on incidents a person
     // opened and on those from before watch rules.
     rule: z.object({ id: z.string(), name: z.string(), description: z.string() }).optional(),
+    // The route the rule tripped on ("/api/products"). Missing with the rule,
+    // and on watch incidents from before it was recorded (it's in the title).
+    route: z.string().optional(),
     // The time range (and route) a person selected on the live page to
     // investigate. Missing on every other incident.
     focus: z.object({ from: timestamp, to: timestamp, route: z.string().optional() }).optional(),

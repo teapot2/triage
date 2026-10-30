@@ -33,7 +33,7 @@ function reading(s: WatchState, now: number): string {
   if (s.error) return s.status === "alerting" ? "Couldn't open an incident" : "Last check failed";
   if (s.status === "alerting" && s.lastOpened) {
     const ago = formatAgo(s.lastOpened.at, now);
-    return `Opened ${ago === "now" ? "just now" : `${ago} ago`} · ${s.lastOpened.rule}`;
+    return `${s.lastOpened.reopened ? "Reopened" : "Opened"} ${ago === "now" ? "just now" : `${ago} ago`} · ${s.lastOpened.rule}`;
   }
   const c = s.lastCheck;
   if (!c) return "Starting…";
@@ -97,8 +97,8 @@ export function WatchStatus() {
   // For "opened 2m ago". No state renders on the server, so its clock is
   // never read there.
   const now = useNow(0);
-  // The incident the watch had opened when this page loaded; anything newer
-  // is announced.
+  // The incident the watch had opened (or reopened) when this page loaded,
+  // and when; anything newer is announced, the same incident reopened too.
   const seen = useRef<string | undefined | null>(null);
 
   useEffect(() => {
@@ -109,15 +109,24 @@ export function WatchStatus() {
         if (!res.ok || stopped) return;
         const next = (await res.json()) as WatchState;
         setState(next);
-        const opened = next.lastOpened?.incidentId;
+        const last = next.lastOpened;
+        const opened = last && `${last.incidentId} ${last.at}`;
         if (seen.current === null) seen.current = opened;
-        else if (opened && opened !== seen.current) {
+        else if (last && opened !== seen.current) {
           seen.current = opened;
           router.refresh();
-          toast.error("Triage opened an incident", {
-            description: `Shopfront tripped the ${next.lastOpened?.rule ?? "watch"} rule. The investigation has started.`,
-            action: { label: "View", onClick: () => router.push(`/incidents/${opened}`) },
-          });
+          const view = { label: "View", onClick: () => router.push(`/incidents/${last.incidentId}`) };
+          if (last.reopened) {
+            toast.error(`Reopened ${last.title ?? "an incident"}`, {
+              description: `Shopfront tripped the ${last.rule} rule again soon after it was resolved.`,
+              action: view,
+            });
+          } else {
+            toast.error("Triage opened an incident", {
+              description: `Shopfront tripped the ${last.rule} rule. The investigation has started.`,
+              action: view,
+            });
+          }
         }
       } catch {
         // The next poll tries again.

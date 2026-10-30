@@ -1,6 +1,9 @@
 import { stageModel, stageProblem } from "../models/settings";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
+import { incidentToReopen, isOpen } from "./reopen";
+import { listIncidents, patchIncident } from "./store";
+import { reopened } from "./verify";
 import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
 import { describeRule, readRules, type WatchRule } from "./watch-rules";
 
@@ -11,7 +14,9 @@ import { describeRule, readRules, type WatchRule } from "./watch-rules";
 // whole pipeline (investigate, fix, prove); a single slow blip doesn't.
 // Then the watch stays quiet for the rest of that episode, whichever rules
 // trip, and re-arms once nothing has been over a limit for a minute, so one
-// outage is one incident. How a rule is judged is in watch-judge, shared
+// outage is one incident. A breach within half an hour of an incident on
+// the same rule and route being resolved reopens that incident instead of
+// opening another (see reopen). How a rule is judged is in watch-judge, shared
 // with the backtest.
 
 // The window the sidebar's request count covers.
@@ -43,7 +48,9 @@ export type WatchState = {
   rules: RuleState[];
   // Requests the rules saw in the last minute, every watched route together.
   lastCheck?: { at: string; requests: number };
-  lastOpened?: { incidentId: string; at: string; rule: string };
+  // reopened: the watch reopened a recently resolved incident rather than
+  // opening one.
+  lastOpened?: { incidentId: string; at: string; rule: string; title?: string; reopened?: boolean };
   error?: string;
 };
 
@@ -148,7 +155,7 @@ async function check() {
     } else if (first?.trip) {
       // Alerting only once the incident is open. If it can't be, the rule
       // stays breaching, so the next check tries again and the error stays up.
-      const opened = await open(first.rule, first.trip).catch((err: unknown) => {
+      const opened = await open(first.rule, first.trip, first.summary).catch((err: unknown) => {
         state.error = `Couldn't open an incident: ${err instanceof Error ? err.message : String(err)}`;
         return false;
       });
@@ -183,7 +190,21 @@ async function check() {
 }
 
 // Opens the incident and starts its run; false when no model can run it.
-async function open(rule: WatchRule, trip: { route: string; method: string }): Promise<boolean> {
+// The same outage back soon after a resolution reopens that incident
+// instead, without investigating again.
+async function open(rule: WatchRule, trip: { route: string; method: string }, summary?: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const previous = incidentToReopen(await listIncidents(), { ruleId: rule.id, route: trip.route }, Date.parse(now));
+  if (previous) {
+    // Already reopened (its verification saw the breach first): the episode
+    // joins it as it is.
+    const incident = await patchIncident(previous.id, (i) =>
+      isOpen(i) ? i : reopened(i, { at: now, by: "watch", why: `${summary ?? rule.name} again` }),
+    );
+    state.lastOpened = { incidentId: incident.id, at: now, rule: rule.name, title: incident.title, reopened: true };
+    console.log(`[triage] watch rule ${rule.id} reopened ${incident.id}`);
+    return true;
+  }
   const problem = stageProblem(await stageModel("investigate"));
   if (problem) {
     state.error = `${problem} No incident was opened.`;
@@ -191,7 +212,7 @@ async function open(rule: WatchRule, trip: { route: string; method: string }): P
   }
   const source = await createLiveSource();
   const incident = await createRuleIncident(source, { rule, ...trip });
-  state.lastOpened = { incidentId: incident.id, at: new Date().toISOString(), rule: rule.name };
+  state.lastOpened = { incidentId: incident.id, at: new Date().toISOString(), rule: rule.name, title: incident.title };
   console.log(`[triage] watch rule ${rule.id} opened ${incident.id}: ${incident.title}`);
   // The pipeline runs on its own; the watch keeps checking meanwhile.
   void runInvestigation(incident, source, { appDir: shopfrontDir });
