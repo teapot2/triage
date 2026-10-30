@@ -1,7 +1,8 @@
 import type { DecideResult } from "../approval";
 import { watchRecovery } from "../recovery";
-import type { Incident, Mitigation } from "../schema";
+import type { Incident, Mitigation, Recovery } from "../schema";
 import { getIncident, patchIncident } from "../store";
+import { Refused as VerificationRefused, startVerification, verificationRefusal } from "../verify";
 import { shopfrontOps, simulated } from "./executors";
 
 export type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
@@ -32,9 +33,12 @@ export async function decideMitigation(id: string, decision: MitigationDecision)
 }
 
 // Runs an approved mitigation and saves what happened, then watches a live
-// run's alert until it recovers. Never throws.
+// run's alert until it recovers, then checks that it stays recovered (the
+// verification's quiet window). A simulated run's recovery is recorded, so
+// its verification starts right away. Never throws.
 export async function applyMitigation(id: string): Promise<void> {
   let watch = false;
+  let recovered: Recovery | undefined;
   try {
     if ((await getIncident(id))?.mitigation?.state !== "approved") return;
     const running = await setMitigation(id, { state: "running" });
@@ -42,11 +46,25 @@ export async function applyMitigation(id: string): Promise<void> {
     const { output, recovery } = await executor.apply(running);
     await setMitigation(id, { state: "applied", appliedAt: new Date().toISOString(), output, recovery });
     watch = !recovery;
+    recovered = recovery;
   } catch (err) {
     console.error("[triage] mitigation failed", id, err);
     const error = (err instanceof Error ? err.message : String(err)).split("\n")[0];
     await setMitigation(id, { state: "failed", error }).catch((e) => console.error("[triage] saving the failure failed", id, e));
     return;
   }
-  if (watch) await watchRecovery(id);
+  if (watch) recovered = await watchRecovery(id);
+  if (recovered?.status === "recovered" && recovered.recoveredAt) await verifyRecovery(id, recovered.recoveredAt);
+}
+
+// Starts the verification after a recovery, when one can start. Never throws.
+async function verifyRecovery(id: string, since: string): Promise<void> {
+  try {
+    const incident = await getIncident(id);
+    if (!incident || verificationRefusal(incident, "mitigation")) return;
+    const { finished } = await startVerification(id, { after: "mitigation", since });
+    await finished;
+  } catch (err) {
+    if (!(err instanceof VerificationRefused)) console.error("[triage] starting the verification failed", id, err);
+  }
 }

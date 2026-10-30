@@ -108,8 +108,10 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
 
   private persist() {
     const snapshot = structuredClone(this.incident);
-    // Routes change the mitigation, the questions and the fix attempts while
-    // a stage still runs here; a whole-snapshot save would overwrite them.
+    // Routes change the mitigation, the questions and the fix attempts, and
+    // the verification resolves or reopens the incident, while a stage still
+    // runs here; a whole-snapshot save would overwrite them. A resolved
+    // incident stays resolved when the fix stage finishes.
     this.writes = this.writes
       .then(() =>
         withIncidentLock(snapshot.id, async () => {
@@ -119,6 +121,12 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
             mitigation: stored?.mitigation ?? snapshot.mitigation,
             questions: stored?.questions ?? snapshot.questions,
             fixAttempts: stored?.fixAttempts ?? snapshot.fixAttempts,
+            ...(stored && {
+              status: stored.status === "resolved" ? "resolved" : snapshot.status,
+              verification: stored.verification,
+              resolvedAt: stored.resolvedAt,
+              reopenings: stored.reopenings,
+            }),
           });
         }),
       )

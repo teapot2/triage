@@ -9,8 +9,8 @@ const TIMEOUT_MS = 5 * MINUTE;
 // Watches a live run's alert metric after its mitigation is applied: every
 // 15 s for up to 5 minutes, until the last two completed minutes are under
 // the threshold. Stops early if the mitigation is no longer applied. Never
-// throws.
-export async function watchRecovery(incidentId: string): Promise<void> {
+// throws; returns the last recovery it saved, if any.
+export async function watchRecovery(incidentId: string): Promise<Recovery | undefined> {
   let recovery: Recovery | undefined;
   // Saves only while the mitigation is still applied; the returned incident says whether to go on.
   const save = (r: Recovery) =>
@@ -20,7 +20,7 @@ export async function watchRecovery(incidentId: string): Promise<void> {
   try {
     const incident = await getIncident(incidentId);
     const m = incident?.mitigation;
-    if (!incident || m?.state !== "applied" || !m.appliedAt) return;
+    if (!incident || m?.state !== "applied" || !m.appliedAt) return undefined;
     const { metric, threshold } = incident.trigger;
     const since = Date.parse(m.appliedAt);
     const deadline = Date.now() + TIMEOUT_MS;
@@ -47,12 +47,15 @@ export async function watchRecovery(incidentId: string): Promise<void> {
         };
       }
       current = await save(recovery);
-      if (recovery.status !== "watching") return;
+      if (recovery.status !== "watching") return current.mitigation?.state === "applied" ? recovery : undefined;
     }
+    return undefined;
   } catch (err) {
     console.error("[triage] recovery watch failed", incidentId, err);
-    if (!recovery) return;
+    if (!recovery) return undefined;
     const note = `The watch stopped: ${(err instanceof Error ? err.message : String(err)).split("\n")[0]}`;
-    await save({ ...recovery, status: "not_recovered", note }).catch(() => {});
+    recovery = { ...recovery, status: "not_recovered", note };
+    await save(recovery).catch(() => {});
+    return recovery;
   }
 }

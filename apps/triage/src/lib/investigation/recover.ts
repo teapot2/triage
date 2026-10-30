@@ -15,9 +15,7 @@ export async function failInterruptedRuns(): Promise<number> {
   let fixed = 0;
   for (const incident of await listIncidents()) {
     if (isDemo(incident.id)) continue;
-    // A bundled example can take questions (and so be cut off answering
-    // one); its other stages pose as they are.
-    const next = isExample(incident.id) ? withAnswersCutOff(incident, now) : recovered(incident, now);
+    const next = recovered(incident, now, isExample(incident.id));
     if (next) {
       await saveIncident(next);
       fixed += 1;
@@ -27,10 +25,28 @@ export async function failInterruptedRuns(): Promise<number> {
 }
 
 // The incident with every stage that claims to be running marked as cut
-// off, or undefined if none was.
-function recovered(incident: Incident, now: string): Incident | undefined {
+// off, or undefined if none was. A bundled example can take questions, a
+// mitigation and a verification (and so be cut off in one); its other
+// stages pose as they are.
+export function recovered(incident: Incident, now: string, example = false): Incident | undefined {
   let next: Incident | undefined;
   const edit = (patch: Partial<Incident>) => (next = { ...(next ?? incident), ...patch });
+
+  const m = incident.mitigation;
+  if (m?.recovery?.status === "watching") {
+    edit({
+      mitigation: { ...m, recovery: { ...m.recovery, status: "not_recovered", note: `${RESTARTED} before the recovery watch finished` } },
+    });
+  }
+  const verification = incident.verification;
+  if (verification?.status === "verifying") {
+    edit({
+      verification: { ...verification, status: "stopped", finishedAt: now, note: `${RESTARTED} before the verification finished` },
+    });
+  }
+  const answers = withAnswersCutOff(next ?? incident, now);
+  if (answers) edit({ questions: answers.questions });
+  if (example) return next;
 
   if (incident.status === "investigating") {
     edit({
@@ -50,8 +66,6 @@ function recovered(incident: Incident, now: string): Incident | undefined {
   if (approval?.prState === "opening") {
     edit({ approval: { ...approval, prState: "failed", prError: `${RESTARTED} while the PR was being opened` } });
   }
-  const answers = withAnswersCutOff(next ?? incident, now);
-  if (answers) edit({ questions: answers.questions });
   return next;
 }
 

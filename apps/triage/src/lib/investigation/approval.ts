@@ -11,6 +11,9 @@ export type DecideResult =
   | { ok: true; incident: Incident; rerun?: boolean }
   | { ok: false; status: 404 | 409; error: string };
 
+// The status once the fix is decided: resolution doesn't wait for the fix.
+const afterDecision = (incident: Incident) => (incident.status === "resolved" ? "resolved" : "diagnosed");
+
 // Only a fix Triage proved in its sandbox gets a PR. The bundled examples'
 // patches illustrate the UI and don't apply to any real code.
 export const canOpenPr = (incident: Incident) => incident.fixRun?.status === "proven";
@@ -24,11 +27,12 @@ export const canRerunFix = (incident: Incident) =>
 // The incident after a deny with feedback that leads to a new attempt: the
 // denied fix, its proof and the decision move into fixAttempts (oldest
 // first), the current fix is cleared, and the fix stage is shown as
-// writing from attempt 0 until rerunFix picks it up. Pure, for the tests.
+// writing from attempt 0 until rerunFix picks it up. A resolved incident
+// stays resolved. Pure, for the tests.
 export function archiveDeniedFix(incident: Incident, approval: Approval, now = new Date().toISOString()): Incident {
   return {
     ...incident,
-    status: "diagnosed",
+    status: afterDecision(incident),
     fix: undefined,
     validation: undefined,
     approval: undefined,
@@ -43,7 +47,8 @@ export function archiveDeniedFix(incident: Incident, approval: Approval, now = n
 // Records a human's decision on the proposed fix. Only a pending approval can
 // be decided, so a second click or a stale tab can't overwrite the first
 // decision. Either way the incident stops awaiting approval and is
-// "diagnosed": still open, since nothing is resolved until a fix ships.
+// "diagnosed": still open until the verification resolves it. One already
+// resolved (the alert stayed quiet before anyone decided) stays resolved.
 // Approving a proven fix also marks its PR as opening; openPr does the work.
 // A deny saves the reviewer's feedback as the reason; with feedback on a fix
 // that can be written again, the attempt is archived and a rerun starts.
@@ -73,7 +78,7 @@ export function decideApproval(id: string, decision: Decision, feedback?: string
     const rerun = decision === "denied" && reason !== undefined && canRerunFix(incident);
     const decided: Incident = rerun
       ? archiveDeniedFix(incident, approval, now)
-      : { ...incident, status: "diagnosed", approval };
+      : { ...incident, status: afterDecision(incident), approval };
     await saveIncident(decided);
     return { ok: true, incident: decided, rerun };
   });

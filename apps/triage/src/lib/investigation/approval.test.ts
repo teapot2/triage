@@ -53,6 +53,11 @@ describe("archiveDeniedFix", () => {
     assert.deepEqual(after.steps, before.steps);
   });
 
+  it("keeps a resolved incident resolved", () => {
+    const after = archiveDeniedFix({ ...incident("live:shopfront"), status: "resolved" }, denied);
+    assert.equal(after.status, "resolved");
+  });
+
   it("keeps earlier denied attempts, oldest first", () => {
     const first = archiveDeniedFix(incident("live:shopfront"), denied);
     const second = archiveDeniedFix(
