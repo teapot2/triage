@@ -26,6 +26,10 @@ Each app owns its env file; commit only `.env.example` templates. Infrastructure
 
 After a root-cause verdict, Triage proposes one mitigation from the evidence the diagnosis cites: turn off the cited feature flag, or roll back the cited deploy (proposed only: Shopfront has no deploy pipeline to run it against). Once a person approves it, Triage applies it through Shopfront's ops API (on in development; `OPS_ENABLED=1` in a production build; `SHOPFRONT_URL` if the store runs elsewhere) and re-reads the alert's metric until it recovers. Turning the flag off stops new leaks but frees none of the pooled connections the leak already holds, so the flag-off also recycles them. The tested patch still follows as the permanent fix.
 
+## Verify
+
+A recovery says the metric came back; the verification checks that it stayed back. After the mitigation's recovery, Triage keeps reading the alert's metric for a quiet window (5 completed minutes under the threshold, `TRIAGE_RESOLVE_AFTER_MINUTES` to change it) and then resolves the incident on its own, with the chart showing the recovery, the window and a resolved marker. If the metric climbs back over the threshold during the window, the incident reopens and says so. Once an incident is resolved, a new breach on the same rule within 30 minutes reopens that incident instead of opening a second one for the same outage. A reopened incident keeps its report, mitigation and fix and isn't investigated again. A pending fix approval doesn't hold up the resolution: it stays pending, and the incident stays under Needs attention until someone decides it. People can also mark an incident resolved, reopen it or verify again from the header's menu or the command palette; see `apps/triage/README.md`.
+
 ## Ask Triage
 
 After the report, a person can ask Triage follow-up questions on the incident page and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
