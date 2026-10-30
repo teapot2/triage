@@ -167,6 +167,30 @@ describe("simulatedWindow", () => {
     );
   });
 
+  it("starts after `since` when a manual verify comes after the recovery's last point", () => {
+    const series = minutes(2910, 1480, 520, 210, 140, 121);
+    const recovery = {
+      metric: verifying.metric,
+      threshold: 500,
+      since: series[0].t,
+      series,
+      status: "recovered" as const,
+      recoveredAt: series[3].t,
+    };
+    const incident = example({ mitigation: { ...example().mitigation!, recovery } });
+    // Verify again at 10:20:30: the window is the quiet value from 10:21 on.
+    assert.deepEqual(
+      simulatedWindow(incident, { ...verifying, since: "2026-10-29T10:20:30.000Z" }).map((p) => [p.t.slice(11, 16), p.value]),
+      [
+        ["10:21", 121],
+        ["10:22", 121],
+        ["10:23", 121],
+        ["10:24", 121],
+        ["10:25", 121],
+      ],
+    );
+  });
+
   it("falls back to the trigger's last value under the threshold", () => {
     const incident = example({ mitigation: undefined });
     const quiet = incident.trigger.series.findLast((p) => p.value < 500)!.value;

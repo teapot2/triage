@@ -14,8 +14,14 @@ export const isOpen = (incident: Incident) => OPEN.has(incident.status);
 // before it was recorded, the end of the title ("… on GET /api/products").
 const routeOf = (i: Incident) => i.trigger.route ?? / on [A-Z]+ (\S+)$/.exec(i.title)?.[1];
 
-// When it last stopped being an outage.
-const endedAt = (i: Incident) => i.resolvedAt ?? i.verification?.breachedAt;
+// When it last stopped being an outage. One whose recovery or verification
+// is still being watched is the same outage, ended as far as the watch goes:
+// a breach then joins it, and the verification records the breach itself.
+function endedAt(i: Incident): string | undefined {
+  if (i.verification?.status === "verifying") return i.verification.since;
+  if (i.mitigation?.recovery?.status === "watching") return i.mitigation.appliedAt;
+  return i.resolvedAt ?? i.verification?.breachedAt;
+}
 
 const opened = (i: Incident) => Date.parse(i.detectedAt);
 

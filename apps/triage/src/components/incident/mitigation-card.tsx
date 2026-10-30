@@ -221,7 +221,8 @@ function RecoveryLine({ recovery, unit }: { recovery: Recovery; unit: string }) 
   }
   return (
     <div className="flex flex-col gap-0.5 text-sm">
-      <p className="text-warning">Not recovered after 5 min</p>
+      {/* A note means the watch was cut off (a restart), not that it ran its 5 min. */}
+      <p className="text-warning">{recovery.note ? "Recovery watch stopped" : "Not recovered after 5 min"}</p>
       {recovery.note && <p className="text-muted-foreground text-xs">{recovery.note}</p>}
     </div>
   );

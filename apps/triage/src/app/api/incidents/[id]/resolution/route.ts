@@ -10,8 +10,9 @@ const bodySchema = z.object({
 });
 
 // A person resolving or reopening the incident by hand, or asking Triage to
-// verify it again: a new quiet window from the last recovery (or from now),
-// watched after the response.
+// verify it again: a new quiet window from now, watched after the response.
+// Not from the last recovery: a breach since then would end the new window
+// on the same minute that ended the last one.
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -25,8 +26,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const now = new Date().toISOString();
   try {
     if (action === "verify") {
-      const since = incident.mitigation?.recovery?.recoveredAt ?? now;
-      const { finished } = await startVerification(id, { after: "manual", since });
+      const { finished } = await startVerification(id, { after: "manual", since: now });
       after(() => finished);
       return Response.json({ status: "verifying" }, { status: 202 });
     }

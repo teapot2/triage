@@ -66,6 +66,37 @@ describe("incidentToReopen", () => {
     assert.equal(incidentToReopen([breached], trip, now)?.id, "inc_breached");
   });
 
+  it("joins an incident still verifying on the same rule and route, not on another route", () => {
+    const verifying = incident("inc_verifying", 15, {
+      status: "awaiting_approval",
+      verification: {
+        after: "mitigation",
+        since: minutesAgo(4),
+        windowMinutes: 5,
+        metric: "http.server.request.duration.p95{route=/api/products}",
+        threshold: 500,
+        series: [],
+        status: "verifying",
+        startedAt: minutesAgo(3),
+      },
+    });
+    assert.equal(incidentToReopen([verifying], trip, now)?.id, "inc_verifying");
+    assert.equal(incidentToReopen([verifying], { ...trip, route: "/api/products/[id]" }, now), undefined);
+  });
+
+  it("joins an incident whose mitigation's recovery is still being watched", () => {
+    const base = incident("inc_watching", 10);
+    const watching = incident("inc_watching", 10, {
+      mitigation: {
+        ...base.mitigation!,
+        state: "applied",
+        appliedAt: minutesAgo(2),
+        recovery: { metric: base.trigger.metric, threshold: 500, since: minutesAgo(2), series: [], status: "watching" },
+      },
+    });
+    assert.equal(incidentToReopen([watching], trip, now)?.id, "inc_watching");
+  });
+
   it("matches the route in the title on incidents from before it was recorded", () => {
     const older = incident("inc_older", 50, { status: "resolved", resolvedAt: minutesAgo(10) });
     delete older.trigger.route;
