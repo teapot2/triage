@@ -3,7 +3,9 @@ import type { UptimeCheck, UptimeSample } from "./model";
 
 // Runs one uptime check: a GET to the check's URL, timed to the response
 // headers, judged against its status range and slow limit. Redirects are
-// followed by hand so the guard sees every hop. The body is never read.
+// followed by hand so the guard sees every hop. The body is never read. The
+// check's auth header goes with requests to the check's own origin only: a
+// redirect elsewhere must not carry the token along.
 
 const MAX_REDIRECTS = 5;
 const redirects = new Set([301, 302, 303, 307, 308]);
@@ -23,6 +25,19 @@ function failure(err: unknown): string {
   if (cause?.message) return cause.message;
   return err instanceof Error ? err.message : String(err);
 }
+
+// The request's headers: the auth header when the check has one with a
+// value and `url` is on the check's origin.
+function headersFor(check: UptimeCheck, url: string): Record<string, string> {
+  const headers: Record<string, string> = { "user-agent": "Triage uptime check", accept: "*/*" };
+  if (check.auth?.value && new URL(url).origin === new URL(check.url).origin) headers[check.auth.header] = check.auth.value;
+  return headers;
+}
+
+// "HTTP 503", or what 401 and 403 mean for a check: the endpoint answered
+// and turned it away.
+const badStatus = (status: number) =>
+  status === 401 ? "HTTP 401: credentials rejected" : status === 403 ? "HTTP 403: forbidden" : `HTTP ${status}`;
 
 // Resolves never; rejects with the signal's reason once it aborts, so a
 // slow DNS lookup can't outlast the timeout.
@@ -57,7 +72,7 @@ export async function probe(check: UptimeCheck, opts: ProbeOptions = {}): Promis
         redirect: "manual",
         signal,
         cache: "no-store",
-        headers: { "user-agent": "Triage uptime check", accept: "*/*" },
+        headers: headersFor(check, url),
       });
       const ms = now() - start;
       // Headers are all a check needs; cancelling frees the connection.
@@ -71,7 +86,7 @@ export async function probe(check: UptimeCheck, opts: ProbeOptions = {}): Promis
       }
 
       const { min, max } = check.expectedStatus;
-      if (res.status < min || res.status > max) return down(`HTTP ${res.status}`, res.status, ms);
+      if (res.status < min || res.status > max) return down(badStatus(res.status), res.status, ms);
       return { at, ms: Math.round(ms), status: res.status, outcome: ms > check.slowMs ? "slow" : "ok" };
     }
   } catch (err) {

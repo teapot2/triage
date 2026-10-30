@@ -9,9 +9,12 @@ import {
   incidentTitle,
   newCheckId,
   parseRuleId,
+  publicCheck,
   ruleDescription,
   ruleId,
   ruleSeverity,
+  runStatus,
+  withSavedSecrets,
 } from "./model";
 
 const google = defaultCheck({ id: "chk_abc123", name: "Google", url: "https://www.google.com" });
@@ -59,6 +62,49 @@ describe("uptime check model", () => {
     assert.equal(ruleDescription(local, "slow"), "2 checks in a row slower than 1.5 s on http://localhost:3001/api/health");
     assert.equal(ruleDescription(local, "down"), "no acceptable response for 1 min from http://localhost:3001/api/health");
     assert.equal(incidentTitle(local, "down"), "localhost:3001 is not responding");
+  });
+
+  it("carries an auth header whose value stays on the server", () => {
+    const secured = { ...google, auth: { header: "Authorization", value: "Bearer t0k3n" } };
+    assert.deepEqual(checkSchema.parse(secured), secured);
+    assert.equal(checkSchema.safeParse({ ...google, auth: { header: "Bad Name", value: "x" } }).success, false);
+    assert.equal(checkSchema.safeParse({ ...google, auth: { header: "X-Api-Key", value: "a\r\nb" } }).success, false);
+    assert.deepEqual(publicCheck(secured), { ...google, auth: { header: "Authorization" } });
+    assert.equal(publicCheck(google), google);
+    assert.equal(
+      describeCheck(secured),
+      "Every 30 s, GET https://www.google.com with an Authorization header and expect 200–299 within 10 s (gives up after 15 s)",
+    );
+  });
+
+  it("puts the saved value back on a check that came without one, on the same origin only", () => {
+    const secured = { ...google, auth: { header: "Authorization", value: "Bearer t0k3n" } };
+    const back = publicCheck(secured);
+    assert.deepEqual(withSavedSecrets([back], [secured]), { checks: [secured] });
+    assert.deepEqual(withSavedSecrets([{ ...back, auth: { header: "X-Api-Key" } }], [secured]).checks?.[0].auth, {
+      header: "X-Api-Key",
+      value: "Bearer t0k3n",
+    });
+    assert.equal(withSavedSecrets([{ ...back, url: "https://www.google.com/health" }], [secured]).checks?.[0].auth?.value, "Bearer t0k3n");
+    assert.equal(
+      withSavedSecrets([{ ...back, url: "https://example.com/" }], [secured]).problem,
+      "Google: the Authorization value saved was for www.google.com; enter the one for example.com",
+    );
+    assert.equal(withSavedSecrets([back], []).problem, "Google: enter the Authorization header's value");
+    assert.equal(withSavedSecrets([{ ...secured, auth: { header: "Authorization", value: "new" } }], [secured]).checks?.[0].auth?.value, "new");
+    assert.deepEqual(withSavedSecrets([google], [secured]), { checks: [google] });
+  });
+
+  it("titles a Down run the endpoint answered with 401 as rejected credentials", () => {
+    const s = (status?: number) => ({ at: "2026-10-30T12:00:00.000Z", ms: 20, ...(status && { status }), outcome: "down" as const });
+    assert.equal(runStatus([s(401), s(401)]), 401);
+    assert.equal(runStatus([s(401), s(503)]), undefined);
+    assert.equal(runStatus([s(401), s()]), undefined);
+    assert.equal(runStatus([]), undefined);
+    assert.equal(incidentTitle(google, "down", 401), "www.google.com is rejecting the check's credentials");
+    assert.equal(incidentTitle(google, "down", 403), "www.google.com is rejecting the check's credentials");
+    assert.equal(incidentTitle(google, "down", 503), "www.google.com is not responding");
+    assert.equal(incidentTitle(google, "slow", 401), "Slow responses from www.google.com");
   });
 
   it("keys rules by check and kind, down sev2 and slow sev3", () => {

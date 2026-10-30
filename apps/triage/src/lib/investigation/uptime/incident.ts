@@ -1,7 +1,17 @@
 import { saveNewIncident } from "../agent";
 import type { Incident } from "../schema";
 import type { TelemetrySource } from "../source";
-import { incidentTitle, ruleDescription, ruleId, ruleName, ruleSeverity, type UptimeCheck, type UptimeRule, type UptimeSample } from "./model";
+import {
+  incidentTitle,
+  ruleDescription,
+  ruleId,
+  ruleName,
+  ruleSeverity,
+  runStatus,
+  type UptimeCheck,
+  type UptimeRule,
+  type UptimeSample,
+} from "./model";
 import { availabilityMetric, responseTimeMetric } from "./source";
 
 // The incident an uptime rule opens, from the source createUptimeSource
@@ -32,7 +42,7 @@ export async function createUptimeIncident(
   if (!alert || alert.points.length === 0) throw new Error(`No ${metric} series to open an incident from.`);
   const run = failingRun(rule, samples);
   return saveNewIncident(source, alert, {
-    title: incidentTitle(check, rule),
+    title: incidentTitle(check, rule, runStatus(run)),
     service: alert.service,
     severity: ruleSeverity(rule),
     threshold: rule === "down" ? 100 : check.slowMs,

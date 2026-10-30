@@ -12,11 +12,12 @@ import {
   ruleId,
   ruleName,
   ruleSeverity,
+  runStatus,
   type UptimeCheck,
   type UptimeRule,
   type UptimeSample,
 } from "./uptime/checks";
-import { createUptimeIncident } from "./uptime/incident";
+import { createUptimeIncident, failingRun } from "./uptime/incident";
 import { judgeCheck } from "./uptime/judge";
 import { probe } from "./uptime/probe";
 import { appendSample, readSamples } from "./uptime/samples";
@@ -371,7 +372,7 @@ async function escalate(check: UptimeCheck, ep: Episode, samples: UptimeSample[]
   const { pending, lastFailedAt } = ep;
   const incident = await patchIncident(ep.incidentId, (i) => ({
     ...i,
-    title: incidentTitle(check, "down"),
+    title: incidentTitle(check, "down", runStatus(failingRun("down", samples))),
     severity: ruleSeverity("down"),
     trigger: {
       ...i.trigger,

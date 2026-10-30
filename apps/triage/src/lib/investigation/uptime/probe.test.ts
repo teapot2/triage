@@ -93,6 +93,27 @@ describe("probe", () => {
     assert.equal(sample.error, "too many redirects");
   });
 
+  it("sends the auth header to the check's origin only, not along a redirect elsewhere", async () => {
+    const secured = { ...check, auth: { header: "Authorization", value: "Bearer t0k3n" } };
+    const f = fakeFetch({
+      "https://example.com/": { status: 302, ms: 10, headers: { location: "/v2" } },
+      "https://example.com/v2": { status: 307, ms: 10, headers: { location: "https://status.example.net/" } },
+      "https://status.example.net/": { status: 200, ms: 10 },
+    });
+    assert.equal((await probe(secured, f)).outcome, "ok");
+    assert.deepEqual(
+      f.calls.map((c) => (c.init?.headers as Record<string, string>).Authorization),
+      ["Bearer t0k3n", "Bearer t0k3n", undefined],
+    );
+  });
+
+  it("sends no header without a value, and names a rejected token", async () => {
+    const f = fakeFetch({ "https://example.com/": { status: 401, ms: 20 } });
+    const sample = await probe({ ...check, auth: { header: "Authorization" } }, f);
+    assert.deepEqual(f.calls[0].init?.headers, { "user-agent": "Triage uptime check", accept: "*/*" });
+    assert.deepEqual(sample, { at: "2026-10-30T12:00:00.000Z", ms: 20, status: 401, outcome: "down", error: "HTTP 401: credentials rejected" });
+  });
+
   it("refuses the check's own URL before any request", async () => {
     const f = fakeFetch({});
     const sample = await probe({ ...check, url: "http://127.0.0.1:3000" }, f);

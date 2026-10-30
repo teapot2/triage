@@ -32,6 +32,29 @@ export function urlProblem(url: string): string | undefined {
 
 const statusCode = z.number().int().min(100).max(599);
 
+// A header the request carries, for an endpoint behind a token: its name
+// (Authorization, or an API-key header) and its value, a secret. The value
+// never reaches the browser: the routes send a check with the name alone
+// (publicCheck), and a save that comes back without the value keeps the one
+// saved for that check (withSavedSecrets). On the server it's always there.
+export const DEFAULT_AUTH_HEADER = "Authorization";
+
+export const authSchema = z.object({
+  header: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, "a header name: letters, digits and - only"),
+  value: z
+    .string()
+    .min(1)
+    .max(4000)
+    .refine((v) => !/[\r\n\0]/.test(v), "the value can't contain line breaks")
+    .optional(),
+});
+export type CheckAuth = z.infer<typeof authSchema>;
+
 export const checkSchema = z
   .object({
     id: z.string().regex(checkIdPattern, "chk_ and 6 lowercase letters or digits"),
@@ -50,6 +73,7 @@ export const checkSchema = z
     // A response in range but slower than this is slow, not ok.
     slowMs: z.number().int().min(100),
     expectedStatus: z.object({ min: statusCode, max: statusCode }),
+    auth: authSchema.optional(),
     // Slow responses in a row before Slow opens an incident.
     slowChecksToOpen: z.number().int().min(1).max(10),
     // Minutes with no acceptable response before Down opens one.
@@ -68,6 +92,41 @@ export const checksSchema = z
   .array(checkSchema)
   .max(MAX_CHECKS, `at most ${MAX_CHECKS} checks`)
   .refine((checks) => new Set(checks.map((c) => c.id)).size === checks.length, "check ids must be unique");
+
+// The check as the browser may see it: the header's name without its value.
+export const publicCheck = (c: UptimeCheck): UptimeCheck => (c.auth ? { ...c, auth: { header: c.auth.header } } : c);
+
+// The URL's origin, or the URL itself when it doesn't parse.
+export const originOf = (url: string) => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+};
+
+// The saved values back onto a list that came from the browser without them.
+// A check whose header has no value keeps the value saved for it, as long as
+// the check still targets the same origin: a token meant for one host must
+// not follow the check to another. The reason, naming the check, when a
+// value is missing and nothing saved can stand in.
+export function withSavedSecrets(next: UptimeCheck[], saved: UptimeCheck[]): { checks?: UptimeCheck[]; problem?: string } {
+  const checks: UptimeCheck[] = [];
+  for (const c of next) {
+    if (!c.auth || c.auth.value) {
+      checks.push(c);
+      continue;
+    }
+    const was = saved.find((s) => s.id === c.id);
+    const value = was?.auth?.value;
+    if (!was || !value) return { problem: `${c.name}: enter the ${c.auth.header} header's value` };
+    if (originOf(was.url) !== originOf(c.url)) {
+      return { problem: `${c.name}: the ${c.auth.header} value saved was for ${checkHost(was)}; enter the one for ${checkHost(c)}` };
+    }
+    checks.push({ ...c, auth: { header: c.auth.header, value } });
+  }
+  return { checks };
+}
 
 export const outcomes = ["ok", "slow", "down"] as const;
 export type UptimeOutcome = (typeof outcomes)[number];
@@ -140,10 +199,15 @@ export function checkHost(check: Pick<UptimeCheck, "url">): string {
 
 const statusRange = ({ min, max }: UptimeCheck["expectedStatus"]) => (min === max ? `${min}` : `${min}–${max}`);
 
+const article = (word: string) => (/^[aeiou]/i.test(word) ? "an" : "a");
+
+// " with an Authorization header", or nothing.
+const withHeader = (c: Pick<UptimeCheck, "auth">) => (c.auth ? ` with ${article(c.auth.header)} ${c.auth.header} header` : "");
+
 // "Every 30 s, GET https://www.google.com and expect 200–299 within 10 s
 // (gives up after 15 s)": the check in a line, for its page and tooltip.
 export const describeCheck = (c: UptimeCheck) =>
-  `Every ${c.intervalSeconds} s, GET ${c.url} and expect ${statusRange(c.expectedStatus)} within ${duration(c.slowMs)} (gives up after ${duration(c.timeoutMs)})`;
+  `Every ${c.intervalSeconds} s, GET ${c.url}${withHeader(c)} and expect ${statusRange(c.expectedStatus)} within ${duration(c.slowMs)} (gives up after ${duration(c.timeoutMs)})`;
 
 // The rule in a line, written for the slot Slack and the investigation print
 // it in: "3 checks in a row slower than 10 s on https://www.google.com".
@@ -154,6 +218,18 @@ export function ruleDescription(check: UptimeCheck, rule: UptimeRule): string {
   return `${checks} slower than ${duration(check.slowMs)} on ${check.url}`;
 }
 
+// The status every result of a failing run answered with, when they all
+// answered with the same one; none when any didn't answer or they differ.
+export function runStatus(run: UptimeSample[]): number | undefined {
+  const status = run[0]?.status;
+  return status !== undefined && run.every((s) => s.status === status) ? status : undefined;
+}
+
 // "Slow responses from www.google.com", "www.google.com is not responding".
-export const incidentTitle = (check: UptimeCheck, rule: UptimeRule) =>
-  rule === "down" ? `${checkHost(check)} is not responding` : `Slow responses from ${checkHost(check)}`;
+// A Down run that was answered, every time, with 401 or 403 is the endpoint
+// turning the check away, not an outage, and the title says so.
+export function incidentTitle(check: UptimeCheck, rule: UptimeRule, status?: number): string {
+  if (rule !== "down") return `Slow responses from ${checkHost(check)}`;
+  if (status === 401 || status === 403) return `${checkHost(check)} is rejecting the check's credentials`;
+  return `${checkHost(check)} is not responding`;
+}
