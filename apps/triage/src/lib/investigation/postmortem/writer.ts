@@ -24,6 +24,7 @@ const instructions = `You are Triage, an SRE. Write the team's blameless postmor
 Rules:
 - Blameless: ask how the system allowed the failure, never who caused it. A deploy "shipped", a flag "was turned on"; nobody is named. Avoid "blame", "fault of", "should have", "failed to", "careless" and "negligent": say what the system did or did not do.
 - Cite every factual claim: put the evidence IDs it rests on in that claim's evidenceIds, plain (ev_log_3, not [ev_log_3]). Cite only IDs listed below. Never invent one.
+- Say only what the record shows. A mitigation that was proposed but not applied did not happen; if no recovery is recorded, say the record does not show when the impact ended instead of guessing.
 - summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.
 - impact: who was affected and how.
 - contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late).
@@ -81,11 +82,12 @@ function timelineBlock(incident: Incident): string {
     events.push([a.decidedAt, `Fix ${a.state}${a.reason ? `, reason: ${a.reason}` : ""}`]);
   }
   for (const q of incident.questions ?? []) events.push([q.askedAt, `Question asked: ${q.text}`]);
-  return events
+  const lines = events
     .filter((e): e is [string, string] => e[0] !== undefined)
     .sort((x, y) => Date.parse(x[0]) - Date.parse(y[0]))
-    .map(([t, what]) => `${t} ${what}`)
-    .join("\n");
+    .map(([t, what]) => `${t} ${what}`);
+  if (!m?.recovery?.recoveredAt) lines.push("No recovery is recorded: the record does not show when the impact ended.");
+  return lines.join("\n");
 }
 
 function mitigationBlock(incident: Incident): string {
