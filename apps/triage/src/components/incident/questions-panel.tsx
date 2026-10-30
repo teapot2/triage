@@ -32,12 +32,15 @@ import {
   useRef,
   useState,
 } from "react";
+import { LevelBars, MicButton } from "@/components/speech/mic-button";
 import { SpeakButton } from "@/components/speech/speak-button";
 import { Timestamp } from "@/components/timestamp";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDictation, useDictationSupported } from "@/hooks/use-dictation";
+import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { askRefusal, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
@@ -811,12 +814,22 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
   },
 };
 
+// What was typed before dictating, then what is being said.
+const withDictation = (typed: string, said: string) =>
+  [typed.trimEnd(), said.trim()].filter(Boolean).join(typed.endsWith("\n") ? "\n" : " ");
+
 // One row: a textarea that grows with what's typed (up to 10 rem, then
 // scrolls), sends on Enter (Shift+Enter for a new line) and is capped at
 // the server's limit; then the mode icon, which says on hover or focus
-// what the answer reads from, and the send button. Disabled, with the
-// reason on hover, while a question is being answered or there's no
-// report yet.
+// what the answer reads from, the microphone when voice input is on in
+// Settings, and the send button. Disabled, with the reason on hover, while
+// a question is being answered or there's no report yet.
+//
+// Dictating writes the transcript into the textarea as it streams in, after
+// whatever was typed, with a level meter and a "Listening" line so it's
+// plain the microphone is on. The mic button stops it and leaves the text
+// to edit and send; Enter stops it and sends; Escape drops what was said.
+// With "Send when transcription finishes" on, stopping sends too.
 function Composer({
   ask,
   mode,
@@ -832,10 +845,55 @@ function Composer({
   const hint = modeHint[mode];
   const HintIcon = hint.icon;
 
+  const { preferences } = useSpeechPreferences();
+  const canRecord = useDictationSupported();
+  // The draft when dictation started, which the transcript follows.
+  const typed = useRef("");
+  const { setDraft } = ask;
+  const dictation = useDictation((said) => setDraft(withDictation(typed.current, said)));
+  const dictating = dictation.status !== "idle";
+  const showMic = preferences.voiceInput && canRecord;
+
+  // Voice input was turned off in another tab.
+  const { cancel } = dictation;
+  useEffect(() => {
+    if (!showMic) cancel();
+  }, [showMic, cancel]);
+
+  // The newest words stay in view once the text outgrows the box.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (dictating && el) el.scrollTop = el.scrollHeight;
+  }, [dictating, ask.draft, textareaRef]);
+
+  const startDictating = () => {
+    typed.current = ask.draft;
+    dictation.start();
+  };
+  const stopDictating = async (send: boolean) => {
+    const said = await dictation.finish();
+    if (said === undefined) return;
+    const text = withDictation(typed.current, said);
+    setDraft(text);
+    if ((send || preferences.voiceAutoSend) && text.trim() && text.length <= MAX_QUESTION_CHARS) ask.send(text);
+    else textareaRef.current?.focus();
+  };
+  const cancelDictating = () => {
+    dictation.cancel();
+    setDraft(typed.current);
+  };
+
   const submit = () => {
-    if (canSend) ask.send(ask.draft);
+    if (dictation.status === "listening") void stopDictating(true);
+    else if (dictating) return;
+    else if (canSend) ask.send(ask.draft);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" && dictating) {
+      e.preventDefault();
+      cancelDictating();
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
     submit();
@@ -862,9 +920,10 @@ function Composer({
         onChange={(e) => ask.setDraft(e.target.value)}
         onKeyDown={onKeyDown}
         disabled={disabled}
+        readOnly={dictating}
         rows={1}
         maxLength={MAX_QUESTION_CHARS}
-        placeholder={disabled ? ask.refusal : "Ask about this incident…"}
+        placeholder={disabled ? ask.refusal : dictating ? "Listening…" : "Ask about this incident…"}
         aria-invalid={ask.error ? true : undefined}
         aria-describedby={ask.error ? "ask-triage-error" : "ask-triage-mode"}
         className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
@@ -900,9 +959,29 @@ function Composer({
           <span className="opacity-70">{hint.detail}</span>
         </TooltipContent>
       </Tooltip>
+      {showMic && (
+        <>
+          {dictation.status === "listening" && <LevelBars level={dictation.level} className="mx-1 self-center" />}
+          <MicButton
+            status={dictation.status}
+            disabled={disabled}
+            onClick={() => {
+              if (dictation.status === "idle") startDictating();
+              else if (dictation.status === "listening") void stopDictating(false);
+              else if (dictation.status === "starting") cancelDictating();
+              textareaRef.current?.focus();
+            }}
+          />
+        </>
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button type="submit" size="icon-sm" disabled={!canSend} aria-label="Send">
+          <Button
+            type="submit"
+            size="icon-sm"
+            disabled={dictation.status === "listening" ? disabled : !canSend || dictating}
+            aria-label="Send"
+          >
             <ArrowUpIcon />
           </Button>
         </TooltipTrigger>
@@ -927,6 +1006,29 @@ function Composer({
         <p id="ask-triage-error" role="alert" className="flex items-center gap-1.5 text-destructive text-xs">
           <CircleXIcon className="size-3.5 shrink-0" />
           {ask.error}
+        </p>
+      )}
+      {showMic && dictation.status !== "idle" && (
+        <p aria-live="polite" className="flex items-center gap-1.5 text-muted-foreground text-xs">
+          {dictation.status === "listening" ? (
+            <>
+              <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" />
+              <span>
+                <span className="text-foreground">Listening</span>, transcribing as you speak · Enter to send · Esc to
+                cancel
+              </span>
+            </>
+          ) : dictation.status === "starting" ? (
+            "Starting the microphone…"
+          ) : (
+            "Finishing the transcript…"
+          )}
+        </p>
+      )}
+      {showMic && dictation.status === "idle" && dictation.error && (
+        <p role="alert" className="flex items-center gap-1.5 text-destructive text-xs">
+          <CircleXIcon className="size-3.5 shrink-0" />
+          Voice input: {dictation.error}
         </p>
       )}
     </div>

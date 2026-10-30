@@ -6,6 +6,8 @@ import { SettingsSectionHeader } from "@/components/settings-list";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl, type SegmentedOption } from "@/components/ui/segmented-control";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { useDictationSupported } from "@/hooks/use-dictation";
 import { useSpeech, useSpeechAvailable } from "@/hooks/use-speech";
 import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { speechRates } from "@/lib/speech/preferences";
@@ -25,10 +27,11 @@ const subscribeNothing = () => () => {};
 const rowClass = "flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between";
 
 // Speech, per browser like Appearance: which of the browser's voices reads
-// answers aloud, how fast, and a preview of both. Nothing here reaches the
-// server. Voices are read in an effect (the server has none, and some
-// browsers deliver them after the page loads), so the first render matches
-// the server's.
+// answers aloud, how fast, and a preview of both; then voice input for the
+// Ask composer, the one part that reaches a server (Meta's transcription,
+// billed to Triage's key), so it is off until turned on here. Voices are
+// read in an effect (the server has none, and some browsers deliver them
+// after the page loads), so the first render matches the server's.
 export function SpeechSettings() {
   const { preferences, setPreferences } = useSpeechPreferences();
   const { status, key, error, toggle } = useSpeech();
@@ -37,6 +40,7 @@ export function SpeechSettings() {
   // Assumed on the server and while hydrating, so the markup agrees; the
   // browser's answer replaces it right after.
   const supported = useSyncExternalStore(subscribeNothing, () => "speechSynthesis" in window, () => true);
+  const canRecord = useDictationSupported();
 
   useEffect(() => {
     if (!("speechSynthesis" in window)) return;
@@ -111,6 +115,45 @@ export function SpeechSettings() {
             {previewing ? <SquareIcon /> : <Volume2Icon />}
             {previewing ? "Stop" : "Preview"}
           </Button>
+        </div>
+        <div className={rowClass}>
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor="voice-input" className="font-medium text-sm">
+              Voice input
+            </label>
+            <span id="voice-input-description" className="max-w-xl text-muted-foreground text-sm">
+              A microphone in the Ask composer that transcribes as you speak, with Meta&apos;s muse-voice-transcribe-1.0.
+              It uses the same Meta API key (MODEL_API_KEY) as investigations and incidents, and Meta bills each
+              minute of audio (about $0.18 an hour).
+            </span>
+            {preferences.voiceInput && !canRecord && (
+              <span className="text-destructive text-xs">This browser can&apos;t record audio here.</span>
+            )}
+          </div>
+          <Switch
+            id="voice-input"
+            aria-describedby="voice-input-description"
+            checked={preferences.voiceInput}
+            onCheckedChange={(on) => setPreferences({ ...preferences, voiceInput: on })}
+          />
+        </div>
+        <div className={rowClass}>
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor="voice-auto-send" className="font-medium text-sm">
+              Send when transcription finishes
+            </label>
+            <span id="voice-auto-send-description" className="max-w-xl text-muted-foreground text-sm">
+              Send the question as soon as you stop the microphone and the transcript is in, instead of waiting for
+              Enter.
+            </span>
+          </div>
+          <Switch
+            id="voice-auto-send"
+            aria-describedby="voice-auto-send-description"
+            disabled={!preferences.voiceInput}
+            checked={preferences.voiceAutoSend}
+            onCheckedChange={(on) => setPreferences({ ...preferences, voiceAutoSend: on })}
+          />
         </div>
       </div>
     </section>
