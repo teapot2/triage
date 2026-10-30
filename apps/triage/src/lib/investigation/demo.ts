@@ -80,6 +80,7 @@ function demoIncident(i: number, now: number): Incident {
       break;
     case "resolved":
       incident.approval = { state: "approved", requestedAt: iso(finishedAt), decidedAt: iso(finishedAt + minutes(5)) };
+      incident.resolvedAt = iso(finishedAt + minutes(9));
       break;
     case "failed":
       Object.assign(incident, { report: undefined, fix: undefined, validation: undefined, approval: undefined });

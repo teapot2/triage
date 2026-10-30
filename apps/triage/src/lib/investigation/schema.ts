@@ -254,6 +254,8 @@ export const approvalSchema = z.object({
   prState: z.enum(["opening", "opened", "failed"]).optional(),
   prError: z.string().optional(),
   prUrl: z.url().optional(),
+  // When the PR was merged, as the PR check last saw it.
+  prMergedAt: timestamp.optional(),
 });
 export type Approval = z.infer<typeof approvalSchema>;
 
@@ -383,6 +385,38 @@ export const postmortemSchema = z.object({
 });
 export type Postmortem = z.infer<typeof postmortemSchema>;
 
+// One time the incident was reopened: by the verification (the metric
+// climbed back inside the quiet window), by the watch (a breach shortly
+// after a resolution) or by a person. resolvedAt is the resolution it undid.
+export const reopeningSchema = z.object({
+  at: timestamp,
+  by: z.enum(["verification", "watch", "person"]),
+  why: z.string(),
+  resolvedAt: timestamp.optional(),
+  value: z.number().optional(),
+});
+export type Reopening = z.infer<typeof reopeningSchema>;
+
+// The quiet window after a recovery: the alert's metric watched for
+// windowMinutes completed minutes under its threshold. Resolves the
+// incident when it completes; reopens it on the first minute over.
+export const verificationSchema = z.object({
+  after: z.enum(["mitigation", "fix", "manual"]),
+  since: timestamp,
+  windowMinutes: z.number().int().positive(),
+  metric: z.string(),
+  threshold: z.number(),
+  series: z.array(metricPointSchema),
+  status: z.enum(["verifying", "resolved", "breached", "stopped"]),
+  startedAt: timestamp,
+  checkedAt: timestamp.optional(),
+  finishedAt: timestamp.optional(),
+  breachedAt: timestamp.optional(),
+  breachValue: z.number().optional(),
+  note: z.string().optional(),
+});
+export type Verification = z.infer<typeof verificationSchema>;
+
 export const incidentSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -424,6 +458,12 @@ export const incidentSchema = z.object({
   fixAttempts: z.array(fixAttemptSchema).optional(),
   // The blameless postmortem, written on request; writing again replaces it.
   postmortem: postmortemSchema.optional(),
+  // The quiet window after the last recovery; a new one replaces it.
+  verification: verificationSchema.optional(),
+  // When the incident was last resolved; cleared when it is reopened.
+  resolvedAt: timestamp.optional(),
+  // Every reopening, oldest first.
+  reopenings: z.array(reopeningSchema).optional(),
 });
 export type Incident =z.infer<typeof incidentSchema>;
 

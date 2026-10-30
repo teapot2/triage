@@ -13,7 +13,8 @@ export function rootCauseTitle(incident: Incident): string | undefined {
 // When the incident last changed in a way worth telling someone about: the
 // alert, its run starting or finishing, a decision on the fix or the
 // mitigation, the mitigation landing or the alert recovering, a question
-// answered. Drives the sidebar's "new" markers.
+// answered, the incident resolved or reopened. Drives the sidebar's "new"
+// markers.
 export function activityAt(incident: Incident): string {
   const { run, approval, mitigation } = incident;
   const times = [
@@ -26,6 +27,9 @@ export function activityAt(incident: Incident): string {
     mitigation?.recovery?.recoveredAt,
     ...(incident.questions ?? []).map((q) => q.answeredAt),
     incident.postmortem?.finishedAt,
+    incident.resolvedAt,
+    incident.verification?.finishedAt,
+    ...(incident.reopenings ?? []).map((r) => r.at),
   ];
   return times
     .filter((t): t is string => t !== undefined)
