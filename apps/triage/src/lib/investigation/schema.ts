@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { templateSchema } from "./postmortem/template";
 
 // Contract between the Triage agent and the UI. The agent emits a `report`
 // (structured output); tools emit `evidence`; the app adds the fix,
@@ -17,7 +18,7 @@ export const toolNameSchema = z.enum([
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
-const evidenceId = z
+export const evidenceId = z
   .string()
   .regex(/^ev_[a-z0-9_]+$/)
   .describe("ID of an evidence item returned by a tool, e.g. ev_log_3");
@@ -380,6 +381,11 @@ export const postmortemSchema = z.object({
   wentBadly: z.array(claimSchema).optional(),
   lucky: z.array(z.string()).optional().describe("What could have made it worse"),
   actionItems: z.array(postmortemActionItemSchema).optional(),
+  // The template's custom sections as written, named as the template named them.
+  custom: z.array(z.object({ id: z.string(), name: z.string(), text: z.string(), evidenceIds: z.array(evidenceId) })).optional(),
+  // The template this was written with, kept so it renders in the same shape
+  // later. Absent on records from before templates: they are the default.
+  template: templateSchema.optional(),
   citedIds: z.array(z.string()).optional(),
   unknownIds: z.array(z.string()).optional(),
 });

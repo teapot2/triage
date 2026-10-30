@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
+import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
 import { type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
 export { type StageId, stageIdSchema, stageIds } from "./stages";
@@ -9,7 +10,9 @@ export { type StageId, stageIdSchema, stageIds } from "./stages";
 // Which model each stage uses, and the endpoints of the configurable
 // providers. Saved server-side, in .data/settings.json (gitignored), since
 // the stages run on the server, the watch included. The file can hold keys,
-// so only publicModelSettings ever leaves the server.
+// so only publicModelSettings ever leaves the server. It is the one file for
+// the app's settings, so it also holds the one non-model key: the postmortem
+// template.
 
 const stageModelSchema = z.object({ provider: providerIdSchema, model: z.string().trim().min(1).max(200) });
 export type StageModel = z.infer<typeof stageModelSchema>;
@@ -22,6 +25,7 @@ const endpointSchema = z.object({
 const settingsSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).default({}),
   endpoints: z.partialRecord(providerIdSchema, endpointSchema).default({}),
+  postmortemTemplate: templateSchema.optional(),
 });
 type Settings = z.infer<typeof settingsSchema>;
 
@@ -142,4 +146,35 @@ export async function updateModelSettings(update: z.infer<typeof updateSchema>) 
   }
   await write(settings);
   return publicModelSettings();
+}
+
+// The team's postmortem template as saved, else the built-in sections.
+export async function readTemplate(): Promise<Template> {
+  return (await read()).postmortemTemplate ?? defaultTemplate;
+}
+
+// Saves a template after checking it. Throws a TemplateError listing what is
+// wrong with it.
+export class TemplateError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join("; "));
+  }
+}
+
+export async function writeTemplate(template: Template): Promise<Template> {
+  const parsed = templateSchema.safeParse(template);
+  if (!parsed.success) throw new TemplateError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`));
+  const problems = templateProblems(parsed.data);
+  if (problems.length) throw new TemplateError(problems);
+  const settings = await read();
+  settings.postmortemTemplate = parsed.data;
+  await write(settings);
+  return parsed.data;
+}
+
+// Back to the built-in sections.
+export async function clearTemplate(): Promise<void> {
+  const settings = await read();
+  delete settings.postmortemTemplate;
+  await write(settings);
 }
