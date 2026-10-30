@@ -20,9 +20,20 @@ export const severityIds: Severity[] = ["sev1", "sev2", "sev3", "sev4"];
 // In progress, then done, the order the filter menus group them in.
 export const statusIds: IncidentStatus[] = ["investigating", "diagnosed", "awaiting_approval", "resolved", "failed", "healthy"];
 
-// What someone has to act on or watch: a fix to approve, a run to retry, a
-// run in progress. The bell narrows Recent to these.
+// What someone has to act on or watch, most urgent first: a fix to approve,
+// a run to retry, a run in progress. The bell narrows Recent to these.
 export const attentionStatuses: IncidentStatus[] = ["awaiting_approval", "failed", "investigating"];
+
+// Needs someone: one of those statuses, or a fix waiting for a decision
+// whatever the status (an incident resolves before its fix is approved).
+export function needsAttention(i: { status: IncidentStatus; fixPending: boolean }): boolean {
+  return i.fixPending || attentionStatuses.includes(i.status);
+}
+
+// Where it sorts among those: a pending fix with the ones awaiting approval.
+export function attentionRank(i: { status: IncidentStatus; fixPending: boolean }): number {
+  return i.fixPending ? 0 : attentionStatuses.indexOf(i.status);
+}
 
 export type RecentFilters = {
   sort: RecentSort;

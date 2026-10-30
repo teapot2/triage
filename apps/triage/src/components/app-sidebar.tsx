@@ -12,11 +12,11 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Incident, IncidentStatus } from "@/lib/investigation/schema";
+import type { Incident } from "@/lib/investigation/schema";
 import { investigationOptions } from "@/lib/investigation/options";
 import { listIncidents } from "@/lib/investigation/store";
 import { activityAt, incidentPreview, openStatuses, rootCauseTitle } from "@/lib/investigation/summary";
-import { parseRecentFilters, SIDEBAR_FILTERS_COOKIE } from "@/lib/sidebar-filters";
+import { attentionRank, needsAttention, parseRecentFilters, SIDEBAR_FILTERS_COOKIE } from "@/lib/sidebar-filters";
 import { parseCollapsedSections, SIDEBAR_SECTIONS_COOKIE } from "@/lib/sidebar-sections";
 import { AppSidebarNav } from "./app-sidebar-nav";
 import { NewInvestigation } from "./new-investigation";
@@ -25,9 +25,6 @@ import { SidebarFooterControls } from "./sidebar-footer";
 import { SidebarWatch } from "./sidebar-settings";
 
 const ATTENTION_LIMIT = 5;
-// What someone has to act on or watch, most urgent first: a fix to approve,
-// a run to retry, a run in progress.
-const attentionOrder: IncidentStatus[] = ["awaiting_approval", "failed", "investigating"];
 
 export function AppSidebar() {
   return (
@@ -76,8 +73,8 @@ async function IncidentsNav() {
 
 // What the nav shows, plus when it was read: the browser's first render of
 // the relative times uses that, so it matches this HTML before its own
-// clock takes over. `attention` is what needs someone, most urgent status
-// first (each status newest first: the list is sorted newest first and the
+// clock takes over. `attention` is what needs someone, most urgent first
+// (a fix to approve, a run to retry, a run in progress; each newest first: the list is sorted newest first and the
 // sort is stable), for the search palette. The sidebar's Recent list is
 // filtered from `all` in the browser, by the bell and the filter menu.
 async function loadNav() {
@@ -89,20 +86,22 @@ async function loadNav() {
     title: i.title,
     service: i.service,
     status: i.status,
+    fixPending: i.approval?.state === "pending",
     severity: i.severity,
     at: i.run?.startedAt ?? i.detectedAt,
     activityAt: activityAt(i),
     preview: incidentPreview(i),
   });
-  const attention = incidents
-    .filter((i) => attentionOrder.includes(i.status))
-    .sort((a, b) => attentionOrder.indexOf(a.status) - attentionOrder.indexOf(b.status))
+  const items = incidents.map(toItem);
+  const attention = items
+    .filter(needsAttention)
+    .sort((a, b) => attentionRank(a) - attentionRank(b))
     .slice(0, ATTENTION_LIMIT);
   return {
     openCount,
-    attention: attention.map(toItem),
+    attention,
     // Every incident: Recent and search draw from it.
-    all: incidents.map(toItem),
+    all: items,
     now: Date.now(),
   };
 }

@@ -25,9 +25,9 @@ import type { ScenarioOption } from "@/hooks/use-start-investigation";
 import type { Incident, IncidentStatus } from "@/lib/investigation/schema";
 import type { IncidentPreview as Preview } from "@/lib/investigation/summary";
 import {
-  attentionStatuses,
   defaultRecentFilters,
   isDefaultMenu,
+  needsAttention,
   type RecentFilters,
   type RecentSort,
   writeRecentFilters,
@@ -46,6 +46,8 @@ export interface RecentIncident {
   title: string;
   service: string;
   status: IncidentStatus;
+  // A fix waiting for a decision: needs attention whatever the status.
+  fixPending: boolean;
   severity: Incident["severity"];
   // When the run started (or the alert fired), ISO: runs often share a
   // conclusion, so how long ago tells them apart.
@@ -116,7 +118,6 @@ export function AppSidebarNav({
     setLimit(RECENT_LIMIT);
     writeRecentFilters(next);
   };
-  const needsAttention = (i: RecentIncident) => attentionStatuses.includes(i.status);
   const attentionCount = all.filter(needsAttention).length;
   // The filter menu's choices; the bell is applied on its own.
   const menuMatch = (i: RecentIncident) =>
