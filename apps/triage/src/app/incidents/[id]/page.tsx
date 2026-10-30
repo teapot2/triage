@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { after } from "next/server";
 import { Suspense } from "react";
 import { IncidentView } from "@/components/incident/incident-view";
 import { Skeleton } from "@/components/ui/skeleton";
+import { checkPrMerged } from "@/lib/investigation/fix/pr-merge";
 import { getIncident } from "@/lib/investigation/store";
 
 type Props = { params: Promise<{ id: string }> };
@@ -27,6 +29,12 @@ async function Incident({ params }: Props) {
   const { id } = await params;
   const incident = await getIncident(id);
   if (!incident) notFound();
+  // Whether the fix's PR has been merged since, checked after the page is
+  // sent (at most once a minute; there's no background poll).
+  const { approval } = incident;
+  if (approval?.prState === "opened" && !approval.prMergedAt && incident.status !== "resolved") {
+    after(() => checkPrMerged(incident));
+  }
   return <IncidentView incident={incident} />;
 }
 
