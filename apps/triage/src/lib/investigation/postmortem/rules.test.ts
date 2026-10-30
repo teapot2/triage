@@ -10,6 +10,7 @@ import {
   postmortemProblems,
   postmortemRefusal,
 } from "./rules";
+import { defaultTemplate, type Template } from "./template";
 
 // The pool leak has a report, a fix and a pending approval; the control
 // run is healthy.
@@ -123,12 +124,12 @@ describe("blamelessProblems", () => {
 
 describe("postmortemProblems", () => {
   it("accepts a good submission", () => {
-    assert.deepEqual(postmortemProblems(submission(), poolLeak()), []);
+    assert.deepEqual(postmortemProblems(submission(), poolLeak(), defaultTemplate), []);
   });
 
   it("lists an unknown ID", () => {
     const s = submission({ wentWell: [{ text: "Alert fired.", evidenceIds: ["ev_metric_p95", "ev_log_made_up"] }] });
-    assert.deepEqual(postmortemProblems(s, poolLeak()), [
+    assert.deepEqual(postmortemProblems(s, poolLeak(), defaultTemplate), [
       "unknown evidence IDs cited: ev_log_made_up. Cite only IDs listed in the prompt",
     ]);
   });
@@ -151,13 +152,13 @@ describe("postmortemProblems", () => {
       },
     ];
     const s = submission({ wentWell: [{ text: "Alert fired.", evidenceIds: ["ev_q1_metric_1"] }] });
-    assert.deepEqual(postmortemProblems(s, i), []);
+    assert.deepEqual(postmortemProblems(s, i, defaultTemplate), []);
   });
 
   it("wants 2 to 5 contributing factors", () => {
-    const factor = submission().contributingFactors[0];
-    assert.match(postmortemProblems(submission({ contributingFactors: Array(6).fill(factor) }), poolLeak())[0], /has 6: give 2 to 5/);
-    assert.match(postmortemProblems(submission({ contributingFactors: [factor] }), poolLeak())[0], /has 1: give 2 to 5/);
+    const factor = submission().contributingFactors![0];
+    assert.match(postmortemProblems(submission({ contributingFactors: Array(6).fill(factor) }), poolLeak(), defaultTemplate)[0], /has 6: give 2 to 5/);
+    assert.match(postmortemProblems(submission({ contributingFactors: [factor] }), poolLeak(), defaultTemplate)[0], /has 1: give 2 to 5/);
   });
 
   it("checks every text field for names and blame", () => {
@@ -166,7 +167,7 @@ describe("postmortemProblems", () => {
       actionItems: [{ title: "Engineers should have tested the missing-row path", kind: "prevent_class", priority: "P2" }],
     });
     assert.deepEqual(
-      postmortemProblems(s, poolLeak()).map((p) => p.split(" ")[0]),
+      postmortemProblems(s, poolLeak(), defaultTemplate).map((p) => p.split(" ")[0]),
       ["lucky[0]", "actionItems[0].title"],
     );
   });
@@ -175,13 +176,13 @@ describe("postmortemProblems", () => {
     const i = poolLeak();
     for (const title of ["Merge the PR", "Approve the fix", "Release the pooled client in a finally block"]) {
       const s = submission({ actionItems: [{ title, kind: "fix_this", priority: "P1" }] });
-      assert.match(postmortemProblems(s, i)[0], /repeats the fix/);
+      assert.match(postmortemProblems(s, i, defaultTemplate)[0], /repeats the fix/);
     }
   });
 
   it("rejects evidence IDs in the summary", () => {
     const s = submission({ summary: "Pages timed out [ev_metric_p95]." });
-    assert.match(postmortemProblems(s, poolLeak())[0], /summary cites evidence IDs/);
+    assert.match(postmortemProblems(s, poolLeak(), defaultTemplate)[0], /summary cites evidence IDs/);
   });
 });
 
@@ -195,5 +196,67 @@ describe("citedEvidenceIds", () => {
       "ev_log_stock_miss",
       "ev_metric_pool",
     ]);
+  });
+});
+
+describe("postmortemProblems with a template", () => {
+  const comms = {
+    kind: "custom" as const,
+    id: "customer-communication",
+    name: "Customer communication",
+    instructions: "Who was told what and when, from the record; say if nothing was recorded",
+  };
+  const template: Template = {
+    sections: [
+      { kind: "builtin", key: "summary" },
+      { kind: "builtin", key: "actions" },
+      comms,
+    ],
+  };
+  const write = (patch: Partial<PostmortemSubmission> = {}): PostmortemSubmission => {
+    const { summary, actionItems } = submission();
+    return {
+      summary,
+      actionItems,
+      custom: [{ id: "customer-communication", text: "Nothing was recorded.", evidenceIds: [] }],
+      ...patch,
+    };
+  };
+
+  it("accepts a submission of only the kept sections, without the factors rule", () => {
+    assert.deepEqual(postmortemProblems(write(), poolLeak(), template), []);
+  });
+
+  it("still applies the factors rule when factors are kept", () => {
+    const withFactors: Template = { sections: [{ kind: "builtin", key: "factors" }] };
+    assert.match(postmortemProblems({ contributingFactors: [] }, poolLeak(), withFactors)[0], /has 0: give 2 to 5/);
+  });
+
+  it("applies the fix-repeat rule when action items are kept", () => {
+    const s = write({ actionItems: [{ title: "Merge the PR", kind: "fix_this", priority: "P1" }] });
+    assert.match(postmortemProblems(s, poolLeak(), template)[0], /repeats the fix/);
+  });
+
+  it("wants every custom section once and none extra", () => {
+    assert.match(postmortemProblems(write({ custom: [] }), poolLeak(), template)[0], /"customer-communication" is missing/);
+    const twice = { id: "customer-communication", text: "x", evidenceIds: [] };
+    assert.match(postmortemProblems(write({ custom: [twice, twice] }), poolLeak(), template)[0], /appears 2 times/);
+    const extra = write({ custom: [...write().custom!, { id: "other", text: "x", evidenceIds: [] }] });
+    assert.match(postmortemProblems(extra, poolLeak(), template)[0], /"other" is not in the template/);
+  });
+
+  it("checks custom texts for blame and unknown IDs like any claim", () => {
+    const blamed = write({ custom: [{ id: "customer-communication", text: "Support failed to tell anyone.", evidenceIds: [] }] });
+    assert.deepEqual(
+      postmortemProblems(blamed, poolLeak(), template).map((p) => p.split(" ").slice(0, 2).join(" ")),
+      ['custom "customer-communication"'],
+    );
+    const unknown = write({ custom: [{ id: "customer-communication", text: "Told.", evidenceIds: ["ev_made_up"] }] });
+    assert.match(postmortemProblems(unknown, poolLeak(), template)[0], /unknown evidence IDs cited: ev_made_up/);
+  });
+
+  it("counts custom citations in citedEvidenceIds", () => {
+    const s = write({ custom: [{ id: "customer-communication", text: "Told.", evidenceIds: ["ev_log_timeout"] }] });
+    assert.deepEqual(citedEvidenceIds(s), ["ev_log_timeout", "ev_metric_pool"]);
   });
 });

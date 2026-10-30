@@ -1,11 +1,13 @@
 import { type ModelMessage, tool, ToolLoopAgent } from "ai";
+import { z } from "zod";
 import { languageModel, modelOptions } from "../../models/client";
-import { stageModel, stageProblem } from "../../models/settings";
+import { readTemplate, stageModel, stageProblem } from "../../models/settings";
 import { cite, incidentBlock } from "../context";
-import { type Incident, type Postmortem, postmortemSchema } from "../schema";
+import { evidenceId, type Incident, type Postmortem, postmortemSchema } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { forModel } from "../tools";
 import { citedEvidenceIds, MAX_FACTORS, MIN_FACTORS, type PostmortemSubmission, postmortemProblems } from "./rules";
+import { type BuiltInSection, customSections, keptBuiltIns, type Template } from "./template";
 
 // Stage "postmortem": the blameless postmortem's judgment (summary, impact,
 // contributing factors, what went well and badly, luck, action items),
@@ -19,36 +21,67 @@ const MAX_STEPS = 3;
 const MAX_NUDGES = 1;
 const NUDGE = "You have not submitted an accepted postmortem yet. Fix any problems listed, then call submit_postmortem.";
 
-const instructions = `You are Triage, an SRE. Write the team's blameless postmortem for the incident below, from its record.
+// The writer's rules for each built-in section the template can keep. The
+// timeline has none: the renderer builds it.
+const sectionRules: Partial<Record<BuiltInSection, string>> = {
+  summary: "- summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.",
+  impact: "- impact: who was affected and how.",
+  factors: `- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late). When the alert fired on a symptom (latency, errors) and nothing watched the resource that actually ran out (a pool, a queue, a disk), that missing alert is a contributing factor in its own right, cited to the metric evidence that shows the resource saturating.`,
+  lessons:
+    "- wentWell and wentBadly judge detection, response and tooling, never the symptoms themselves: what caught the problem or missed it (an alert on latency but none on the pool), what made the response faster or slower (a flag made the mitigation quick; no test covered the failing path), what tooling helped or was missing. A symptom belongs in impact or the factors, not here.",
+  lucky: "- lucky: what could have made it worse and did not.",
+  actions:
+    "- actionItems: mix the four kinds (fix_this, prevent_class, detect_sooner, mitigate_faster), with a priority each. Never repeat the fix (\"merge the PR\", \"approve the fix\", or the fix's own words) or the mitigation's steps: both are covered separately. fix_this items are what this instance still needs beyond the fix and the mitigation; if nothing is left, give fewer items rather than restating them.",
+};
 
-Rules:
-- Blameless: ask how the system allowed the failure, never who caused it. A deploy "shipped", a flag "was turned on"; nobody is named. Avoid "blame", "fault of", "should have", "failed to", "careless" and "negligent": say what the system did or did not do.
-- Cite every factual claim: put the evidence IDs it rests on in that claim's evidenceIds, plain (ev_log_3, not [ev_log_3]). Cite only IDs listed below. Never invent one.
-- Say only what the record shows. A mitigation that was proposed but not applied did not happen. When no recovery is recorded, do not guess how or when the impact ended: an incident marked resolved was resolved without a recorded recovery time; otherwise the record does not show when the impact ended.
-- summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.
-- impact: who was affected and how.
-- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late). When the alert fired on a symptom (latency, errors) and nothing watched the resource that actually ran out (a pool, a queue, a disk), that missing alert is a contributing factor in its own right, cited to the metric evidence that shows the resource saturating.
-- wentWell and wentBadly judge detection, response and tooling, never the symptoms themselves: what caught the problem or missed it (an alert on latency but none on the pool), what made the response faster or slower (a flag made the mitigation quick; no test covered the failing path), what tooling helped or was missing. A symptom belongs in impact or the factors, not here.
-- lucky: what could have made it worse and did not.
-- actionItems: mix the four kinds (fix_this, prevent_class, detect_sooner, mitigate_faster), with a priority each. Never repeat the fix ("merge the PR", "approve the fix", or the fix's own words) or the mitigation's steps: both are covered separately. fix_this items are what this instance still needs beyond the fix and the mitigation; if nothing is left, give fewer items rather than restating them.
-- Under 400 words in all.
-- Submit with submit_postmortem. If it is rejected, fix the listed problems and submit again.`;
+// The system prompt: the general rules, then the rules of the sections the
+// template keeps, then its custom sections.
+export function instructionsFor(template: Template): string {
+  const kept = keptBuiltIns(template);
+  const custom = customSections(template);
+  const lines = [
+    "You are Triage, an SRE. Write the team's blameless postmortem for the incident below, from its record.",
+    "",
+    "Rules:",
+    `- Blameless: ask how the system allowed the failure, never who caused it. A deploy "shipped", a flag "was turned on"; nobody is named. Avoid "blame", "fault of", "should have", "failed to", "careless" and "negligent": say what the system did or did not do.`,
+    "- Cite every factual claim: put the evidence IDs it rests on in that claim's evidenceIds, plain (ev_log_3, not [ev_log_3]). Cite only IDs listed below. Never invent one.",
+    "- Say only what the record shows. A mitigation that was proposed but not applied did not happen. When no recovery is recorded, do not guess how or when the impact ended: an incident marked resolved was resolved without a recorded recovery time; otherwise the record does not show when the impact ended.",
+    ...kept.flatMap((key) => sectionRules[key] ?? []),
+  ];
+  if (custom.length) {
+    lines.push(
+      "",
+      "Custom sections your team asks for. Write each into `custom` under its id, with the same rules: cite evidence IDs, stay blameless, and say that the record does not show it rather than invent it.",
+      ...custom.map((c) => `- ${c.id} (${c.name}): ${c.instructions}`),
+    );
+  }
+  lines.push("", "- Under 400 words in all.", "- Submit with submit_postmortem. If it is rejected, fix the listed problems and submit again.");
+  return lines.join("\n");
+}
 
-// The tool's input: the record's judgment, every field required.
-const submissionSchema = postmortemSchema
-  .omit({
-    status: true,
-    startedAt: true,
-    finishedAt: true,
-    error: true,
-    provider: true,
-    model: true,
-    inputTokens: true,
-    outputTokens: true,
-    citedIds: true,
-    unknownIds: true,
-  })
-  .required();
+// The record fields each built-in section is written into.
+const sectionFields: Partial<Record<BuiltInSection, (keyof Postmortem)[]>> = {
+  summary: ["summary"],
+  impact: ["impact"],
+  factors: ["contributingFactors"],
+  lessons: ["wentWell", "wentBadly"],
+  lucky: ["lucky"],
+  actions: ["actionItems"],
+};
+
+// The tool's input: the judgment of the sections the template keeps, every
+// field required, plus the custom sections' texts when it has any.
+export function submissionSchemaFor(template: Template) {
+  const mask = Object.fromEntries(keptBuiltIns(template).flatMap((key) => sectionFields[key] ?? []).map((f) => [f, true as const]));
+  // pick() wants a literal mask; this one is built from the template.
+  const base = (postmortemSchema.pick(mask as never) as unknown as typeof postmortemSchema).required();
+  const custom = customSections(template);
+  if (!custom.length) return base as unknown as z.ZodType<PostmortemSubmission>;
+  const ids = custom.map((c) => c.id) as [string, ...string[]];
+  return base.extend({
+    custom: z.array(z.object({ id: z.enum(ids), text: z.string(), evidenceIds: z.array(evidenceId) })),
+  }) as unknown as z.ZodType<PostmortemSubmission>;
+}
 
 // The incident's times in order, as a timeline the model can quote.
 function timelineBlock(incident: Incident): string {
@@ -161,6 +194,25 @@ ${evidence || "(none)"}
 Write the postmortem and submit it.`;
 }
 
+// What the tool says it checks, for the sections the template keeps.
+export function submitDescription(template: Template): string {
+  const kept = new Set(keptBuiltIns(template));
+  const checks = [
+    ...(kept.has("factors") ? [`${MIN_FACTORS} to ${MAX_FACTORS} contributing factors`] : []),
+    ...(customSections(template).length ? ["every custom section written once"] : []),
+    "every cited evidence ID must exist",
+    "nobody named or blamed",
+    ...(kept.has("actions") ? ["no action item repeating the fix"] : []),
+  ];
+  return `Submit the postmortem. It is checked: ${checks.join(", ")}. If it is rejected, fix the listed problems and submit again.`;
+}
+
+// The submitted custom sections with the names the template gives them.
+function namedCustom(custom: NonNullable<PostmortemSubmission["custom"]>, template: Template): NonNullable<Postmortem["custom"]> {
+  const names = new Map(customSections(template).map((c) => [c.id, c.name]));
+  return custom.map((c) => ({ ...c, name: names.get(c.id) ?? c.id }));
+}
+
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 500);
 
 // Writes the postmortem of an incident whose record is status writing (the
@@ -181,6 +233,10 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     const stage = await stageModel("postmortem");
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
+    // The template as it stands now: it shapes what is asked and is kept on
+    // the record, so the postmortem renders as it was written.
+    const template = await readTemplate();
+    const submissionSchema = submissionSchemaFor(template);
 
     let accepted: PostmortemSubmission | undefined;
     let lastProblems: string[] = [];
@@ -188,15 +244,14 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     const agent = new ToolLoopAgent({
       model: languageModel(stage),
       providerOptions: modelOptions(stage),
-      instructions,
+      instructions: instructionsFor(template),
       tools: {
         submit_postmortem: tool({
-          description:
-            "Submit the postmortem. It is checked: 2 to 5 contributing factors, every cited evidence ID must exist, nobody named or blamed, and no action item repeating the fix. If it is rejected, fix the listed problems and submit again.",
+          description: submitDescription(template),
           inputSchema: submissionSchema,
           execute: async (input) => {
             const submission = submissionSchema.parse(input);
-            lastProblems = postmortemProblems(submission, incident);
+            lastProblems = postmortemProblems(submission, incident, template);
             if (lastProblems.length > 0) return `Rejected:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
             accepted = submission;
             return "Accepted.";
@@ -222,6 +277,8 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     if (accepted) {
       await finish({
         ...accepted,
+        custom: accepted.custom && customSections(template).length ? namedCustom(accepted.custom, template) : undefined,
+        template,
         status: "ready",
         error: undefined,
         citedIds: citedEvidenceIds(accepted),

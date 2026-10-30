@@ -1,14 +1,19 @@
 import type { StageModel } from "../../models/settings";
 import { knownEvidenceIds } from "../ask/rules";
 import type { Claim, Incident, Postmortem } from "../schema";
+import { customSections, keptBuiltIns, type Template } from "./template";
 
 // The pure rules around the postmortem, apart from the writer so they can
 // be tested without a model.
 
-// What the model submits: the record's judgment, every field required.
-export type PostmortemSubmission = Required<
-  Pick<Postmortem, "summary" | "impact" | "contributingFactors" | "wentWell" | "wentBadly" | "lucky" | "actionItems">
->;
+// What the model submits: the judgment of the sections the template keeps,
+// each field required there and absent where the section was dropped, and
+// the custom sections' texts by id.
+export type PostmortemSubmission = Partial<
+  Required<
+    Pick<Postmortem, "summary" | "impact" | "contributingFactors" | "wentWell" | "wentBadly" | "lucky" | "actionItems">
+  >
+> & { custom?: { id: string; text: string; evidenceIds: string[] }[] };
 
 export const MIN_FACTORS = 2;
 export const MAX_FACTORS = 5;
@@ -87,11 +92,17 @@ export function blamelessProblems(text: string, incident: Incident): string[] {
   return problems;
 }
 
-const claimsOf = (s: PostmortemSubmission): Claim[] => [s.impact, ...s.contributingFactors, ...s.wentWell, ...s.wentBadly];
+const claimsOf = (s: PostmortemSubmission): Claim[] => [
+  ...(s.impact ? [s.impact] : []),
+  ...(s.contributingFactors ?? []),
+  ...(s.wentWell ?? []),
+  ...(s.wentBadly ?? []),
+  ...(s.custom ?? []),
+];
 
 // Every evidence ID the submission cites, in order of first mention.
 export function citedEvidenceIds(s: PostmortemSubmission): string[] {
-  const ids = [...claimsOf(s).flatMap((c) => c.evidenceIds), ...s.actionItems.flatMap((a) => a.evidenceIds ?? [])];
+  const ids = [...claimsOf(s).flatMap((c) => c.evidenceIds), ...(s.actionItems ?? []).flatMap((a) => a.evidenceIds ?? [])];
   return [...new Set(ids)];
 }
 
@@ -106,31 +117,50 @@ function repeatsFix(title: string, incident: Incident): boolean {
   return start.length === 5 && t.includes(start.join(" "));
 }
 
-// Rules the tool's schema cannot express; checked on every submission.
-export function postmortemProblems(s: PostmortemSubmission, incident: Incident): string[] {
+// Rules the tool's schema cannot express; checked on every submission, only
+// for the sections the template keeps.
+export function postmortemProblems(s: PostmortemSubmission, incident: Incident, template: Template): string[] {
   const problems: string[] = [];
-  const n = s.contributingFactors.length;
-  if (n < MIN_FACTORS || n > MAX_FACTORS) {
-    problems.push(`contributingFactors has ${n}: give ${MIN_FACTORS} to ${MAX_FACTORS}`);
+  const kept = new Set(keptBuiltIns(template));
+  if (kept.has("factors")) {
+    const n = s.contributingFactors?.length ?? 0;
+    if (n < MIN_FACTORS || n > MAX_FACTORS) {
+      problems.push(`contributingFactors has ${n}: give ${MIN_FACTORS} to ${MAX_FACTORS}`);
+    }
   }
+  const wanted = customSections(template).map((c) => c.id);
+  const seen = new Map<string, number>();
+  for (const c of s.custom ?? []) seen.set(c.id, (seen.get(c.id) ?? 0) + 1);
+  for (const id of wanted) {
+    const count = seen.get(id) ?? 0;
+    if (count === 0) problems.push(`custom section "${id}" is missing: write it once`);
+    else if (count > 1) problems.push(`custom section "${id}" appears ${count} times: write it once`);
+  }
+  for (const id of seen.keys()) {
+    if (!wanted.includes(id)) problems.push(`custom section "${id}" is not in the template: write only ${wanted.length ? wanted.join(", ") : "none"}`);
+  }
+
   const known = knownEvidenceIds(incident);
   const unknown = citedEvidenceIds(s).filter((id) => !known.has(id));
   if (unknown.length) problems.push(`unknown evidence IDs cited: ${unknown.join(", ")}. Cite only IDs listed in the prompt`);
-  if (/\bev_[a-z0-9_]+/.test(s.summary)) problems.push("the summary cites evidence IDs: write it in plain sentences without them");
+  if (s.summary !== undefined && /\bev_[a-z0-9_]+/.test(s.summary)) {
+    problems.push("the summary cites evidence IDs: write it in plain sentences without them");
+  }
 
   const texts: [string, string][] = [
-    ["summary", s.summary],
-    ["impact", s.impact.text],
-    ...s.contributingFactors.map((c, i): [string, string] => [`contributingFactors[${i}]`, c.text]),
-    ...s.wentWell.map((c, i): [string, string] => [`wentWell[${i}]`, c.text]),
-    ...s.wentBadly.map((c, i): [string, string] => [`wentBadly[${i}]`, c.text]),
-    ...s.lucky.map((t, i): [string, string] => [`lucky[${i}]`, t]),
-    ...s.actionItems.map((a, i): [string, string] => [`actionItems[${i}].title`, a.title]),
+    ...(s.summary !== undefined ? [["summary", s.summary] as [string, string]] : []),
+    ...(s.impact ? [["impact", s.impact.text] as [string, string]] : []),
+    ...(s.contributingFactors ?? []).map((c, i): [string, string] => [`contributingFactors[${i}]`, c.text]),
+    ...(s.wentWell ?? []).map((c, i): [string, string] => [`wentWell[${i}]`, c.text]),
+    ...(s.wentBadly ?? []).map((c, i): [string, string] => [`wentBadly[${i}]`, c.text]),
+    ...(s.lucky ?? []).map((t, i): [string, string] => [`lucky[${i}]`, t]),
+    ...(s.actionItems ?? []).map((a, i): [string, string] => [`actionItems[${i}].title`, a.title]),
+    ...(s.custom ?? []).map((c): [string, string] => [`custom "${c.id}"`, c.text]),
   ];
   for (const [field, text] of texts) {
     for (const problem of blamelessProblems(text, incident)) problems.push(`${field} ${problem}`);
   }
-  s.actionItems.forEach((a, i) => {
+  (s.actionItems ?? []).forEach((a, i) => {
     if (repeatsFix(a.title, incident)) {
       problems.push(`actionItems[${i}] repeats the fix ("${a.title}"): it is added separately, list what else to do`);
     }
