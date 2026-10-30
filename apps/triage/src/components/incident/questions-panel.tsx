@@ -32,6 +32,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { SpeakButton } from "@/components/speech/speak-button";
 import { Timestamp } from "@/components/timestamp";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -714,13 +715,15 @@ function ChatTurn({
               // while one of its tooltips is open (the trigger's data-state
               // is delayed-open or instant-open) or its details are (the
               // trigger's aria-expanded: the tooltip's data-state wins on a
-              // trigger that has both), since the pointer can move onto them
-              // and so off the turn.
+              // trigger that has both), or while its answer is read aloud
+              // (the speak button's aria-pressed), since the pointer can move
+              // onto them and so off the turn.
               !latest &&
-                "absolute inset-x-0 top-full pt-1 opacity-0 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100 has-[[data-state$=open]]:opacity-100 has-[[aria-expanded=true]]:opacity-100",
+                "absolute inset-x-0 top-full pt-1 opacity-0 group-hover/turn:opacity-100 group-focus-within/turn:opacity-100 has-[[data-state$=open]]:opacity-100 has-[[aria-expanded=true]]:opacity-100 has-[[aria-pressed=true]]:opacity-100",
             )}
           >
             <CopyAnswer answer={view.answer} />
+            <SpeakButton id={view.key} text={view.answer} />
             <ReplyDetails view={view} />
           </div>
         )}

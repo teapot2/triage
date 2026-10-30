@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { Suspense } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandRegistryProvider } from "@/components/command-registry";
 import { SidebarStateScript } from "@/components/sidebar-state-script";
@@ -9,6 +10,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CodeFontSync } from "@/hooks/use-code-font-size";
 import { ColorThemeSync } from "@/hooks/use-color-theme";
+import { SpeechSync } from "@/hooks/use-speech";
 import { ThemeSync } from "@/hooks/use-theme";
 import { codeFontScript } from "@/lib/code-font";
 import { colorThemeScript } from "@/lib/color-theme";
@@ -58,6 +60,11 @@ export default function RootLayout({
         <ThemeSync />
         <ColorThemeSync />
         <CodeFontSync />
+        {/* Reads the URL (usePathname), which prerendering only has at request
+            time; Suspense lets the rest of the page render ahead of it. */}
+        <Suspense>
+          <SpeechSync />
+        </Suspense>
         <TooltipProvider>
           <CommandRegistryProvider>
             <SidebarProvider>

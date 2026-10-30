@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import { CodeFontSizeSelect } from "@/components/code-font-size-select";
 import { ColorThemeSelect } from "@/components/color-theme-select";
 import { ModelSettings } from "@/components/model-settings";
+import { SpeechSettings } from "@/components/speech-settings";
 import { ThemeSelect } from "@/components/theme-select";
 
 export const metadata: Metadata = { title: "Settings · Triage" };
 
 // Settings. Each section is a bordered list of rows: a label and one-line
 // description on the left, the control on the right. Appearance is per
-// browser; the models are saved on the server. The watch's rules have their
+// browser, and so is Speech; the models are saved on the server. The watch's rules have their
 // own page, /watch.
 export default function SettingsPage() {
   return (
@@ -50,6 +51,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+
+      <SpeechSettings />
 
       <ModelSettings />
     </div>
