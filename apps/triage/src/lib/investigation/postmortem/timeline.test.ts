@@ -137,6 +137,40 @@ describe("durations", () => {
     ]);
   });
 
+  it("starts at the episode that fired the alert, not an earlier one in the series", () => {
+    // The live run: an earlier episode from 23:46, healthy by 00:00, then
+    // breaching again from 00:12; the alert fired at 00:13:47.
+    const minute = (hhmm: string) => `2026-10-${hhmm < "12:00" ? "30" : "29"}T${hhmm}:00.000Z`;
+    const incident = mitigated();
+    const points: [string, number][] = [
+      ["23:44", 7], ["23:45", 8], ["23:46", 3000], ["23:50", 3020], ["23:55", 2990],
+      ["00:00", 9], ["00:05", 7], ["00:11", 8], ["00:12", 2800], ["00:13", 3019],
+    ];
+    incident.trigger.series = points.map(([hhmm, value]) => ({ t: minute(hhmm), value }));
+    incident.detectedAt = "2026-10-30T00:13:47.000Z";
+    incident.run!.finishedAt = "2026-10-30T00:14:39.000Z";
+    incident.mitigation!.appliedAt = "2026-10-30T00:15:02.000Z";
+    incident.mitigation!.recovery!.recoveredAt = "2026-10-30T00:16:00.000Z";
+    assert.equal(firstBreach(incident), minute("00:12"));
+    const crossed = postmortemTimeline(incident).filter((e) => e.event === "p95 latency crossed 500 ms");
+    assert.deepEqual(crossed, [{ at: minute("00:12"), event: "p95 latency crossed 500 ms" }]);
+    const detect = durations(incident).find((d) => d.label === "Time to detect");
+    assert.ok(detect && detect.ms < 2 * 60_000, `time to detect ${detect?.ms} ms`);
+    assert.equal(durations(incident).find((d) => d.label === "Time to recover")?.ms, 4 * 60_000);
+  });
+
+  it("keeps one healthy bucket inside the episode, and falls back to a breach after the alert", () => {
+    const incident = mitigated();
+    incident.trigger.series = [100, 600, 700, 100, 800, 900].map((value, i) => ({ t: at(i), value }));
+    incident.detectedAt = at(5);
+    assert.equal(firstBreach(incident), at(1));
+    incident.trigger.series[2].value = 100;
+    incident.trigger.series[3].value = 100;
+    assert.equal(firstBreach(incident), at(4));
+    incident.detectedAt = at(0);
+    assert.equal(firstBreach(incident), at(1));
+  });
+
   it("leaves out spans with a missing or reversed end", () => {
     const incident = poolLeak();
     incident.trigger.series = incident.trigger.series.map((p) => ({ ...p, value: 0 }));

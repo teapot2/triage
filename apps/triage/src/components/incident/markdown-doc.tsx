@@ -130,7 +130,7 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
                 className={cn("flex flex-col gap-1 pl-5 marker:text-muted-foreground", block.ordered ? "list-decimal" : "list-disc")}
               >
                 {block.items.map((item, j) => (
-                  <li key={j} className="pl-0.5">
+                  <li key={j} className="min-w-0 break-words pl-0.5">
                     <Inline text={item} />
                   </li>
                 ))}
@@ -139,7 +139,7 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
           }
           case "paragraph":
             return (
-              <p key={i}>
+              <p key={i} className="min-w-0 break-words">
                 <Inline text={block.text} />
               </p>
             );
@@ -194,7 +194,7 @@ function Inline({ text }: { text: string }) {
     closeFootnotes(at);
     if (code !== undefined) {
       out.push(
-        <code key={at} className="rounded bg-muted px-1 py-px font-mono text-[0.85em]">
+        <code key={at} className="rounded bg-muted px-1 py-px font-mono text-[0.85em] [overflow-wrap:anywhere]">
           {code}
         </code>,
       );

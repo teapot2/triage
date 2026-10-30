@@ -14,10 +14,25 @@ export function withUnit(value: number | string, unit: string): string {
   return unit === "%" || unit === "" ? `${value}${unit}` : `${value} ${unit}`;
 }
 
-// The first point of the alert's series at or above its threshold.
+// Where the episode that fired the alert began: the first point of the last
+// run at or above the threshold, at or before the alert, so an earlier
+// episode still in the series doesn't count. One healthy bucket between
+// two over the threshold doesn't end a run. With no breach by the alert,
+// the first one after it.
 export function firstBreach(incident: Incident): string | undefined {
   const { series, threshold } = incident.trigger;
-  return series.find((p) => p.value >= threshold)?.t;
+  const over = (i: number) => series[i].value >= threshold;
+  const detected = Date.parse(incident.detectedAt);
+  let i = series.findLastIndex((p) => Date.parse(p.t) <= detected);
+  if (i < 0) i = series.length - 1;
+  while (i >= 0 && !over(i)) i--;
+  if (i < 0) return series.find((p) => Date.parse(p.t) > detected && p.value >= threshold)?.t;
+  let start = i;
+  for (let j = i - 1; j >= 0; j--) {
+    if (over(j)) start = j;
+    else if (!(j > 0 && over(j - 1))) break;
+  }
+  return series[start].t;
 }
 
 const firstLine = (text: string) => text.trim().split("\n")[0];
