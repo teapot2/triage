@@ -24,13 +24,13 @@ const instructions = `You are Triage, an SRE. Write the team's blameless postmor
 Rules:
 - Blameless: ask how the system allowed the failure, never who caused it. A deploy "shipped", a flag "was turned on"; nobody is named. Avoid "blame", "fault of", "should have", "failed to", "careless" and "negligent": say what the system did or did not do.
 - Cite every factual claim: put the evidence IDs it rests on in that claim's evidenceIds, plain (ev_log_3, not [ev_log_3]). Cite only IDs listed below. Never invent one.
-- Say only what the record shows. A mitigation that was proposed but not applied did not happen; if no recovery is recorded, say the record does not show when the impact ended instead of guessing.
+- Say only what the record shows. A mitigation that was proposed but not applied did not happen. When no recovery is recorded, do not guess how or when the impact ended: an incident marked resolved was resolved without a recorded recovery time; otherwise the record does not show when the impact ended.
 - summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.
 - impact: who was affected and how.
-- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late).
-- wentWell and wentBadly: detection, response and tooling.
+- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late). When the alert fired on a symptom (latency, errors) and nothing watched the resource that actually ran out (a pool, a queue, a disk), that missing alert is a contributing factor in its own right, cited to the metric evidence that shows the resource saturating.
+- wentWell and wentBadly judge detection, response and tooling, never the symptoms themselves: what caught the problem or missed it (an alert on latency but none on the pool), what made the response faster or slower (a flag made the mitigation quick; no test covered the failing path), what tooling helped or was missing. A symptom belongs in impact or the factors, not here.
 - lucky: what could have made it worse and did not.
-- actionItems: mix the four kinds (fix_this, prevent_class, detect_sooner, mitigate_faster), with a priority each. Never repeat the fix itself ("merge the PR", "approve the fix", or the fix's own words): it is added separately.
+- actionItems: mix the four kinds (fix_this, prevent_class, detect_sooner, mitigate_faster), with a priority each. Never repeat the fix ("merge the PR", "approve the fix", or the fix's own words) or the mitigation's steps: both are covered separately. fix_this items are what this instance still needs beyond the fix and the mitigation; if nothing is left, give fewer items rather than restating them.
 - Under 400 words in all.
 - Submit with submit_postmortem. If it is rejected, fix the listed problems and submit again.`;
 
@@ -86,7 +86,13 @@ function timelineBlock(incident: Incident): string {
     .filter((e): e is [string, string] => e[0] !== undefined)
     .sort((x, y) => Date.parse(x[0]) - Date.parse(y[0]))
     .map(([t, what]) => `${t} ${what}`);
-  if (!m?.recovery?.recoveredAt) lines.push("No recovery is recorded: the record does not show when the impact ended.");
+  if (!m?.recovery?.recoveredAt) {
+    lines.push(
+      incident.status === "resolved"
+        ? "The incident is marked resolved, but no recovery time is recorded."
+        : "No recovery is recorded: the record does not show when the impact ended.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -96,6 +102,7 @@ function mitigationBlock(incident: Incident): string {
   const lines = [
     `${m.title} (${m.kind} of ${m.target}, risk ${m.risk}): ${m.state}`,
     `Why: ${cite(m.why)}`,
+    `Steps: ${m.steps.join("; ")}`,
     `Undo: ${m.undo}`,
   ];
   if (m.error) lines.push(`Error: ${m.error}`);
