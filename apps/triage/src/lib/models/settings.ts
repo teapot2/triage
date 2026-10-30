@@ -61,11 +61,14 @@ export async function endpointFor(id: ProviderId): Promise<Endpoint> {
   return endpointOf(await read(), id);
 }
 
-// The stage's saved model, else its fallback stage's (Ask uses
-// Investigate's), else the env's.
+// The stage's saved model, else the first saved one down its fallback chain
+// (Postmortem uses Ask's, then Investigate's), else the env's.
 function chosenModel(settings: Settings, stage: StageId): StageModel {
-  const fallback = stageFallback[stage];
-  return settings.stages[stage] ?? (fallback && settings.stages[fallback]) ?? defaultStage();
+  for (let s: StageId | undefined = stage; s; s = stageFallback[s]) {
+    const saved = settings.stages[s];
+    if (saved) return saved;
+  }
+  return defaultStage();
 }
 
 export async function stageModel(stage: StageId): Promise<StageModel & Endpoint> {
