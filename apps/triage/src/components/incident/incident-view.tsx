@@ -37,15 +37,17 @@ export function IncidentView({ incident }: { incident: Incident }) {
     incident.mitigation?.state === "running" ||
     incident.mitigation?.recovery?.status === "watching";
   const answering = incident.questions?.some((q) => q.status === "answering") ?? false;
-  // And while the postmortem is written.
+  // And while the postmortem is written, and the fix is being verified.
   const writingPostmortem = incident.postmortem?.status === "writing";
+  const verifying = incident.verification?.status === "verifying";
   useRefreshWhile(
     incident.status === "investigating" ||
       fixing ||
       mitigating ||
       incident.approval?.prState === "opening" ||
       answering ||
-      writingPostmortem,
+      writingPostmortem ||
+      verifying,
     answering ? 1000 : 2000,
   );
   // This tab's own question streams here, above the sections, so switching

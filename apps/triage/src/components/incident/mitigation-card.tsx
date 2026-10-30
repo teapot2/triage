@@ -25,6 +25,7 @@ import { formatPercent, formatTime } from "./format";
 import { THIS_INCIDENT } from "./incident-commands";
 import type { ChartMarker } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
+import { VerificationLine } from "./verification";
 
 type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
 
@@ -163,6 +164,7 @@ export function MitigationCard({ incident, className }: { incident: Incident; cl
           </Badge>
         )}
         {mitigation.recovery && <RecoveryLine recovery={mitigation.recovery} unit={incident.trigger.unit} />}
+        {mitigation.state === "applied" && incident.verification && <VerificationLine incident={incident} verification={incident.verification} />}
       </div>
 
       <AlertDialog open={confirming} onOpenChange={setConfirming}>

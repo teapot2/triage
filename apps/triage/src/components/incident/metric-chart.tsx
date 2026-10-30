@@ -22,7 +22,17 @@ export interface TimeRange {
 export interface ChartMarker {
   t: string;
   label: string;
+  // The line's color: neutral for what was done (a deploy, a mitigation),
+  // success for a resolution, warning for a reopening. Labels stay neutral,
+  // since green or amber text on white fails contrast.
+  tone?: "default" | "success" | "warning";
 }
+
+const markerStroke: Record<NonNullable<ChartMarker["tone"]>, string> = {
+  default: "var(--muted-foreground)",
+  success: "var(--success)",
+  warning: "var(--warning)",
+};
 
 // The series point closest to a time, since the x axis is the points' own
 // timestamps. Undefined when the time falls outside the series.
@@ -191,7 +201,7 @@ export function MetricChart({
                   x={x}
                   // Fades in once the line is drawn, pointing at the cause.
                   className="animate-in fade-in-0 duration-300 ease-out delay-700 fill-mode-backwards motion-reduce:animate-none"
-                  stroke="var(--muted-foreground)"
+                  stroke={markerStroke[m.tone ?? "default"]}
                   strokeDasharray="2 3"
                   label={{
                     value: m.label,

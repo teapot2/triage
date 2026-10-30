@@ -1,10 +1,18 @@
 "use client";
 
-import { CheckIcon, ShieldIcon, XIcon } from "lucide-react";
+import { CheckCheckIcon, CheckIcon, EllipsisIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, ShieldIcon, XIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Incident } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
@@ -12,6 +20,7 @@ import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
 import { MetricBadges } from "./outcome-badges";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
+import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
 
 // Height of the sticky bar; the report's section menu sticks below it.
 const BAR_HEIGHT = 48;
@@ -31,11 +40,15 @@ export function noRerunReason(incident: Pick<Incident, "run" | "fixRun">): NoRer
 // and when, and how far past the limit. Once it scrolls away, a compact bar
 // keeps the title, status and approval in view.
 export function IncidentHeader({ incident }: { incident: Incident }) {
-  const { trigger, fix, approval, mitigation } = incident;
+  const { trigger, fix, approval, mitigation, verification } = incident;
   const mitigated = mitigation?.state === "applied";
   const recovered = mitigated && mitigation.recovery?.status === "recovered";
-  // Once recovered, the value now rather than the one that fired the alert.
-  const observed = (recovered ? mitigation.recovery?.series.at(-1)?.value : undefined) ?? trigger.observed;
+  // Once recovered or being verified, the value now rather than the one
+  // that fired the alert.
+  const observed =
+    verification?.series.at(-1)?.value ??
+    (recovered ? mitigation.recovery?.series.at(-1)?.value : undefined) ??
+    trigger.observed;
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
   const opensPr = incident.fixRun?.status === "proven";
   const { decision, decide, error } = useApprovalDecision(incident.id, approval?.state, opensPr);
@@ -62,7 +75,32 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
         ]
       : [],
   );
-  const actions = fix && decision && (
+  // Resolving, reopening and verifying again, from a menu beside the
+  // approval and from the palette. Reopening asks why, in one dialog.
+  const resolution = useResolution(incident);
+  const options = resolutionOptions(incident);
+  const [reopeningOpen, setReopeningOpen] = useState(false);
+  useRegisterCommands("incident-resolution", [
+    ...(options.resolve
+      ? [{ id: "resolve", group: THIS_INCIDENT, label: "Mark resolved", icon: CheckCheckIcon, keywords: "close done", run: () => void resolution.act("resolve") }]
+      : []),
+    ...(options.reopen
+      ? [{ id: "reopen", group: THIS_INCIDENT, label: "Reopen incident", icon: RotateCcwIcon, run: () => setReopeningOpen(true) }]
+      : []),
+    ...(options.verify
+      ? [{ id: "verify", group: THIS_INCIDENT, label: "Verify again", icon: ShieldCheckIcon, keywords: "check fix worked", run: () => void resolution.act("verify") }]
+      : []),
+  ]);
+  const menu = (options.resolve || options.reopen || options.verify) && (
+    <ResolutionMenu
+      options={options}
+      pending={resolution.pending !== undefined}
+      onResolve={() => void resolution.act("resolve")}
+      onReopen={() => setReopeningOpen(true)}
+      onVerify={() => void resolution.act("verify")}
+    />
+  );
+  const approvalActions = fix && decision && (
     <ApprovalActions
       incidentId={incident.id}
       fix={fix}
@@ -72,6 +110,12 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
       onDeny={() => setDenying(true)}
       error={error}
     />
+  );
+  const actions = (approvalActions || menu) && (
+    <div className="flex items-center gap-2">
+      {approvalActions}
+      {menu}
+    </div>
   );
 
   const headerRef = useRef<HTMLElement>(null);
@@ -133,12 +177,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
                 then where and when, as text. */}
             <IncidentStatusBadge status={incident.status} />
             <SeverityBadge severity={incident.severity} />
-            {mitigated && (
-              <Badge variant="secondary" className="gap-1">
-                {recovered ? <CheckIcon /> : <ShieldIcon />}
-                {recovered ? "Recovered" : "Mitigated"}
-              </Badge>
-            )}
+            <ProgressBadge incident={incident} mitigated={mitigated} recovered={recovered} />
             <MetricBadges observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
             {/* The dots only separate items on one line; on phones the line
                 wraps and they'd dangle at line ends, so spacing does it. */}
@@ -152,6 +191,14 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
           </div>
         </div>
       </header>
+      <ReopenDialog
+        open={reopeningOpen}
+        onOpenChange={setReopeningOpen}
+        onConfirm={(note) => {
+          setReopeningOpen(false);
+          void resolution.act("reopen", note);
+        }}
+      />
       {fix && (
         <>
           <ApproveDialog
@@ -174,5 +221,107 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
         </>
       )}
     </>
+  );
+}
+
+// How far the incident got after the diagnosis, beside its status: reopened,
+// resolved, being verified, recovered or mitigated, the first that holds.
+function ProgressBadge({
+  incident,
+  mitigated,
+  recovered,
+}: {
+  incident: Incident;
+  mitigated: boolean;
+  recovered: boolean;
+}) {
+  const { verification, resolvedAt } = incident;
+  if (reopening(incident)) {
+    return (
+      <Badge variant="warning" className="gap-1">
+        <RotateCcwIcon />
+        Reopened
+      </Badge>
+    );
+  }
+  if (incident.status === "resolved" && resolvedAt) {
+    return (
+      <Timestamp date={resolvedAt} className="hover:no-underline">
+        <Badge variant="success" className="gap-1">
+          <CheckIcon />
+          Resolved
+        </Badge>
+      </Timestamp>
+    );
+  }
+  if (verification?.status === "verifying") {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex cursor-default">
+            <Badge variant="secondary" className="gap-1">
+              <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+              Verifying
+            </Badge>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          {quietMinutes(verification)} of {verification.windowMinutes} min under the limit
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  if (!mitigated) return null;
+  return (
+    <Badge variant="secondary" className="gap-1">
+      {recovered ? <CheckIcon /> : <ShieldIcon />}
+      {recovered ? "Recovered" : "Mitigated"}
+    </Badge>
+  );
+}
+
+// The incident's other actions, behind one button: resolve it by hand,
+// reopen it, or check the fix again. Only what the server would take.
+function ResolutionMenu({
+  options,
+  pending,
+  onResolve,
+  onReopen,
+  onVerify,
+}: {
+  options: ReturnType<typeof resolutionOptions>;
+  pending: boolean;
+  onResolve: () => void;
+  onReopen: () => void;
+  onVerify: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions" disabled={pending}>
+          {pending ? <LoaderCircleIcon className="animate-spin" /> : <EllipsisIcon />}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {options.resolve && (
+          <DropdownMenuItem onSelect={onResolve}>
+            <CheckCheckIcon />
+            Mark resolved
+          </DropdownMenuItem>
+        )}
+        {options.reopen && (
+          <DropdownMenuItem onSelect={onReopen}>
+            <RotateCcwIcon />
+            Reopen
+          </DropdownMenuItem>
+        )}
+        {options.verify && (
+          <DropdownMenuItem onSelect={onVerify}>
+            <ShieldCheckIcon />
+            Verify again
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

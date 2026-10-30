@@ -14,19 +14,20 @@ import {
 import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { Incident } from "@/lib/investigation/schema";
+import type { ChartPoint, Incident } from "@/lib/investigation/schema";
 import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { FailedRunNotice } from "./failed-run-notice";
 import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
 import { InvestigationTimeline } from "./investigation-timeline";
-import { MetricChart } from "./metric-chart";
+import { type ChartMarker, MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
 import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
 import { type Ask, QuestionsPanel } from "./questions-panel";
+import { ReopenedNotice, reopening, VerificationCard } from "./verification";
 
 type SectionId = "overview" | "fix" | "investigation" | "questions" | "postmortem";
 
@@ -51,8 +52,14 @@ export function IncidentReport({
   cited: string[];
   ask: Ask;
 }) {
-  const { report, fix, validation, steps, evidence, trigger, run, mitigation, fixAttempts } = incident;
+  const { report, fix, validation, steps, evidence, trigger, run, mitigation, fixAttempts, verification } = incident;
   const running = incident.status === "investigating";
+  const reopened = reopening(incident);
+  const markers = [
+    ...(report ? citedDeploys(report, evidence) : []),
+    mitigationMarker(mitigation),
+    ...resolutionMarkers(incident),
+  ].filter((m) => m !== undefined);
 
   // A verdict that arrives while the page is open rises in, the fix just
   // after it; one that was already there when the incident opened just
@@ -104,6 +111,7 @@ export function IncidentReport({
     overview: () => (
       <div className="flex flex-col gap-8">
         {incident.status === "failed" && run?.error && <FailedRunNotice run={{ ...run, error: run.error }} />}
+        {reopened && <ReopenedNotice incident={incident} reopening={reopened} />}
         {report ? (
           <VerdictCard
             report={report}
@@ -142,6 +150,12 @@ export function IncidentReport({
           <MitigationCard incident={incident} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
         )}
 
+        {/* Without an applied mitigation to sit under (after a merged fix,
+            or one asked for by hand), the verification gets its own card. */}
+        {verification && mitigation?.state !== "applied" && (
+          <VerificationCard incident={incident} verification={verification} />
+        )}
+
         {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
 
         {fix && (
@@ -170,13 +184,11 @@ export function IncidentReport({
             <MetricBadges observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
           </div>
           <MetricChart
-            series={[...trigger.series, ...(mitigation?.recovery?.series ?? [])]}
+            series={chartSeries(incident, markers)}
             label={metricLabel(trigger.metric)}
             unit={trigger.unit}
             threshold={trigger.threshold}
-            markers={[...(report ? citedDeploys(report, evidence) : []), mitigationMarker(mitigation)].filter(
-              (m) => m !== undefined,
-            )}
+            markers={markers}
           />
         </div>
       </div>
@@ -247,4 +259,45 @@ export function IncidentReport({
       </section>
     </div>
   );
+}
+
+// Each resolution and reopening on the alert chart: the current resolution
+// and the ones a reopening undid, then every reopening.
+function resolutionMarkers(incident: Incident): ChartMarker[] {
+  const reopenings = incident.reopenings ?? [];
+  const resolved = new Set(reopenings.flatMap((r) => (r.resolvedAt ? [r.resolvedAt] : [])));
+  if (incident.resolvedAt) resolved.add(incident.resolvedAt);
+  return [
+    ...[...resolved].map((t): ChartMarker => ({ t, label: "resolved", tone: "success" })),
+    ...reopenings.map((r): ChartMarker => ({ t: r.at, label: "reopened", tone: "warning" })),
+  ];
+}
+
+// How far past the last point a marker may stretch the chart: a reopening
+// by hand comes after the verification's last minute. Further than this the
+// chart's scale would say nothing, and the notice says it instead.
+const STRETCH_MS = 30 * 60_000;
+
+// The alert's metric as far as it was watched: the alert's series, the
+// recovery watch's, then the verification's, one point per time. Empty
+// minutes stretch it to a marker shortly after its last point.
+function chartSeries(incident: Incident, markers: ChartMarker[]): ChartPoint[] {
+  const byTime = new Map<string, ChartPoint>();
+  for (const p of [
+    ...incident.trigger.series,
+    ...(incident.mitigation?.recovery?.series ?? []),
+    ...(incident.verification?.series ?? []),
+  ]) {
+    if (!byTime.has(p.t)) byTime.set(p.t, p);
+  }
+  const series: ChartPoint[] = [...byTime.values()].sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
+  if (series.length < 2) return series;
+  const end = Date.parse(series[series.length - 1].t);
+  const step = end - Date.parse(series[series.length - 2].t) || 60_000;
+  const reach = Math.max(
+    end,
+    ...markers.map((m) => Date.parse(m.t)).filter((t) => t > end && t - end <= STRETCH_MS),
+  );
+  for (let t = end + step; t - step < reach; t += step) series.push({ t: new Date(t).toISOString(), value: null });
+  return series;
 }
