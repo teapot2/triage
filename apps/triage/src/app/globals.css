@@ -175,7 +175,11 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-:root {
+/* Triage's own palette. Also on [data-color-theme="triage"], so the theme
+   picker's Triage swatch keeps it while another theme is on (see the
+   color themes below). */
+:root,
+[data-color-theme="triage"] {
   color-scheme: light;
   /* Code viewers' text size; Settings can change it (see lib/code-font). */
   --code-font-size: 14px;
@@ -226,7 +230,8 @@
   --sidebar-ring: oklch(0.55 0.22 292);
 }
 
-.dark {
+.dark,
+.dark [data-color-theme="triage"] {
   color-scheme: dark;
   --success: oklch(0.72 0.16 155);
   --warning: oklch(0.8 0.15 75);
@@ -264,6 +269,226 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.56 0.21 292);
+}
+
+/* Color themes (lib/color-theme): palettes from popular editors and apps,
+   each with its light and dark side, picked in Settings and set as data-color-theme
+   on <html>. A theme sets its surfaces, text and accent; the status colors
+   (success, warning, destructive) and the metric line stay Triage's, tuned
+   for contrast on any of them. Every theme sets the same ten variables in
+   both modes, so its dark block (two classes' worth of specificity) fully
+   replaces its light one. The selectors also match an element inside the
+   page, so a picker swatch can show a theme without it being on. */
+[data-color-theme] {
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --brand-mark: var(--brand);
+  --secondary: var(--muted);
+  --secondary-foreground: var(--foreground);
+  --accent: var(--muted);
+  --accent-foreground: var(--foreground);
+  --input: var(--border);
+  --ring: var(--primary);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--primary);
+}
+
+/* GitHub (Primer): light, and dark default. */
+[data-color-theme="github"] {
+  --background: #ffffff;
+  --foreground: #1f2328;
+  --card: #ffffff;
+  --muted: #f6f8fa;
+  --muted-foreground: #59636e;
+  --border: #d1d9e0;
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+  --brand: #0969da;
+  --sidebar: #f6f8fa;
+}
+.dark[data-color-theme="github"],
+.dark [data-color-theme="github"] {
+  --background: #0d1117;
+  --foreground: #f0f6fc;
+  --card: #151b23;
+  --muted: #212830;
+  --muted-foreground: #9198a1;
+  --border: #3d444d;
+  --primary: #1f6feb;
+  --primary-foreground: #ffffff;
+  --brand: #4493f8;
+  --sidebar: #010409;
+}
+
+/* Atom One: One Light and One Dark. */
+[data-color-theme="one"] {
+  --background: #fafafa;
+  --foreground: #383a42;
+  --card: #ffffff;
+  --muted: #f0f0f1;
+  --muted-foreground: #696c77;
+  --border: #dbdbdc;
+  --primary: #4078f2;
+  --primary-foreground: #ffffff;
+  --brand: #3a6ee0;
+  --sidebar: #f0f0f1;
+}
+.dark[data-color-theme="one"],
+.dark [data-color-theme="one"] {
+  --background: #282c34;
+  --foreground: #abb2bf;
+  --card: #21252b;
+  --muted: #2c313a;
+  --muted-foreground: #8b929e;
+  --border: #3e4451;
+  --primary: #61afef;
+  --primary-foreground: #282c34;
+  --brand: #61afef;
+  --sidebar: #21252b;
+}
+
+/* Catppuccin: Latte and Mocha, mauve accent. */
+[data-color-theme="catppuccin"] {
+  --background: #eff1f5;
+  --foreground: #4c4f69;
+  --card: #eff1f5;
+  --muted: #e6e9ef;
+  --muted-foreground: #6c6f85;
+  --border: #ccd0da;
+  --primary: #8839ef;
+  --primary-foreground: #eff1f5;
+  --brand: #8839ef;
+  --sidebar: #e6e9ef;
+}
+.dark[data-color-theme="catppuccin"],
+.dark [data-color-theme="catppuccin"] {
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+  --card: #181825;
+  --muted: #313244;
+  --muted-foreground: #a6adc8;
+  --border: #313244;
+  --primary: #cba6f7;
+  --primary-foreground: #1e1e2e;
+  --brand: #cba6f7;
+  --sidebar: #181825;
+}
+
+/* Solarized: light and dark, blue accent. Body text is a step darker
+   (lighter in dark) than Solarized's own, for contrast on small text. */
+[data-color-theme="solarized"] {
+  --background: #fdf6e3;
+  --foreground: #3d555d;
+  --card: #fdf6e3;
+  --muted: #eee8d5;
+  --muted-foreground: #657b83;
+  --border: #e0d9c3;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --brand: #1f76b4;
+  --sidebar: #eee8d5;
+}
+.dark[data-color-theme="solarized"],
+.dark [data-color-theme="solarized"] {
+  --background: #002b36;
+  --foreground: #e2dfd2;
+  --card: #073642;
+  --muted: #0b4150;
+  --muted-foreground: #93a1a1;
+  --border: #0f4b5a;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --brand: #59a9e4;
+  --sidebar: #00222b;
+}
+
+/* Gruvbox: light and dark, orange accent. */
+[data-color-theme="gruvbox"] {
+  --background: #fbf1c7;
+  --foreground: #3c3836;
+  --card: #fbf1c7;
+  --muted: #f2e5bc;
+  --muted-foreground: #665c54;
+  --border: #d5c4a1;
+  --primary: #af3a03;
+  --primary-foreground: #fbf1c7;
+  --brand: #af3a03;
+  --sidebar: #f2e5bc;
+}
+.dark[data-color-theme="gruvbox"],
+.dark [data-color-theme="gruvbox"] {
+  --background: #282828;
+  --foreground: #ebdbb2;
+  --card: #32302f;
+  --muted: #3c3836;
+  --muted-foreground: #a89984;
+  --border: #504945;
+  --primary: #fe8019;
+  --primary-foreground: #282828;
+  --brand: #fe8019;
+  --sidebar: #1d2021;
+}
+
+/* Linear: its app's near-black and near-white grays, indigo accent. No
+   published palette; matched to the app. */
+[data-color-theme="linear"] {
+  --background: #fcfcfd;
+  --foreground: #282a30;
+  --card: #ffffff;
+  --muted: #f0f0f3;
+  --muted-foreground: #6b6f76;
+  --border: #e0e1e6;
+  --primary: #5e6ad2;
+  --primary-foreground: #ffffff;
+  --brand: #5463cc;
+  --sidebar: #f4f4f6;
+}
+.dark[data-color-theme="linear"],
+.dark [data-color-theme="linear"] {
+  --background: #0f1011;
+  --foreground: #f7f8f8;
+  --card: #161718;
+  --muted: #1f2023;
+  --muted-foreground: #8a8f98;
+  --border: #26272b;
+  --primary: #5e6ad2;
+  --primary-foreground: #ffffff;
+  --brand: #828fff;
+  --sidebar: #090a0b;
+}
+
+/* Vercel (Geist): monochrome, with black (white in dark) buttons and
+   Geist blue for accent text and marks. */
+[data-color-theme="vercel"] {
+  --background: #ffffff;
+  --foreground: #171717;
+  --card: #ffffff;
+  --muted: #f2f2f2;
+  --muted-foreground: #666666;
+  --border: #ebebeb;
+  --primary: #171717;
+  --primary-foreground: #ffffff;
+  --brand: #0068d6;
+  --sidebar: #fafafa;
+}
+.dark[data-color-theme="vercel"],
+.dark [data-color-theme="vercel"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #0a0a0a;
+  --muted: #1a1a1a;
+  --muted-foreground: #a1a1a1;
+  --border: #2e2e2e;
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
+  --brand: #52a8ff;
+  --sidebar: #000000;
 }
 
 /* A thin scrollbar like the ScrollArea's (a rounded thumb, no arrows)

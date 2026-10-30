@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { CodeFontSizeSelect } from "@/components/code-font-size-select";
+import { ColorThemeSelect } from "@/components/color-theme-select";
 import { ModelSettings } from "@/components/model-settings";
 import { ThemeSelect } from "@/components/theme-select";
 
@@ -20,10 +21,21 @@ export default function SettingsPage() {
         </h2>
         <div className="divide-y rounded-lg border">
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <span id="theme-label" className="font-medium text-sm">
-              Theme
+            <span id="mode-label" className="font-medium text-sm">
+              Mode
             </span>
-            <ThemeSelect aria-labelledby="theme-label" />
+            <ThemeSelect aria-labelledby="mode-label" />
+          </div>
+          <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span id="color-theme-label" className="font-medium text-sm">
+                Theme
+              </span>
+              <span className="text-muted-foreground text-sm">
+                Colors from a popular editor or app, in its light or dark version to match the mode.
+              </span>
+            </div>
+            <ColorThemeSelect aria-labelledby="color-theme-label" />
           </div>
           <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-0.5">

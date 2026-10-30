@@ -270,7 +270,7 @@ export function SearchCommand({
                       {themes.map(({ value, label, icon: Icon }) => (
                         <Command.Item
                           key={value}
-                          value={`action theme appearance ${label}`}
+                          value={`action mode theme appearance ${label}`}
                           onSelect={() => {
                             setPreference(value);
                             close();
@@ -278,7 +278,7 @@ export function SearchCommand({
                           className={itemClass}
                         >
                           <Icon className={iconClass} />
-                          <span className="min-w-0 flex-1 truncate">Theme: {label}</span>
+                          <span className="min-w-0 flex-1 truncate">Mode: {label}</span>
                           {preference === value && <Hint>Current</Hint>}
                         </Command.Item>
                       ))}

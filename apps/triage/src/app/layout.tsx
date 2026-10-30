@@ -8,8 +8,10 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CodeFontSync } from "@/hooks/use-code-font-size";
+import { ColorThemeSync } from "@/hooks/use-color-theme";
 import { ThemeSync } from "@/hooks/use-theme";
 import { codeFontScript } from "@/lib/code-font";
+import { colorThemeScript } from "@/lib/color-theme";
 import { themeScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -32,9 +34,10 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    // The theme script sets the `dark` class and color-scheme on <html>
-    // before React hydrates, so its attributes differ from the server's on
-    // purpose; suppressHydrationWarning covers this element only.
+    // The theme scripts set the `dark` class, color-scheme and
+    // data-color-theme on <html> before React hydrates, so its attributes
+    // differ from the server's on purpose; suppressHydrationWarning covers
+    // this element only.
     <html
       lang="en"
       suppressHydrationWarning
@@ -46,10 +49,14 @@ export default function RootLayout({
         <Script id="theme" strategy="beforeInteractive">
           {themeScript}
         </Script>
+        <Script id="color-theme" strategy="beforeInteractive">
+          {colorThemeScript}
+        </Script>
         <Script id="code-font" strategy="beforeInteractive">
           {codeFontScript}
         </Script>
         <ThemeSync />
+        <ColorThemeSync />
         <CodeFontSync />
         <TooltipProvider>
           <CommandRegistryProvider>
