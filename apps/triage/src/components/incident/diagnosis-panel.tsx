@@ -11,36 +11,14 @@ import type { ReactNode } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { useCountUp } from "@/hooks/use-count-up";
+import { otherHypotheses } from "@/lib/investigation/citations";
 import type { Claim, Evidence, Hypothesis, InvestigationReport } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent } from "./format";
 import type { ChartMarker } from "./metric-chart";
 
-// The hypotheses that didn't win, in the order AlsoConsidered shows them:
-// the ones still possible first, then the ruled-out ones, each by
-// confidence. citationOrder follows it, so footnotes number down the page.
-function otherHypotheses(report: InvestigationReport): Hypothesis[] {
-  const { verdict } = report;
-  const ruledOut = (h: Hypothesis) => Number(h.status === "rejected");
-  return report.hypotheses
-    .filter((h) => verdict.kind !== "root_cause" || h.id !== verdict.hypothesisId)
-    .sort((a, b) => ruledOut(a) - ruledOut(b) || b.confidence - a.confidence);
-}
-
-// Evidence IDs in the order the panel shows them, so citations number like
-// footnotes: 1, 2, 3 down the page.
-export function citationOrder(report: InvestigationReport): string[] {
-  const { verdict } = report;
-  const claims: Claim[] = [];
-  if (verdict.kind === "root_cause") {
-    const h = report.hypotheses.find((x) => x.id === verdict.hypothesisId);
-    if (h) claims.push(h.causalChain.symptom, h.causalChain.propagation, h.causalChain.rootCause);
-  }
-  if (verdict.kind === "healthy") claims.push(verdict.rationale);
-  for (const h of otherHypotheses(report)) claims.push(h.rejectedBecause ?? h.causalChain.rootCause);
-  return [...new Set(claims.flatMap((c) => c.evidenceIds))];
-}
+export { citationOrder } from "@/lib/investigation/citations";
 
 // Deploys the diagnosis points at, to mark on the alert chart. Only the ones
 // its causal chain cites: any other deploy on the chart would suggest a
