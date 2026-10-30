@@ -36,7 +36,7 @@ After the report, a person can ask Triage follow-up questions on the incident pa
 
 ## Postmortem
 
-Once an incident has a finished report, Triage writes a blameless postmortem from the incident's record on request: summary, impact, timeline, contributing factors, what went well, where we got lucky and action items, each claim citing the evidence behind it. It shows in the incident page's **Postmortem** section and can be copied or downloaded as Markdown. The model is the **Postmortem** stage in Settings → Models, which uses Ask's model until it is changed; see `apps/triage/README.md`.
+Once an incident has a finished report, Triage writes a blameless postmortem from the incident's record on request, by default with a summary, impact, timeline, contributing factors, what went well, where we got lucky and action items, each claim citing the evidence behind it. It shows in the incident page's **Postmortem** section and can be copied or downloaded as Markdown. The sections are a template the team edits in **Settings → Postmortems**: reorder or remove the built-in ones and add its own, and the model writes only the sections the template keeps. Each postmortem keeps the template it was written with. The model is the **Postmortem** stage in Settings → Models, which uses Ask's model until it is changed; see `apps/triage/README.md`.
 
 ## Models and providers
 
