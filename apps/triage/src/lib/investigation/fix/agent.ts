@@ -3,6 +3,7 @@ import { z } from "zod";
 import { languageModel, modelOptions, wakeProvider } from "../../models/client";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
+import { notify } from "../../notifications/notify";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
 import type { TelemetrySource } from "../source";
@@ -306,6 +307,8 @@ export async function runFixStage(
       status: "awaiting_approval",
       approval: { state: "pending", requestedAt: new Date().toISOString() },
     });
+    // Once it is saved: the message links to the page that shows the fix.
+    void recorder.flush().then(() => notify("fix_ready", recorder.incident));
   } else if (declined) {
     // The incident stays diagnosed: nothing to approve.
     fixRun = { ...fixRun, ...finished, status: "declined", declinedBecause: declined, error: undefined };

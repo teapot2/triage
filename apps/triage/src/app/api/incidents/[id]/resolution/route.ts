@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Incident } from "@/lib/investigation/schema";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
 import { Refused, reopened, resolveRefusal, resolved, startVerification } from "@/lib/investigation/verify";
+import { notify } from "@/lib/notifications/notify";
 
 const bodySchema = z.object({
   action: z.enum(["resolve", "reopen", "verify"]),
@@ -39,6 +40,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (i.status !== "resolved") throw new Refused("only a resolved incident can be reopened");
       return reopened(i, { at: now, by: "person", why: note?.trim() || "Reopened by a person" });
     });
+    if (action === "resolve") notify("resolved", next);
     return Response.json(action === "resolve" ? { status: next.status, resolvedAt: next.resolvedAt } : { status: next.status });
   } catch (err) {
     if (err instanceof Refused) return Response.json({ error: err.message }, { status: 409 });

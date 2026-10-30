@@ -2,7 +2,8 @@ import { metricLabel } from "@/components/incident/metric-labels";
 import { createLiveSource } from "./live/live-source";
 import { withUnit } from "./postmortem/timeline";
 import type { Incident, MetricPoint, Reopening, Verification } from "./schema";
-import { patchIncident } from "./store";
+import { notify } from "../notifications/notify";
+import { getIncident, patchIncident } from "./store";
 
 // Checks that the fix worked: after the alert's metric recovers, a quiet
 // window of completed minutes under the threshold resolves the incident,
@@ -130,6 +131,9 @@ async function verify(incident: Incident): Promise<void> {
       await save({ series, checkedAt, status: "resolved", finishedAt: checkedAt }, (i) =>
         i.status === "resolved" ? i : resolved(i, at),
       );
+      // Whoever resolved it, once: the key is the resolution's time.
+      const saved = await getIncident(id);
+      if (saved?.status === "resolved") notify("resolved", saved);
       return false;
     }
     if (judgment.kind === "breached") {

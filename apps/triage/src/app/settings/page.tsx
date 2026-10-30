@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { CodeFontSizeSelect } from "@/components/code-font-size-select";
 import { ColorThemeSelect } from "@/components/color-theme-select";
 import { ModelSettings } from "@/components/model-settings";
+import { NotificationSettings } from "@/components/notification-settings";
 import { PostmortemTemplateSettings } from "@/components/postmortem-template-settings";
 import { SpeechSettings } from "@/components/speech-settings";
 import { ThemeSelect } from "@/components/theme-select";
@@ -10,8 +11,9 @@ export const metadata: Metadata = { title: "Settings · Triage" };
 
 // Settings. Each section is a bordered list of rows: a label and one-line
 // description on the left, the control on the right. Appearance is per
-// browser, and so is Speech; the models and the postmortem template are saved on the server. The watch's rules have their
-// own page, /watch.
+// browser, and so is Speech; the models, the notifications and the postmortem
+// template are saved on the server. The watch's rules have their own page,
+// /watch.
 export default function SettingsPage() {
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 pt-2 pb-8 md:pt-8 sm:px-6">
@@ -53,6 +55,8 @@ export default function SettingsPage() {
       <SpeechSettings />
 
       <ModelSettings />
+
+      <NotificationSettings />
 
       <PostmortemTemplateSettings />
     </div>

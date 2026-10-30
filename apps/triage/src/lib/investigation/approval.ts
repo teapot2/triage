@@ -1,3 +1,4 @@
+import { notify } from "../notifications/notify";
 import { openPullRequest } from "./fix/pull-request";
 import type { Approval, Incident } from "./schema";
 import { getIncident, saveIncident, withIncidentLock } from "./store";
@@ -114,5 +115,7 @@ export async function openPr(id: string, appDir: string): Promise<void> {
   }
   // Re-read so nothing saved meanwhile is lost.
   const latest = (await getIncident(id)) ?? incident;
-  await saveIncident({ ...latest, approval: { ...latest.approval!, ...result } });
+  const saved: Incident = { ...latest, approval: { ...latest.approval!, ...result } };
+  await saveIncident(saved);
+  if (result.prState === "opened") notify("pr_opened", saved);
 }

@@ -1,4 +1,5 @@
 import { stageModel, stageProblem } from "../models/settings";
+import { notify } from "../notifications/notify";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
 import { incidentToReopen, isOpen } from "./reopen";
@@ -202,6 +203,7 @@ async function open(rule: WatchRule, trip: { route: string; method: string }, su
       isOpen(i) ? i : reopened(i, { at: now, by: "watch", why: `${summary ?? rule.name} again` }),
     );
     state.lastOpened = { incidentId: incident.id, at: now, rule: rule.name, title: incident.title, reopened: true };
+    notify("incident_reopened", incident);
     console.log(`[triage] watch rule ${rule.id} reopened ${incident.id}`);
     return true;
   }
@@ -214,6 +216,8 @@ async function open(rule: WatchRule, trip: { route: string; method: string }, su
   const incident = await createRuleIncident(source, { rule, ...trip });
   state.lastOpened = { incidentId: incident.id, at: new Date().toISOString(), rule: rule.name, title: incident.title };
   console.log(`[triage] watch rule ${rule.id} opened ${incident.id}: ${incident.title}`);
+  // Slack hears within the check, before the investigation starts.
+  notify("incident_opened", incident);
   // The pipeline runs on its own; the watch keeps checking meanwhile.
   void runInvestigation(incident, source, { appDir: shopfrontDir });
   return true;

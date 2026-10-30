@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
+import { type NotificationEvent, notificationEvents, slackWebhookPattern } from "../notifications/types";
 import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
 import { type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
@@ -11,8 +12,9 @@ export { type StageId, stageIdSchema, stageIds } from "./stages";
 // providers. Saved server-side, in .data/settings.json (gitignored), since
 // the stages run on the server, the watch included. The file can hold keys,
 // so only publicModelSettings ever leaves the server. It is the one file for
-// the app's settings, so it also holds the one non-model key: the postmortem
-// template.
+// the app's settings, so it also holds the non-model keys: the postmortem
+// template, and the notifications (a Slack webhook URL, a secret like the
+// keys, and which events send a message).
 
 const stageModelSchema = z.object({ provider: providerIdSchema, model: z.string().trim().min(1).max(200) });
 export type StageModel = z.infer<typeof stageModelSchema>;
@@ -26,6 +28,12 @@ const settingsSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).default({}),
   endpoints: z.partialRecord(providerIdSchema, endpointSchema).default({}),
   postmortemTemplate: templateSchema.optional(),
+  notifications: z
+    .object({
+      slackWebhookUrl: z.string().regex(slackWebhookPattern).optional(),
+      events: z.partialRecord(z.enum(notificationEvents), z.boolean()).optional(),
+    })
+    .optional(),
 });
 type Settings = z.infer<typeof settingsSchema>;
 
@@ -176,5 +184,33 @@ export async function writeTemplate(template: Template): Promise<Template> {
 export async function clearTemplate(): Promise<void> {
   const settings = await read();
   delete settings.postmortemTemplate;
+  await write(settings);
+}
+
+// The notification settings as saved, for the server only: they include the
+// webhook URL. An event never saved is on.
+export async function readNotificationSettings(): Promise<{
+  slackWebhookUrl?: string;
+  events: Record<NotificationEvent, boolean>;
+}> {
+  const saved = (await read()).notifications;
+  const events = Object.fromEntries(notificationEvents.map((e) => [e, saved?.events?.[e] ?? true])) as Record<
+    NotificationEvent,
+    boolean
+  >;
+  return { slackWebhookUrl: saved?.slackWebhookUrl, events };
+}
+
+// slackWebhookUrl: a new URL, "" to remove it, or absent to keep the saved
+// one. Events left out keep their setting.
+export async function writeNotificationSettings(update: {
+  slackWebhookUrl?: string;
+  events?: Partial<Record<NotificationEvent, boolean>>;
+}): Promise<void> {
+  const settings = await read();
+  const next = { ...settings.notifications };
+  if (update.slackWebhookUrl !== undefined) next.slackWebhookUrl = update.slackWebhookUrl || undefined;
+  if (update.events) next.events = { ...next.events, ...update.events };
+  settings.notifications = next;
   await write(settings);
 }
