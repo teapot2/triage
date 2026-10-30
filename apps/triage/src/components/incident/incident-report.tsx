@@ -3,6 +3,7 @@
 import {
   ArrowRightIcon,
   ChartLineIcon,
+  FileTextIcon,
   LayoutListIcon,
   LoaderCircleIcon,
   type LucideIcon,
@@ -24,9 +25,10 @@ import { MetricChart } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
+import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
 import { type Ask, QuestionsPanel } from "./questions-panel";
 
-type SectionId = "overview" | "fix" | "investigation" | "questions";
+type SectionId = "overview" | "fix" | "investigation" | "questions" | "postmortem";
 
 interface ReportSection {
   id: SectionId;
@@ -75,6 +77,10 @@ export function IncidentReport({
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
     sections.push({ id: "questions", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
+  // The postmortem, once a report names something wrong.
+  const postmortem = incident.postmortem;
+  if (hasPostmortem(incident)) sections.push({ id: "postmortem", label: "Postmortem", icon: FileTextIcon });
+  const factors = postmortem?.status === "ready" ? (postmortem.contributingFactors?.length ?? 0) : 0;
 
   // The open section lives in the URL (?section=fix), so it can be linked
   // to, survives a refresh, and the back button steps through it. Without
@@ -118,6 +124,18 @@ export function IncidentReport({
               </Button>
             </div>
           )
+        )}
+
+        {factors > 0 && (
+          <button
+            type="button"
+            onClick={() => setSelected("postmortem")}
+            className="-mt-6 flex items-center gap-1.5 self-start text-muted-foreground text-xs transition-colors hover:text-foreground"
+          >
+            <FileTextIcon className="size-3.5" />
+            {factors} contributing {factors === 1 ? "factor" : "factors"} in the postmortem
+            <ArrowRightIcon className="size-3.5" />
+          </button>
         )}
 
         {mitigation && (
@@ -176,6 +194,7 @@ export function IncidentReport({
       <InvestigationTimeline steps={steps} thoughts={incident.thoughts} cited={cited} running={running} run={run} />
     ),
     questions: () => <QuestionsPanel incident={incident} ask={ask} />,
+    postmortem: () => <PostmortemPanel incident={incident} />,
   };
 
   return (
@@ -201,7 +220,9 @@ export function IncidentReport({
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                   )}
                 >
-                  {(s.id === "investigation" && running) || (s.id === "questions" && answering) ? (
+                  {(s.id === "investigation" && running) ||
+                  (s.id === "questions" && answering) ||
+                  (s.id === "postmortem" && postmortem?.status === "writing") ? (
                     <LoaderCircleIcon className="size-4 animate-spin" />
                   ) : (
                     <Icon className="size-4" />

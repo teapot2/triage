@@ -37,8 +37,15 @@ export function IncidentView({ incident }: { incident: Incident }) {
     incident.mitigation?.state === "running" ||
     incident.mitigation?.recovery?.status === "watching";
   const answering = incident.questions?.some((q) => q.status === "answering") ?? false;
+  // And while the postmortem is written.
+  const writingPostmortem = incident.postmortem?.status === "writing";
   useRefreshWhile(
-    incident.status === "investigating" || fixing || mitigating || incident.approval?.prState === "opening" || answering,
+    incident.status === "investigating" ||
+      fixing ||
+      mitigating ||
+      incident.approval?.prState === "opening" ||
+      answering ||
+      writingPostmortem,
     answering ? 1000 : 2000,
   );
   // This tab's own question streams here, above the sections, so switching

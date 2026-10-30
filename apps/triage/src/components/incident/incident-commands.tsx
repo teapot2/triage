@@ -1,11 +1,21 @@
 "use client";
 
-import { LayoutListIcon, LinkIcon, MessageSquareTextIcon, RouteIcon, WrenchIcon } from "lucide-react";
+import {
+  CopyIcon,
+  FileTextIcon,
+  LayoutListIcon,
+  LinkIcon,
+  MessageSquareTextIcon,
+  PenLineIcon,
+  RouteIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { type PaletteCommand, useRegisterCommands } from "@/components/command-registry";
 import type { Incident } from "@/lib/investigation/schema";
 import { evidenceIcons, useEvidence } from "./evidence";
 import { evidenceTitle } from "./metric-labels";
+import { copyPostmortem, hasPostmortem, requestPostmortemWrite, writeRefusal } from "./postmortem-panel";
 import { requestComposerFocus } from "./questions-panel";
 
 export const THIS_INCIDENT = "This incident";
@@ -20,6 +30,8 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
     // The report reads its section from the URL; same as its own menu.
     window.history.pushState(null, "", `?section=${id}`);
   };
+
+  const postmortem = incident.postmortem?.status;
 
   const commands: PaletteCommand[] = [
     { id: "section-overview", group: THIS_INCIDENT, label: "Go to Overview", icon: LayoutListIcon, pinned: true, run: section("overview") },
@@ -50,6 +62,46 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
             run: () => {
               section("questions")();
               requestComposerFocus();
+            },
+          },
+        ]
+      : []),
+    ...(hasPostmortem(incident)
+      ? [
+          {
+            id: "section-postmortem",
+            group: THIS_INCIDENT,
+            label: "Go to Postmortem",
+            icon: FileTextIcon,
+            pinned: true,
+            run: section("postmortem"),
+          },
+        ]
+      : []),
+    ...(postmortem === "ready"
+      ? [
+          {
+            id: "copy-postmortem",
+            group: THIS_INCIDENT,
+            label: "Copy postmortem",
+            icon: CopyIcon,
+            keywords: "export markdown",
+            run: () => copyPostmortem(incident),
+          },
+        ]
+      : []),
+    // Only when the server would take it: the panel's button says why not.
+    ...(hasPostmortem(incident) && postmortem !== "ready" && postmortem !== "writing" && !writeRefusal(incident)
+      ? [
+          {
+            id: "write-postmortem",
+            group: THIS_INCIDENT,
+            label: "Write the postmortem",
+            icon: PenLineIcon,
+            keywords: "export markdown blameless",
+            run: () => {
+              section("postmortem")();
+              requestPostmortemWrite();
             },
           },
         ]

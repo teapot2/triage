@@ -1,0 +1,234 @@
+"use client";
+
+import { CopyIcon, DownloadIcon, FileTextIcon, LoaderCircleIcon, RotateCcwIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import { Timestamp } from "@/components/timestamp";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
+import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
+import type { Incident } from "@/lib/investigation/schema";
+import { modelLabel } from "@/lib/models/labels";
+import { MarkdownDoc } from "./markdown-doc";
+
+// The Postmortem section: Triage writes a blameless postmortem from the
+// incident's record on request, and shows it as the document it exports,
+// to copy as Markdown or download. The record is the model's judgment; the
+// document around it is rendered here from the incident, so Copy and
+// Download always match what's on screen.
+
+// Whether the incident has a Postmortem section: once a report names
+// something wrong.
+export function hasPostmortem(incident: Incident): boolean {
+  return incident.report !== undefined && incident.report.verdict.kind !== "healthy";
+}
+
+// The server's words ("the fix is still being written: …") as a sentence.
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// The server's rule, for the button's tooltip.
+export function writeRefusal(incident: Incident): string | undefined {
+  const refusal = postmortemRefusal(incident);
+  return refusal && sentence(refusal);
+}
+
+export function copyPostmortem(incident: Incident) {
+  navigator.clipboard
+    ?.writeText(postmortemMarkdown(incident))
+    .then(() => toast.success("Postmortem copied"))
+    .catch(() => toast.error("Couldn't copy the postmortem", { description: "The browser blocked clipboard access." }));
+}
+
+function downloadPostmortem(incident: Incident) {
+  const blob = new Blob([postmortemMarkdown(incident)], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `postmortem-${incident.id}.md`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// The palette asks for a write while the section may still be mounting; the
+// panel picks the request up when it mounts, or hears it if it's open.
+const WRITE_EVENT = "triage:write-postmortem";
+let writePending = false;
+
+export function requestPostmortemWrite() {
+  writePending = true;
+  window.dispatchEvent(new Event(WRITE_EVENT));
+}
+
+// Starts a write. The route answers 202 and saves the record a beat later,
+// so after it's accepted the page refreshes every second until the record
+// changes; useRefreshWhile follows it from there.
+function useWritePostmortem(incident: Incident) {
+  const router = useRouter();
+  const startedAt = incident.postmortem?.startedAt;
+  // The record's start when the write was asked for; null when none is.
+  const [sentFrom, setSentFrom] = useState<{ from: string | undefined; accepted: boolean } | null>(null);
+  if (sentFrom?.accepted && sentFrom.from !== startedAt) setSentFrom(null);
+
+  const write = useCallback(async () => {
+    setSentFrom({ from: startedAt, accepted: false });
+    try {
+      const res = await fetch(`/api/incidents/${incident.id}/postmortem`, { method: "POST" });
+      if (res.status !== 202) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      setSentFrom({ from: startedAt, accepted: true });
+      toast("Writing the postmortem");
+      router.refresh();
+    } catch (err) {
+      setSentFrom(null);
+      toast.error("Couldn't write the postmortem", { description: sentence(err instanceof Error ? err.message : String(err)) });
+    }
+  }, [incident.id, startedAt, router]);
+
+  // Give up after a while, in case the record never comes: the section
+  // shows whatever the incident has then.
+  const accepted = sentFrom?.accepted ?? false;
+  useEffect(() => {
+    if (!accepted) return;
+    const timer = setInterval(() => router.refresh(), 1000);
+    const stop = setTimeout(() => setSentFrom(null), 15_000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(stop);
+    };
+  }, [accepted, router]);
+
+  useEffect(() => {
+    function onRequest() {
+      writePending = false;
+      void write();
+    }
+    if (writePending) onRequest();
+    window.addEventListener(WRITE_EVENT, onRequest);
+    return () => window.removeEventListener(WRITE_EVENT, onRequest);
+  }, [write]);
+
+  return { write, sending: sentFrom !== null, accepted };
+}
+
+export function PostmortemPanel({ incident }: { incident: Incident }) {
+  const pm = incident.postmortem;
+  const { write, sending, accepted } = useWritePostmortem(incident);
+  const refusal = writeRefusal(incident);
+  const markdown = useMemo(() => (pm?.status === "ready" ? postmortemMarkdown(incident) : ""), [pm?.status, incident]);
+
+  // Accepted but not saved yet reads as writing already.
+  if (pm?.status === "writing" || accepted) {
+    return (
+      <p className="flex items-center gap-2 text-muted-foreground text-sm" aria-live="polite">
+        <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+        <span>
+          Writing the postmortem from the incident&apos;s record
+          {pm?.status === "writing" && <> · {modelLabel(pm.model, pm.provider)}</>}
+        </span>
+      </p>
+    );
+  }
+
+  if (!pm) {
+    return (
+      <div className="flex flex-col items-start gap-3 rounded-lg border p-4">
+        <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+          <FileTextIcon className="size-3.5" />
+          Postmortem
+        </span>
+        <p className="text-sm leading-relaxed">
+          Triage writes a blameless postmortem from this incident&apos;s record: a summary, the impact, a timeline,
+          the contributing factors, lessons and action items, with every claim cited to its evidence. Copy it as
+          Markdown or download it for your team&apos;s docs.
+        </p>
+        <WriteButton refusal={refusal} sending={sending} onClick={write}>
+          Write the postmortem
+        </WriteButton>
+      </div>
+    );
+  }
+
+  if (pm.status === "failed") {
+    return (
+      <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
+        <AlertTitle>The postmortem wasn&apos;t written</AlertTitle>
+        {pm.error && <AlertDescription className="line-clamp-3 break-words">{pm.error}</AlertDescription>}
+        <AlertAction>
+          <WriteButton refusal={refusal} sending={sending} onClick={write} size="xs" variant="outline">
+            Try again
+          </WriteButton>
+        </AlertAction>
+      </Alert>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <p className="min-w-0 text-muted-foreground text-xs">
+          Written <Timestamp date={pm.finishedAt ?? pm.startedAt} /> · {modelLabel(pm.model, pm.provider)}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <WriteButton refusal={refusal} sending={sending} onClick={write} size="sm" variant="outline">
+            Write again
+          </WriteButton>
+          <Button variant="outline" size="sm" onClick={() => copyPostmortem(incident)}>
+            <CopyIcon />
+            Copy Markdown
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => downloadPostmortem(incident)}>
+            <DownloadIcon />
+            Download
+          </Button>
+        </div>
+      </div>
+      <article className="rounded-lg border px-4 py-5 sm:px-8 sm:py-7">
+        <MarkdownDoc text={markdown} />
+      </article>
+    </div>
+  );
+}
+
+// Write, Write again and Try again: disabled with the reason on hover while
+// the server would refuse, a spinner while the request is out.
+function WriteButton({
+  refusal,
+  sending,
+  onClick,
+  children,
+  size = "sm",
+  variant = "default",
+}: {
+  refusal: string | undefined;
+  sending: boolean;
+  onClick: () => void;
+  children: string;
+  size?: "xs" | "sm";
+  variant?: "default" | "outline";
+}) {
+  const button = (
+    <Button size={size} variant={variant} disabled={sending || refusal !== undefined} onClick={onClick}>
+      {sending ? <LoaderCircleIcon className="animate-spin" /> : variant === "outline" && <RotateCcwIcon />}
+      {children}
+    </Button>
+  );
+  if (!refusal) return button;
+  // A disabled button gets no pointer events; its wrapper shows the tooltip.
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="inline-flex">
+          {button}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-64">{refusal}</TooltipContent>
+    </Tooltip>
+  );
+}

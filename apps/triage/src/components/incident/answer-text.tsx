@@ -18,7 +18,7 @@ const bullet = /^\s*(?:[-*•]|\d+[.)])\s+/;
 const numbered = /^\s*\d+[.)]\s+/;
 const inlineMark = /(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;
 
-type Block = { kind: "paragraph"; text: string } | { kind: "list"; ordered: boolean; items: string[] };
+export type Block = { kind: "paragraph"; text: string } | { kind: "list"; ordered: boolean; items: string[] };
 
 // Paragraphs are separated by a blank line; a run of bullet lines is a list
 // wherever it sits. Lines inside a paragraph join with a space, as in
