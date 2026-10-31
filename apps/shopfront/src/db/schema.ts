@@ -31,5 +31,16 @@ export const stockLevels = pgTable("stock_levels", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// The price list: what a product sells for, kept apart from the catalog
+// row so prices can change without touching product details. Filled from
+// products.price_cents by syncListPrices (src/lib/prices.ts).
+export const productPrices = pgTable("product_prices", {
+  productId: integer("product_id")
+    .primaryKey()
+    .references(() => products.id, { onDelete: "cascade" }),
+  amountCents: integer("amount_cents").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;

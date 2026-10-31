@@ -10,6 +10,7 @@ import { readCart } from "@/lib/cart";
 import { FREE_SHIPPING_CENTS, shippingFor } from "@/lib/cart-rules";
 import { formatPrice } from "@/lib/catalog";
 import { logger } from "@/lib/logger";
+import { priceOf } from "@/lib/prices";
 import { CartLineControls } from "./cart-line-controls";
 import { RetryButton } from "./retry-button";
 
@@ -31,13 +32,15 @@ export default async function CartPage() {
 
   // In cart order. A product that has since left the catalog drops out.
   const byId = new Map(rows.map((p) => [p.id, p]));
-  const items = lines.flatMap((l) => {
-    const product = byId.get(l.productId);
-    return product ? [{ product, quantity: l.quantity }] : [];
-  });
+  const items = await Promise.all(
+    lines.flatMap((l) => {
+      const product = byId.get(l.productId);
+      return product ? [priceOf(product).then((priceCents) => ({ product, priceCents, quantity: l.quantity }))] : [];
+    }),
+  );
   if (items.length === 0) return <EmptyCart />;
 
-  const subtotal = items.reduce((sum, i) => sum + i.product.priceCents * i.quantity, 0);
+  const subtotal = items.reduce((sum, i) => sum + i.priceCents * i.quantity, 0);
   const shipping = shippingFor(subtotal);
   const toFree = FREE_SHIPPING_CENTS - subtotal;
   const count = items.reduce((n, i) => n + i.quantity, 0);
@@ -51,7 +54,7 @@ export default async function CartPage() {
 
       <div className="mt-8 grid gap-10 lg:grid-cols-[1fr_22rem] lg:items-start">
         <ul className="divide-y border-y">
-          {items.map(({ product, quantity }) => (
+          {items.map(({ product, priceCents, quantity }) => (
             <li key={product.id} className="flex gap-4 py-5 sm:gap-5">
               <Link
                 href={`/products/${product.id}`}
@@ -68,10 +71,10 @@ export default async function CartPage() {
                       {product.name}
                     </Link>
                     <p className="mt-0.5 text-sm text-muted-foreground">
-                      {product.category} · {formatPrice(product.priceCents)} each
+                      {product.category} · {formatPrice(priceCents)} each
                     </p>
                   </div>
-                  <p className="font-medium tabular-nums">{formatPrice(product.priceCents * quantity)}</p>
+                  <p className="font-medium tabular-nums">{formatPrice(priceCents * quantity)}</p>
                 </div>
                 <CartLineControls productId={product.id} name={product.name} quantity={quantity} />
               </div>

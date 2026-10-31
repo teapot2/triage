@@ -8,6 +8,10 @@ export const featureFlags = {
     label: "Direct stock query",
     description: "Read stock levels with a hand-written query on a pooled client instead of through Drizzle.",
   },
+  FF_LIST_PRICES: {
+    label: "List prices",
+    description: "Serve prices on the product page, the product API and the cart from the price list instead of the catalog.",
+  },
 } as const;
 
 export type FeatureFlag = keyof typeof featureFlags;

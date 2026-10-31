@@ -29,6 +29,13 @@
       "when": 1793046307619,
       "tag": "0003_pg_stat_statements",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793401492714,
+      "tag": "0004_product_prices",
+      "breakpoints": true
     }
   ]
 }

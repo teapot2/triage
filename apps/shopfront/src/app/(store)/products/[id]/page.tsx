@@ -7,6 +7,7 @@ import { BuyBox, BuyBoxSkeleton } from "@/components/buy-box";
 import { ProductImage } from "@/components/product-image";
 import { ProductCard } from "@/components/product-card";
 import { categories, categoryDetails, formatPrice, type Category } from "@/lib/catalog";
+import { priceOf } from "@/lib/prices";
 import { getProduct, getRelated, parseProductId } from "@/lib/products";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,7 @@ export default async function ProductPage({ params }: Props) {
   if (!id) notFound();
   const product = await getProduct(id);
   if (!product) notFound();
+  const priceCents = await priceOf(product);
 
   const category = categories.find((c) => c === product.category);
   const details = category ? categoryDetails[category] : null;
@@ -74,7 +76,7 @@ export default async function ProductPage({ params }: Props) {
               ({product.reviewCount.toLocaleString("en-US")} reviews)
             </span>
           </div>
-          <p className="mt-5 text-2xl font-medium tabular-nums">{formatPrice(product.priceCents)}</p>
+          <p className="mt-5 text-2xl font-medium tabular-nums">{formatPrice(priceCents)}</p>
           <p className="mt-5 max-w-prose text-muted-foreground text-pretty">{product.description}</p>
 
           <div className="mt-8 border-t pt-6">
