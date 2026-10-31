@@ -19,6 +19,13 @@ const faults: Record<FeatureFlag, { label: string; description: string }> = {
       "getStockLevel switches to a direct query that keeps its pooled connection when a product has no stock row. " +
       "About ten views of such a product use up the pool, then every database-backed page times out after 3 s.",
   },
+  FF_LIST_PRICES: {
+    label: "Price list gap",
+    description:
+      "Product pages, the product API and the cart read prices from product_prices, which syncListPrices fills with an " +
+      "inner join on stock_levels. The Cast Iron Teapot and the three new arrivals have no stock row, so no price row, " +
+      "and every view of them fails with a 500 (TypeError). Turning it off stops the errors at once.",
+  },
 };
 
 // Everything /ops shows. In-memory only, no database query: it has to answer

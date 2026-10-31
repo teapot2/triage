@@ -172,7 +172,7 @@ export function OpsPanel({ initial, triageUrl }: { initial: OpsState; triageUrl:
           </div>
 
           <div className="space-y-6">
-            <Card title="Faults">
+            <Card title="Faults" aside="One at a time">
               <ul className="space-y-4">
                 {state.flags.map((flag) => (
                   <li key={flag.name} className="flex gap-4">

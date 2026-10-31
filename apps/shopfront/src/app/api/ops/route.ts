@@ -30,6 +30,14 @@ export async function POST(req: Request) {
   switch (body?.action) {
     case "flag": {
       if (!(body.name in featureFlags) || typeof body.enabled !== "boolean") break;
+      // One fault at a time, so each run has one root cause to find.
+      const other = body.enabled && opsState().flags.find((f) => f.enabled && f.name !== body.name);
+      if (other) {
+        return Response.json(
+          { error: `“${other.label}” is already on. Turn it off first: only one fault runs at a time.` },
+          { status: 409 },
+        );
+      }
       setFlag(body.name, body.enabled);
       logger.warn(`ops: ${body.name} turned ${body.enabled ? "on" : "off"}`, { "flag.name": body.name });
       return Response.json(opsState());
