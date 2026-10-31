@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { closeDb } from "../db";
 import { exampleIncidents } from "./fixtures";
 import type { Incident } from "./schema";
 import { sourceFor } from "./source-for";
@@ -19,6 +20,8 @@ before(async () => {
   process.chdir(dir);
 });
 after(async () => {
+  // Windows won't delete the temp directory while the database is open.
+  closeDb();
   process.chdir(cwd);
   await rm(dir, { recursive: true, force: true });
 });

@@ -23,6 +23,7 @@ import { StatusBadge, type StatusTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { describeCheck, duration, type UptimeCheck, type UptimeSample } from "@/lib/investigation/uptime/model";
 import { cn } from "@/lib/utils";
 import {
@@ -34,6 +35,7 @@ import {
   useClock,
   useEndpointDetail,
   useEndpointStates,
+  type UptimeWindow,
 } from "./endpoint-client";
 import { plural } from "./watch-client";
 import { WatchHeader } from "./watch-header";
@@ -178,7 +180,7 @@ export function EndpointDetail({ id }: { id: string }) {
             </Section>
           </div>
 
-          <Configuration check={check} />
+          <Configuration check={check} uptime={data.uptime} />
         </div>
       </div>
     </>
@@ -228,13 +230,14 @@ function ResultTable({ samples }: { samples: UptimeSample[] }) {
   );
 }
 
-function Configuration({ check }: { check: UptimeCheck }) {
+function Configuration({ check, uptime }: { check: UptimeCheck; uptime?: UptimeWindow[] }) {
   const { min, max } = check.expectedStatus;
   // The aside runs the column's full height, for its border; what's in it
   // sticks below the header's bar while the results scroll by.
   return (
     <aside aria-label="Configuration" className="md:border-l md:pl-8">
       <div className="flex flex-col gap-3 md:sticky md:top-18">
+        {uptime && <Uptime windows={uptime} />}
         <h2 className="font-medium text-sm">Configuration</h2>
         <p className="text-muted-foreground text-sm">{describeCheck(check)}.</p>
         <dl className="flex flex-col gap-3 text-sm">
@@ -254,6 +257,41 @@ function Configuration({ check }: { check: UptimeCheck }) {
         </dl>
       </div>
     </aside>
+  );
+}
+
+// Uptime over 24 h, 7 d and 30 d: the share of checks that weren't down.
+// The counts behind each are on hover, and when the history starts inside
+// the longest window a line says where, so two hours of "100%" can't pass
+// for thirty days.
+function Uptime({ windows }: { windows: UptimeWindow[] }) {
+  const since = windows.at(-1)?.since;
+  return (
+    <section aria-label="Uptime" className="flex flex-col gap-2 border-b pb-4">
+      <h2 className="font-medium text-sm">Uptime</h2>
+      <dl className="grid grid-cols-3 gap-2">
+        {windows.map((w) => (
+          <div key={w.label} className="flex flex-col gap-0.5">
+            <dt className="text-muted-foreground text-xs">{w.label}</dt>
+            <dd>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-default font-medium text-sm tabular-nums">{w.percent ?? "–"}</span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {w.checks === 0 ? "No checks in this window" : `${plural(w.checks, "check", "checks")}, ${w.down} down`}
+                </TooltipContent>
+              </Tooltip>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {since && (
+        <p className="text-muted-foreground text-xs">
+          History starts <Timestamp date={since} />
+        </p>
+      )}
+    </section>
   );
 }
 

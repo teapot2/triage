@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { closeDb, getDb, transaction } from "../../db";
 import { defaultCheck, readChecks, saveChecks } from "./checks";
 import type { UptimeSample } from "./model";
 import { appendSample, deleteSamples, MAX_SAMPLES, readSamples } from "./samples";
@@ -15,6 +16,7 @@ before(async () => {
   process.chdir(dir);
 });
 after(async () => {
+  closeDb();
   process.chdir(cwd);
   await rm(dir, { recursive: true, force: true });
 });
@@ -71,10 +73,12 @@ describe("uptime samples store", () => {
     assert.deepEqual(await readSamples("chk_eeeeee"), [sample(0), sample(1)]);
   });
 
-  it("keeps only the last 500", async () => {
-    const file = path.join(dir, ".data", "uptime", "chk_ffffff.json");
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify({ samples: Array.from({ length: MAX_SAMPLES }, (_, i) => sample(i)) }));
+  it("answers with only the last 500", async () => {
+    const db = getDb();
+    const insert = db.prepare("INSERT INTO uptime_samples (check_id, at, ms, status, outcome) VALUES (?, ?, ?, ?, ?)");
+    transaction(db, () => {
+      for (let i = 0; i < MAX_SAMPLES; i++) insert.run("chk_ffffff", Date.parse(sample(i).at), sample(i).ms, 200, "ok");
+    });
     const samples = await appendSample("chk_ffffff", sample(MAX_SAMPLES));
     assert.equal(samples.length, MAX_SAMPLES);
     assert.deepEqual(samples[0], sample(1));

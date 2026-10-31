@@ -12,5 +12,5 @@
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f"
   },
-  "engines": { "node": ">=22" }
+  "engines": { "node": ">=22.13" }
 }

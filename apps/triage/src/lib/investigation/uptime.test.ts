@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { closeDb } from "../db";
 import type { MessageKind } from "../notifications/types";
 import type { Incident } from "./schema";
 import type { UptimeSample } from "./uptime/model";
@@ -27,6 +28,8 @@ before(async () => {
   await saveChecks([defaultCheck({ id: "chk_shop01", name: "Shopfront", url: "http://localhost:3001/api/health", slowMs: 1000 })]);
 });
 after(async () => {
+  // Windows won't delete the temp directory while the database is open.
+  closeDb();
   process.chdir(cwd);
   // Windows may still hold a just-renamed file for a moment.
   await rm(dir, { recursive: true, force: true, maxRetries: 5 });

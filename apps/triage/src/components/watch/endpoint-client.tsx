@@ -13,7 +13,12 @@ import { message, useWatchState } from "./watch-client";
 
 export type { EndpointState };
 
-export type EndpointDetailData = { check: UptimeCheck; state: EndpointState; samples: UptimeSample[] };
+// Uptime over one window, worked out on the server from the stored history.
+// `since` is set when the history starts inside the window, so 30 days of
+// "100%" over two hours of data can say so.
+export type UptimeWindow = { label: string; percent?: string; checks: number; down: number; since?: string };
+
+export type EndpointDetailData = { check: UptimeCheck; state: EndpointState; samples: UptimeSample[]; uptime?: UptimeWindow[] };
 
 // The watch's state, polled, with the checks' states in it.
 export const useEndpointStates = () => {
