@@ -97,6 +97,26 @@ Once an incident has a finished report that isn't healthy, its **Postmortem** se
 - **Model:** the **Postmortem** stage in Settings → Models (`postmortem/writer.ts`). Until it is changed it uses the Ask stage's model (so Investigate's, when Ask has none either).
 - **Limits:** one postmortem per incident; writing again replaces it as soon as it starts. The model has no tools: it reads the record and its evidence only. The export's Owner and Due columns are blank for the team to fill in, and the document ends as a draft until the team has read it.
 
+## Exports
+
+Most of what Triage shows can be downloaded, so its claims can be checked in other tools and its output moved into them. An **Export** button offers each file where its data is shown:
+
+| Export | Where | Formats |
+| --- | --- | --- |
+| `incidents` | Incidents toolbar: the rows the filters and sort show, every page | CSV, JSON |
+| `incident` | Incident header: the whole stored record | JSON |
+| `evidence-logs`, `-spans`, `-metrics`, `-db` | Incident header: the raw evidence, the investigation's and each Ask answer's (`source` column) | CSV, JSON; logs also NDJSON |
+| `investigation-trace` | Incident header, and the timeline's filter toolbar for the steps on show: the run, steps and thoughts in order | JSON, NDJSON |
+| `fix-patch` | Fix section: the diff exactly as stored, for `git apply` | `.patch` |
+| `ask-answers` | Ask section: questions, answers and their cited evidence | Markdown, JSON |
+| `postmortem-actions` | Postmortem section: action items with title, description, priority, labels and blank owner and due date, for a Jira or Linear import | CSV, JSON |
+| `endpoint-results`, `endpoint-hourly` | Endpoint page: every stored result (48 h) and the hourly summaries (90 days) | CSV, JSON |
+| `chart-series` | Every chart: the points it draws (gaps left out) and its limit | CSV, JSON |
+
+- **How:** stored data downloads from `GET /api/export/<dataset>?format=…&id=…` (400 for a bad format or params, 404 when there's nothing to export, `Content-Disposition: attachment`, `Cache-Control: no-store`); data that's only on the page (chart series, filtered steps) is built in the browser from the same code. The pieces are under `src/lib/export/`: `datasets/` (what each file holds), `serialize.ts`, `exports.ts` (the server's list) and `components/export-menu.tsx`.
+- **Files:** CSV has a UTF-8 BOM and CRLF so spreadsheets read it as written, quotes as RFC 4180 says, and puts `'` before a text cell starting with `=`, `+`, `-` or `@` so it can't run as a formula. Times are ISO 8601 UTC; numbers are raw, with the unit in the column name (`response_ms`). JSON wraps the rows with the dataset, the time and what was exported. Filenames read `<dataset>_<name>_<UTC time>.<ext>`.
+- **What's never in one:** columns are a fixed list per dataset, so a new field on a record stays out until a column names it, and secrets (the check's header value, API keys, webhook URLs) are never columns. An export shows no more than the page that offers it.
+
 ## Investigation agent
 
 `src/lib/investigation/` holds Stage 2: a `ToolLoopAgent` on the Investigate stage's model (Settings → Models) with seven telemetry tools and a `submit_report` tool. Reports are validated (schema, `reportProblems`, unknown evidence IDs, every service queried); rejections go back to the model to fix. Tools read from a `TelemetrySource`; today that is a recorded scenario in `scenarios/`, and the live telemetry store will implement the same interface.
