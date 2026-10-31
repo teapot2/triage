@@ -4,7 +4,7 @@ import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { FormField } from "@/components/form-fields";
 import { StageRow, useModelList } from "@/components/model-stage-row";
-import { DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
+import { DisclosureFooter, DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -515,7 +515,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
           <AlertDescription className="break-words">{error}</AlertDescription>
         </Alert>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <DisclosureFooter>
         <Button variant="outline" size="sm" onClick={test} disabled={testing}>
           {testing && <LoaderCircleIcon className="animate-spin" />}
           Test connection
@@ -531,7 +531,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
             <span className="sr-only"> {label} endpoint</span>
           </Button>
         </div>
-      </div>
+      </DisclosureFooter>
     </DisclosureRow>
   );
 }

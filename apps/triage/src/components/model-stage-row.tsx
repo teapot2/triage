@@ -1,15 +1,16 @@
 "use client";
 
-import { LoaderCircleIcon } from "lucide-react";
+import { CheckIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { FormField } from "@/components/form-fields";
 import { formatDuration } from "@/components/incident/format";
 import type { ModelUpdate, Provider, SaveModelSettings, StageModel } from "@/components/model-settings";
 import { ModelPicker } from "@/components/model-picker";
-import { DisclosureRow } from "@/components/settings-list";
-import { StatusBadge } from "@/components/ui/badge";
+import { DisclosureFooter, DisclosureRow } from "@/components/settings-list";
+import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProviderId } from "@/lib/models/providers";
@@ -92,6 +93,12 @@ export function StageRow({
   const [check, setCheck] = useState<Check | null>(null);
   // A new check is a new notice, so its countdown starts over.
   const [checks, setChecks] = useState(0);
+
+  useEffect(() => {
+    if (!check?.ok) return;
+    const timer = setTimeout(() => setCheck(null), SUCCESS_MS);
+    return () => clearTimeout(timer);
+  }, [check, checks]);
 
   const provider = providers.find((p) => p.id === draft.provider);
   const list = useModelList(provider);
@@ -198,10 +205,26 @@ export function StageRow({
   return (
     <DisclosureRow
       title={label}
-      subtitle={
+      subtitle={description}
+      summary={
         <>
-          <span className="font-mono">{saved.model}</span> via {savedLabel}
-          {saved.provider === "meta" && ` · ${effortLabels[saved.effort].toLowerCase()} effort`}
+          <span className="flex w-40 min-w-0 flex-col gap-0.5">
+            <span className="truncate font-mono text-xs" title={saved.model}>
+              {saved.model}
+            </span>
+            <span className="truncate text-muted-foreground text-xs">{savedLabel}</span>
+          </span>
+          {/* Effort only applies on Meta's API; the column keeps its width
+              either way so the rows line up. */}
+          <span className="w-16 text-xs">
+            {saved.provider === "meta" ? (
+              <Badge variant="secondary" className="font-normal">
+                {effortLabels[saved.effort]}
+              </Badge>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </span>
         </>
       }
       status={status}
@@ -209,8 +232,7 @@ export function StageRow({
       open={open}
       onOpenChange={onOpenChange}
     >
-      <p className="text-muted-foreground text-xs">{description}</p>
-      <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+      <div className={cn("grid gap-x-4 gap-y-3 sm:grid-cols-2", meta && "sm:grid-cols-[1fr_1.5fr_1fr]")}>
         <FormField label="Provider" htmlFor={`${id}-provider`}>
           <Select value={draft.provider} onValueChange={(v) => changeProvider(v as ProviderId)}>
             <SelectTrigger id={`${id}-provider`} className="w-full">
@@ -240,7 +262,7 @@ export function StageRow({
           />
         </FormField>
         {meta && (
-          <FormField label="Reasoning effort" htmlFor={`${id}-effort`} hint="Higher levels think longer, and cost more.">
+          <FormField label="Reasoning effort" htmlFor={`${id}-effort`}>
             <Select value={effort} onValueChange={(v) => setDraft({ ...draft, effort: v as ReasoningEffort })}>
               <SelectTrigger id={`${id}-effort`} className="w-full">
                 <SelectValue />
@@ -271,28 +293,35 @@ export function StageRow({
           <AlertDescription className="break-words">{saveError}</AlertDescription>
         </Alert>
       )}
-      {check?.ok && (
-        <Alert key={checks} variant="success" dismissible dismissLabel="Dismiss result" autoDismiss={SUCCESS_MS} onDismiss={() => setCheck(null)}>
-          <AlertTitle>The model answered in {formatDuration(check.ms)}</AlertTitle>
-        </Alert>
-      )}
       {check && !check.ok && (
         <Alert key={checks} variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setCheck(null)}>
           <AlertTitle>The model didn&apos;t answer</AlertTitle>
           <AlertDescription className="break-words">{check.error}</AlertDescription>
         </Alert>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="outline" size="sm" onClick={ping} disabled={checking}>
-              {checking && <LoaderCircleIcon className="animate-spin" />}
-              Test model
-              <span className="sr-only"> for {label}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Sends one short request, which may incur charges.</TooltipContent>
-        </Tooltip>
+      <DisclosureFooter>
+        {/* A success is one line beside the button, so the editor doesn't
+            jump; a failure gets the alert above, with its error. */}
+        <div className="flex items-center gap-3">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={ping} disabled={checking}>
+                {checking && <LoaderCircleIcon className="animate-spin" />}
+                Test model
+                <span className="sr-only"> for {label}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Sends one short request, which may incur charges.</TooltipContent>
+          </Tooltip>
+          <span role="status" className="flex items-center gap-1 text-muted-foreground text-xs">
+            {check?.ok && (
+              <>
+                <CheckIcon className="size-3.5 text-success" aria-hidden />
+                Answered in {formatDuration(check.ms)}
+              </>
+            )}
+          </span>
+        </div>
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={cancel}>
             Cancel
@@ -303,7 +332,7 @@ export function StageRow({
             <span className="sr-only"> {label}</span>
           </Button>
         </div>
-      </div>
+      </DisclosureFooter>
     </DisclosureRow>
   );
 }
