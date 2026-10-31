@@ -74,6 +74,39 @@ describe("reportProblems", () => {
     assert.deepEqual(nothingWrong(r), []);
   });
 
+  it("sends back placeholder hypotheses, as on the Spark run", () => {
+    const stub = (n: number, status: Hypothesis["status"]): Hypothesis => ({
+      id: `h${n}`,
+      title: `t${n}`,
+      confidence: status === "leading" ? 0.86 : 0.07,
+      status,
+      causalChain: { symptom: claim(`s${n}`), propagation: claim(`p${n}`), rootCause: claim(`r${n}`) },
+      rejectedBecause: status === "rejected" ? claim(`rej${n}`) : undefined,
+    });
+    const r: InvestigationReport = {
+      summary: "Enabling the flag crashed the product API for items without price rows.",
+      hypotheses: [stub(1, "leading"), stub(2, "rejected"), stub(3, "rejected")],
+      verdict: { kind: "root_cause", hypothesisId: "h1" },
+      servicesQueried: ["shopfront"],
+    };
+    const problems = reportProblems(r).filter((p) => p.includes("placeholders"));
+    assert.equal(problems.length, 3);
+    assert.match(problems[0], /title "t1", symptom "s1", propagation "p1", rootCause "r1"/);
+    assert.match(problems[1], /rejectedBecause "rej2"/);
+  });
+
+  it("sends back a one-word or empty claim", () => {
+    const h = hypothesis("h1", "Price lookup throws", "missing", "leading");
+    h.causalChain.symptom = claim("  ");
+    const [problem] = reportProblems(report(h));
+    assert.match(problem, /symptom "  ", rootCause "missing"/);
+  });
+
+  it("accepts short real titles and two-word claims", () => {
+    const r = report(hypothesis("h1", "Leak", "Connections leak", "leading"));
+    assert.deepEqual(reportProblems(r), []);
+  });
+
   it("leaves healthy verdicts alone", () => {
     const r: InvestigationReport = {
       summary: "Nothing is wrong.",

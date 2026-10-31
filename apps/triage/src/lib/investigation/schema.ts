@@ -540,6 +540,27 @@ const noFault =
 
 export const saysNothingIsWrong = (h: Hypothesis) => noFault.test(`${h.title}\n${h.causalChain.rootCause.text}`);
 
+// Text that stands in for an answer instead of giving one. Seen on a Spark
+// run: hypotheses titled t1-t3 with claims s1, p1, r1 and rej2, each citing
+// real evidence, so only the summary said anything.
+const placeholder = /^(?:[a-z_]{0,4}\d+|todo|tbd|n\/?a|none|placeholder|\.+|-+|\?+)$/i;
+const isPlaceholder = (text: string) => text.trim() === "" || placeholder.test(text.trim());
+// A claim is a statement: one word can't say what happened.
+const saysTooLittle = (text: string) => isPlaceholder(text) || text.trim().split(/\s+/).length < 2;
+
+function placeholderFields(h: Hypothesis): string[] {
+  const claims: [string, Claim | undefined][] = [
+    ["symptom", h.causalChain.symptom],
+    ["propagation", h.causalChain.propagation],
+    ["rootCause", h.causalChain.rootCause],
+    ["rejectedBecause", h.rejectedBecause],
+  ];
+  return [
+    ...(isPlaceholder(h.title) ? [`title "${h.title}"`] : []),
+    ...claims.flatMap(([name, c]) => (c && saysTooLittle(c.text) ? [`${name} "${c.text}"`] : [])),
+  ];
+}
+
 // Rules the JSON schema cannot express; checked after the model responds.
 export function reportProblems(report: InvestigationReport): string[] {
   const problems: string[] = [];
@@ -561,6 +582,12 @@ export function reportProblems(report: InvestigationReport): string[] {
   for (const h of hypotheses) {
     if (h.status === "rejected" && !h.rejectedBecause) {
       problems.push(`rejected hypothesis ${h.id} needs rejectedBecause`);
+    }
+    const blank = placeholderFields(h);
+    if (blank.length) {
+      problems.push(
+        `hypothesis ${h.id} has placeholders instead of findings: ${blank.join(", ")}. Write the title as the cause in a few words and each claim as a sentence saying what the cited evidence shows.`,
+      );
     }
   }
   const ids = hypotheses.map((h) => h.id);
