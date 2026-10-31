@@ -104,17 +104,19 @@ describe("patchChanges and patchFor", () => {
       changes.map((c) => [c.file, c.created]),
       [
         ["src/lib/prices.ts", false],
-        ["drizzle/0004_backfill_product_prices.sql", true],
+        ["drizzle/0005_backfill_product_prices.sql", true],
+        ["drizzle/meta/_journal.json", false],
         ["src/lib/prices.test.ts", true],
       ],
     );
-    assert.match(changes[1].text, /^-- Products added/);
-    assert.ok(!changes[0].text.includes(" return row.cents;\n-"));
+    assert.match(changes[1].text, /^-- New arrivals/);
+    assert.ok(changes[0].text.includes("return row?.amountCents;"));
+    assert.ok(!changes[0].text.includes("innerJoin"));
   });
 
   it("cuts out one file's part of the patch", () => {
-    const part = patchFor(patch, ["drizzle/0004_backfill_product_prices.sql"]);
-    assert.ok(part.startsWith("--- /dev/null\n+++ b/drizzle/0004_backfill_product_prices.sql\n@@ -0,0 +1,6 @@"));
+    const part = patchFor(patch, ["drizzle/0005_backfill_product_prices.sql"]);
+    assert.ok(part.startsWith("--- /dev/null\n+++ b/drizzle/0005_backfill_product_prices.sql\n@@ -0,0 +1,5 @@"));
     assert.ok(!part.includes("prices.ts"));
   });
 });
@@ -129,7 +131,8 @@ describe("dataChangeOf", () => {
     assert.equal(gap.dataChange, undefined);
     const change = dataChangeOf(gap);
     assert.equal(change.detected, true);
-    assert.deepEqual(change.unproven, ["drizzle/0004_backfill_product_prices.sql"]);
+    assert.deepEqual(change.unproven, ["drizzle/0005_backfill_product_prices.sql", "drizzle/meta/_journal.json"]);
+    assert.ok(change.reasons.includes("Registers the migration in drizzle/meta/_journal.json (written by Triage)"));
   });
 
   it("leaves the regression test out: a test may clean up what it creates", () => {
@@ -167,7 +170,7 @@ describe("pullRequestText", () => {
   it("warns about a data change and adds the checklist", () => {
     const { body } = pullRequestText(example("inc_price_gap"));
     assert.ok(body.includes("**This fix changes stored data.**"));
-    assert.ok(body.includes("`drizzle/0004_backfill_product_prices.sql` never ran"));
+    assert.ok(body.includes("`drizzle/0005_backfill_product_prices.sql`, `drizzle/meta/_journal.json` never ran"));
     assert.ok(body.includes("- [ ] Run it against a copy of the production data first"));
     assert.ok(body.includes("· changes stored data"));
   });

@@ -1,4 +1,5 @@
 import { parsePatch } from "../../diff";
+import { JOURNAL } from "./data-change";
 
 // A fix a reviewer denied, with what they asked for instead. On a rerun the
 // model gets every one, oldest first, and may not submit one again.
@@ -20,12 +21,13 @@ Follow the feedback. A patch identical to a denied one is rejected.`;
     .join("\n\n");
 }
 
-// The code a patch changes, without its regression test: the same edits
+// The code a patch changes, without its regression test or the migration
+// journal Triage writes (its entry carries a timestamp): the same edits
 // with a different test are still the fix the reviewer denied.
 const codeChanges = (patch: string) =>
   JSON.stringify(
     parsePatch(patch)
-      .filter((f) => !/\.test\.ts$/.test(f.path))
+      .filter((f) => !/\.test\.ts$/.test(f.path) && f.path !== JOURNAL)
       .map((f) => [f.path, f.hunks.map((h) => h.lines.map((l) => `${l.kind}:${l.text}`))]),
   );
 

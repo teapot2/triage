@@ -534,52 +534,110 @@ const controlRun: Incident = {
   },
 };
 
-// A fix with a data half: the code stops failing on a product with no list
-// price, and a migration backfills the missing rows. The sandbox proves the
-// code; the migration only ships in the PR, so approving it needs the
-// reviewer to say they read it (see fix/data-change.ts).
+// A fix with a data half, on the second fault (FF_LIST_PRICES): the code
+// stops leaving new arrivals out of the price list, and a migration
+// backfills the rows already missing, registered in Drizzle's journal by
+// Triage. The sandbox proves the code; the migration only ships in the PR,
+// so approving it needs the reviewer to say they read it (see
+// fix/data-change.ts and fix/migration.ts).
 const priceGapPatch = `--- a/src/lib/prices.ts
 +++ b/src/lib/prices.ts
-@@ -4,7 +4,11 @@ import { productPrices } from "@/db/schema";
- export async function getListPrice(productId: number, fallbackCents: number): Promise<number> {
-   const [row] = await db
-     .select({ cents: productPrices.listPriceCents })
+@@ -1,19 +1,18 @@
+ import { eq, sql } from "drizzle-orm";
+ import { db } from "@/db/client";
+-import { productPrices, products, stockLevels, type Product } from "@/db/schema";
++import { productPrices, products, type Product } from "@/db/schema";
+ import { isEnabled } from "@/lib/flags";
+ 
+ // Copies catalog prices into the price list, adding new products and
+-// updating changed prices. Only products we sell get a list price, so it
+-// takes the products inventory carries.
++// updating changed prices. Every catalog product gets a list price, in
++// stock or not: a new arrival has no stock row until its first delivery.
+ export async function syncListPrices() {
+   return db
+     .insert(productPrices)
+     .select(
+       db
+         .select({ productId: products.id, amountCents: products.priceCents, updatedAt: sql\`now()\`.as("updated_at") })
+-        .from(products)
+-        .innerJoin(stockLevels, eq(stockLevels.productId, products.id)),
++        .from(products),
+     )
+     .onConflictDoUpdate({
+       target: productPrices.productId,
+@@ -22,19 +21,20 @@ export async function syncListPrices() {
+     .returning({ productId: productPrices.productId });
+ }
+ 
+-// One product's price from the price list.
+-export async function getListPrice(productId: number): Promise<number> {
+-  const [{ amountCents }] = await db
++// One product's price from the price list, if it has one.
++export async function getListPrice(productId: number): Promise<number | undefined> {
++  const [row] = await db
+     .select({ amountCents: productPrices.amountCents })
      .from(productPrices)
-     .where(eq(productPrices.productId, productId));
--  return row.cents;
-+  if (!row) {
-+    logger.warn("list price missing, using the product price", { "product.id": productId });
-+    return fallbackCents;
-+  }
-+  return row.cents;
+     .where(eq(productPrices.productId, productId))
+     .limit(1);
+-  return amountCents;
++  return row?.amountCents;
+ }
+ 
+ // What a product sells for. FF_LIST_PRICES moves the product page, the
+ // product API and the cart over to the price list; listings keep the
+ // catalog price until it's rolled out.
+ export async function priceOf(product: Pick<Product, "id" | "priceCents">): Promise<number> {
+-  return isEnabled("FF_LIST_PRICES") ? getListPrice(product.id) : product.priceCents;
++  if (!isEnabled("FF_LIST_PRICES")) return product.priceCents;
++  return (await getListPrice(product.id)) ?? product.priceCents;
  }
 --- /dev/null
-+++ b/drizzle/0004_backfill_product_prices.sql
-@@ -0,0 +1,6 @@
-+-- Products added after the price list was seeded have no list price.
-+INSERT INTO product_prices (product_id, list_price_cents)
-+SELECT p.id, p.price_cents FROM products p
-+LEFT JOIN product_prices pp ON pp.product_id = p.id
-+WHERE pp.product_id IS NULL
-+ON CONFLICT (product_id) DO NOTHING;
++++ b/drizzle/0005_backfill_product_prices.sql
+@@ -0,0 +1,5 @@
++-- New arrivals were left out of the price list: give every product without
++-- a list price its catalog price. Safe to run again.
++INSERT INTO "product_prices" ("product_id", "amount_cents")
++SELECT "id", "price_cents" FROM "products"
++ON CONFLICT ("product_id") DO NOTHING;
+--- a/drizzle/meta/_journal.json
++++ b/drizzle/meta/_journal.json
+@@ -36,6 +36,13 @@
+       "when": 1793401492714,
+       "tag": "0004_product_prices",
+       "breakpoints": true
++    },
++    {
++      "idx": 5,
++      "version": "7",
++      "when": 1793401492715,
++      "tag": "0005_backfill_product_prices",
++      "breakpoints": true
+     }
+   ]
+ }
+\\ No newline at end of file
 --- /dev/null
 +++ b/src/lib/prices.test.ts
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,10 @@
 +import { describe, expect, it } from "vitest";
-+import { getListPrice } from "./prices";
++import { setFlag } from "@/lib/flags";
++import { priceOf } from "./prices";
 +
-+describe("getListPrice", () => {
-+  it("falls back to the product price when the list price is missing", async () => {
-+    await expect(getListPrice(999_999, 1250)).resolves.toBe(1250);
++describe("priceOf", () => {
++  it("falls back to the catalog price when a product has no list price", async () => {
++    setFlag("FF_LIST_PRICES", true);
++    await expect(priceOf({ id: 999_999, priceCents: 1250 })).resolves.toBe(1250);
 +  });
 +});
 `;
 
 const priceGapErrors = [0, 0, 0.1, 0, 0, 0, 0.1, 0, 4.2, 5.1, 4.8, 5.3, 5.0, 4.9, 5.2, 5.1, 4.7, 5.0];
+const priceGapError = "TypeError: Cannot destructure property 'amountCents' of '(intermediate value)' as it is undefined.";
 
 const priceGap: Incident = {
   id: "inc_price_gap",
-  title: "500s on product pages without a list price",
+  title: "500s on product pages for new arrivals",
   service: "shopfront",
   severity: "sev3",
   status: "awaiting_approval",
@@ -599,7 +657,7 @@ const priceGap: Incident = {
       status: "completed",
       startedAt: "2026-10-24T15:20:03Z",
       durationMs: 512,
-      summary: "96 TypeErrors reading 'cents' in getListPrice since 15:11",
+      summary: "96 TypeErrors in getListPrice since 15:11, all for the three new arrivals",
       evidenceIds: ["ev_metric_errors", "ev_log_price"],
     },
     {
@@ -614,12 +672,22 @@ const priceGap: Incident = {
     },
     {
       id: "step_3",
-      tool: "read_source",
-      input: { file: "src/lib/prices.ts", startLine: 4, endLine: 10 },
+      tool: "db_diagnostics",
+      input: { check: "query", table: "product_prices" },
       status: "completed",
       startedAt: "2026-10-24T15:20:06Z",
+      durationMs: 41,
+      summary: "3 products have no product_prices row; none of them has a stock row",
+      evidenceIds: ["ev_db_missing_prices"],
+    },
+    {
+      id: "step_4",
+      tool: "read_source",
+      input: { file: "src/lib/prices.ts", startLine: 9, endLine: 32 },
+      status: "completed",
+      startedAt: "2026-10-24T15:20:07Z",
       durationMs: 28,
-      summary: "getListPrice assumes every product has a product_prices row",
+      summary: "syncListPrices joins stock_levels; getListPrice assumes a row",
       evidenceIds: ["ev_source_prices"],
     },
   ],
@@ -639,11 +707,11 @@ const priceGap: Incident = {
       id: "ev_log_price",
       kind: "log",
       tool: "query_logs",
-      summary: "96x \"Cannot read properties of undefined (reading 'cents')\" since 15:11",
+      summary: "96x \"Cannot destructure property 'amountCents'\" in getListPrice since 15:11",
       observedAt: "2026-10-24T15:19:48Z",
       service: "shopfront",
       level: "error",
-      message: "TypeError: Cannot read properties of undefined (reading 'cents') at getListPrice",
+      message: `${priceGapError} at getListPrice`,
       count: 96,
     },
     {
@@ -658,29 +726,43 @@ const priceGap: Incident = {
       files: [],
     },
     {
+      id: "ev_db_missing_prices",
+      kind: "db",
+      tool: "db_diagnostics",
+      summary: "3 products without a list price, all new arrivals with no stock row",
+      query:
+        "SELECT p.id, p.slug, s.product_id AS stock_row FROM products p LEFT JOIN product_prices pp ON pp.product_id = p.id LEFT JOIN stock_levels s ON s.product_id = p.id WHERE pp.product_id IS NULL",
+      rows: [
+        { id: 241, slug: "linen-apron", stock_row: null },
+        { id: 242, slug: "oak-serving-board", stock_row: null },
+        { id: 243, slug: "stoneware-jug", stock_row: null },
+      ],
+    },
+    {
       id: "ev_source_prices",
       kind: "source",
       tool: "read_source",
-      summary: "getListPrice reads row.cents without checking the row exists",
+      summary: "getListPrice destructures the first row without checking there is one",
       file: "src/lib/prices.ts",
-      startLine: 4,
-      code: `export async function getListPrice(productId: number, fallbackCents: number): Promise<number> {
-  const [row] = await db
-    .select({ cents: productPrices.listPriceCents })
+      startLine: 26,
+      code: `export async function getListPrice(productId: number): Promise<number> {
+  const [{ amountCents }] = await db
+    .select({ amountCents: productPrices.amountCents })
     .from(productPrices)
-    .where(eq(productPrices.productId, productId));
-  return row.cents;
+    .where(eq(productPrices.productId, productId))
+    .limit(1);
+  return amountCents;
 }`,
     },
   ],
   report: {
     summary:
-      "Since FF_LIST_PRICES went on at 15:11, product pages fail for products added after the price list was seeded: they have no list price, and getListPrice assumes one.",
+      "Since FF_LIST_PRICES went on at 15:11, the three new arrivals' pages fail: the price sync skips products without a stock row, so they have no list price, and getListPrice assumes one.",
     servicesQueried: ["shopfront", "postgres"],
     hypotheses: [
       {
         id: "h_price_gap",
-        title: "Products missing from product_prices crash getListPrice",
+        title: "New arrivals missing from product_prices crash getListPrice",
         confidence: 0.9,
         status: "leading",
         causalChain: {
@@ -689,12 +771,12 @@ const priceGap: Incident = {
             evidenceIds: ["ev_metric_errors"],
           },
           propagation: {
-            text: "getListPrice throws a TypeError for products with no product_prices row, and the page has no fallback.",
-            evidenceIds: ["ev_log_price", "ev_source_prices"],
+            text: "getListPrice throws for products with no product_prices row, and the page has no fallback.",
+            evidenceIds: ["ev_log_price", "ev_source_prices", "ev_db_missing_prices"],
           },
           rootCause: {
-            text: "Turning on FF_LIST_PRICES put getListPrice on the request path, and the price list was never backfilled for newer products.",
-            evidenceIds: ["ev_commit_prices_flag", "ev_source_prices"],
+            text: "syncListPrices inner-joins stock_levels, so products with no stock row yet never got a list price; turning on FF_LIST_PRICES put getListPrice on the request path.",
+            evidenceIds: ["ev_commit_prices_flag", "ev_db_missing_prices", "ev_source_prices"],
           },
         },
       },
@@ -703,12 +785,17 @@ const priceGap: Incident = {
   },
   fix: {
     summary:
-      "Fall back to the product's own price when it has no list price, and backfill product_prices for the products the seed missed so they show their list price again.",
+      "Sync every catalog product into the price list, not only those with a stock row, fall back to the catalog price when a list price is missing, and backfill the rows the sync skipped.",
     patch: priceGapPatch,
-    files: ["src/lib/prices.ts", "drizzle/0004_backfill_product_prices.sql", "src/lib/prices.test.ts"],
+    files: [
+      "src/lib/prices.ts",
+      "drizzle/0005_backfill_product_prices.sql",
+      "drizzle/meta/_journal.json",
+      "src/lib/prices.test.ts",
+    ],
     regressionTest: {
       file: "src/lib/prices.test.ts",
-      name: "falls back to the product price when the list price is missing",
+      name: "falls back to the catalog price when a product has no list price",
     },
     risk: "medium",
     touchesData: true,
@@ -722,14 +809,13 @@ const priceGap: Incident = {
       durationMs: 1510,
       tests: [
         {
-          name: "falls back to the product price when the list price is missing",
+          name: "falls back to the catalog price when a product has no list price",
           status: "failed",
           durationMs: 38,
-          error: "TypeError: Cannot read properties of undefined (reading 'cents')",
+          error: priceGapError,
         },
       ],
-      output:
-        " FAIL  src/lib/prices.test.ts > getListPrice > falls back to the product price when the list price is missing\nTypeError: Cannot read properties of undefined (reading 'cents')\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n\nexit code 1",
+      output: ` FAIL  src/lib/prices.test.ts > priceOf > falls back to the catalog price when a product has no list price\n${priceGapError}\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n\nexit code 1`,
     },
     {
       label: "Patched code",
@@ -738,10 +824,10 @@ const priceGap: Incident = {
       exitCode: 0,
       durationMs: 1288,
       tests: [
-        { name: "falls back to the product price when the list price is missing", status: "passed", durationMs: 21 },
+        { name: "falls back to the catalog price when a product has no list price", status: "passed", durationMs: 21 },
       ],
       output:
-        " ✓ src/lib/prices.test.ts > getListPrice > falls back to the product price when the list price is missing 21ms\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\nexit code 0",
+        " ✓ src/lib/prices.test.ts > priceOf > falls back to the catalog price when a product has no list price 21ms\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\nexit code 0",
     },
     {
       label: "Patched code: typecheck",

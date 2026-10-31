@@ -5,14 +5,18 @@ import { useId } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { patchChanges, patchFor } from "@/lib/investigation/fix/data-change";
+import { JOURNAL, patchChanges, patchFor } from "@/lib/investigation/fix/data-change";
 import type { DataChange, Fix } from "@/lib/investigation/schema";
 
 // What a SQL file in the fix says: a new one whole, an edited one as its
-// diff hunks. The part's first two lines are its ---/+++ header.
+// diff hunks. The part's first two lines are its ---/+++ header; git's
+// "\ No newline at end of file" markers are left out.
 export function sqlText(fix: Fix, file: string): string {
   const part = patchFor(fix.patch, [file]);
-  const body = part.split("\n").slice(2);
+  const body = part
+    .split("\n")
+    .slice(2)
+    .filter((l) => !l.startsWith("\\"));
   if (!patchChanges(part)[0]?.created) return body.join("\n");
   return body
     .filter((l) => l.startsWith("+"))
@@ -55,7 +59,10 @@ export function DataChangeReview({
       {change.unproven.map((file) => (
         <div key={file} className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2 text-xs">
-            <span className="truncate font-mono">{file}</span>
+            <span className="min-w-0 truncate">
+              <span className="font-mono">{file}</span>
+              {file === JOURNAL && <span className="text-muted-foreground"> · written by Triage</span>}
+            </span>
             <Badge variant="warning" className="shrink-0">
               Not proven in the sandbox
             </Badge>

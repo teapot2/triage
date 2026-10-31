@@ -40,7 +40,7 @@ The fix:
 - Make it hold on every exit path, including thrown errors: whatever the code acquires (connections, handles, locks) is released however it returns, for example with try/finally.
 - Read a file with read_source before editing it. Each edit replaces one snippet: \`find\` is copied verbatim from the file (same indentation and line breaks) and appears exactly once. Similar code often repeats, so include a line only your target has, such as its function signature.
 - Change nothing beyond the bug.
-- If rows already stored need repairing too (ones the bug wrote wrong or left missing), put that repair in a new migration under drizzle/, beside the code fix and its regression test: an edit with an empty \`find\` and the whole SQL file as \`replace\`, numbered after the latest migration. The sandbox doesn't run it; a person reviews it before it ships.
+- If rows already stored need repairing too (ones the bug wrote wrong or left missing), put that repair in a new migration under drizzle/, beside the code fix and its regression test: an edit with an empty \`find\` and the whole SQL file as \`replace\`, named drizzle/<words>.sql. It may only change rows, not the schema. Triage numbers it and adds it to Drizzle's journal; the sandbox doesn't run it, and a person reviews it before it ships.
 - The summary becomes the pull request's description: say what changes and why, in a full sentence.
 
 The regression test:
@@ -230,7 +230,10 @@ export async function runFixStage(
             risk: input.risk,
             touchesData: input.touchesData,
             dataChange: detectDataChange(
-              input.edits.map((e) => ({ file: e.file, text: e.replace, created: e.find === "" })),
+              [
+                ...proof.edits.map((e) => ({ file: e.file, text: e.replace, created: e.find === "" })),
+                ...(proof.journal ? [{ file: proof.journal, text: "" }] : []),
+              ],
               input.touchesData,
             ),
           },

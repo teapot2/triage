@@ -10,6 +10,10 @@ import type { DataChange, Fix } from "../schema";
 // added lines. `created` when the file is new.
 export type FileChange = { file: string; text: string; created?: boolean };
 
+// Drizzle's list of migrations to run. Triage adds a new migration's entry
+// itself (migration.ts); the model never edits it.
+export const JOURNAL = "drizzle/meta/_journal.json";
+
 // SQL files run against the database when they ship (Drizzle's migrations
 // live under drizzle/); the sandbox doesn't run them.
 export const isSqlFile = (file: string) => file.startsWith("drizzle/") || file.endsWith(".sql");
@@ -61,7 +65,9 @@ export function detectDataChange(changes: FileChange[], touchesData: boolean): D
   const files: string[] = [];
   for (const [file, { statements, created }] of byFile) {
     const what = statements.size ? ` (${[...statements].join(", ")})` : "";
-    if (isSqlFile(file)) {
+    if (file === JOURNAL) {
+      reasons.push(`Registers the migration in ${JOURNAL} (written by Triage)`);
+    } else if (isSqlFile(file)) {
       reasons.push(`${created ? "Adds" : "Changes"} ${file.startsWith("drizzle/") ? "migration" : "SQL file"} ${file}${what}`);
     } else if (statements.size) {
       reasons.push(`Adds SQL that changes data in ${file}${what}`);

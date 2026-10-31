@@ -1,5 +1,6 @@
 import type { SandboxRun } from "../schema";
-import { isNewMigrationPath } from "./data-change";
+import { isNewMigrationPath, JOURNAL } from "./data-change";
+import { planMigration } from "./migration";
 import {
   createSandbox,
   readSandboxFile,
@@ -16,12 +17,15 @@ import {
 // app has to typecheck. Anything else is a problem the model gets back.
 // A migration in the fix is copied in but never run: the tests only read
 // the database, so the data half of a fix stays unproven (data-change.ts).
+// A new one is numbered and added to Drizzle's journal here (migration.ts).
 
 export type Edit = { file: string; find: string; replace: string };
 export type RegressionTest = { file: string; name: string; content: string };
 
 export type Proof =
-  | { ok: true; runs: SandboxRun[]; patch: string; files: string[] }
+  // edits: as applied, with a new migration renamed to its number; journal:
+  // set when Triage registered a new migration in Drizzle's journal.
+  | { ok: true; runs: SandboxRun[]; patch: string; files: string[]; edits: Edit[]; journal?: string }
   | { ok: false; runs: SandboxRun[]; problems: string[] };
 
 // The 1-based line each occurrence of `find` starts on.
@@ -78,18 +82,22 @@ export async function proveFix(opts: {
   test: RegressionTest;
   onStage?: (stage: "original" | "patched" | "typecheck") => void;
 }): Promise<Proof> {
-  const { appDir, name, edits, test } = opts;
+  const { appDir, name, test } = opts;
   const problems: string[] = [];
   if (!/^src\/.+\.test\.ts$/.test(test.file)) problems.push(`test.file must be under src/ and end in .test.ts, got ${test.file}`);
 
   const dir = await createSandbox(appDir, name);
   try {
-    const touched = [...new Set(edits.map((e) => e.file))];
     const before = new Map<string, string>();
-    for (const file of touched) {
+    for (const file of new Set(opts.edits.map((e) => e.file))) {
       const text = await readSandboxFile(dir, file).catch(() => undefined);
       if (text !== undefined) before.set(file, text);
     }
+    const journalText = await readSandboxFile(dir, JOURNAL).catch(() => undefined);
+    const plan = planMigration(opts.edits, new Set(before.keys()), journalText, Date.now());
+    problems.push(...plan.problems);
+    const edits = plan.edits;
+    const touched = [...new Set(edits.map((e) => e.file))];
     if (touched.includes(test.file)) problems.push("the edits must not touch the test file; put the test in test.content");
     const exists = await readSandboxFile(dir, test.file).then(
       () => true,
@@ -99,6 +107,10 @@ export async function proveFix(opts: {
     const applied = applyEdits(before, edits);
     problems.push(...applied.problems);
     if (problems.length) return { ok: false, runs: [], problems };
+    if (plan.journal !== undefined) {
+      before.set(JOURNAL, journalText!);
+      applied.files.set(JOURNAL, plan.journal);
+    }
 
     const runs: SandboxRun[] = [];
     const named = (r: { tests: { name: string; status: string }[] }) => r.tests.find((t) => t.name === test.name);
@@ -152,7 +164,8 @@ export async function proveFix(opts: {
       ...[...applied.files].map(([file, after]) => ({ file, before: before.get(file) ?? null, after })),
       { file: test.file, before: null, after: test.content },
     ]);
-    return { ok: true, runs, patch, files: [...touched, test.file] };
+    const journal = plan.journal !== undefined ? JOURNAL : undefined;
+    return { ok: true, runs, patch, files: [...touched, ...(journal ? [journal] : []), test.file], edits, journal };
   } finally {
     await removeSandbox(dir);
   }
