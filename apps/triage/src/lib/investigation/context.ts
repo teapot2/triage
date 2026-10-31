@@ -30,6 +30,11 @@ export function incidentBlock(incident: Incident, source: TelemetrySource | unde
     `Service: ${incident.service}`,
     `Alert: ${trigger.metric} observed ${trigger.observed} ${trigger.unit} (threshold ${trigger.threshold}) at ${incident.detectedAt}`,
   ];
+  if (incident.openedBy === "watch") {
+    lines.push(`Opened by: Triage's watch, when the alert crossed its threshold (the page shows "Detected by Triage")`);
+  } else if (incident.openedBy === "person") {
+    lines.push("Opened by: a person on the team");
+  }
   if (source) lines.push(`Alert time (the tools' "now"): ${source.describe().now}`);
   if (report?.summary) lines.push(`Summary: ${report.summary}`);
   const verdict = report?.verdict;
