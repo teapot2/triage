@@ -2,6 +2,7 @@
 
 import {
   CopyIcon,
+  FileDownIcon,
   FileTextIcon,
   LayoutListIcon,
   LinkIcon,
@@ -15,7 +16,7 @@ import { type PaletteCommand, useRegisterCommands } from "@/components/command-r
 import type { Incident } from "@/lib/investigation/schema";
 import { evidenceIcons, useEvidence } from "./evidence";
 import { evidenceTitle } from "./metric-labels";
-import { copyPostmortem, hasPostmortem, requestPostmortemWrite, writeRefusal } from "./postmortem-panel";
+import { copyPostmortem, hasPostmortem, requestPostmortemWrite, savePostmortemPdf, writeRefusal } from "./postmortem-panel";
 import { requestComposerFocus } from "./questions-panel";
 
 export const THIS_INCIDENT = "This incident";
@@ -87,6 +88,17 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
             icon: CopyIcon,
             keywords: "export markdown",
             run: () => copyPostmortem(incident),
+          },
+          {
+            id: "save-postmortem-pdf",
+            group: THIS_INCIDENT,
+            label: "Save postmortem as PDF",
+            icon: FileDownIcon,
+            keywords: "export download print",
+            run: () => {
+              section("postmortem")();
+              void savePostmortemPdf(incident);
+            },
           },
         ]
       : []),

@@ -14,6 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { FormField } from "@/components/form-fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -322,10 +323,7 @@ export function DenyDialog({
               : "The diagnosis stands. Say what the next fix should do differently and Triage writes and proves a new one that follows it, or leave it empty to deny without another attempt."}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={id} className="font-medium text-sm">
-            What should Triage do differently? <span className="font-normal text-muted-foreground">(optional)</span>
-          </label>
+        <FormField label="What should Triage do differently?" htmlFor={id} optional>
           <Textarea
             id={id}
             value={feedback}
@@ -340,7 +338,7 @@ export function DenyDialog({
               }
             }}
           />
-        </div>
+        </FormField>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={confirm}>{retries ? "Deny and try again" : "Deny"}</AlertDialogAction>

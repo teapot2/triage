@@ -1,6 +1,6 @@
 "use client";
 
-import { ActivityIcon, LoaderCircleIcon, PencilIcon } from "lucide-react";
+import { ActivityIcon, LoaderCircleIcon, PauseIcon, PencilIcon, PlayIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound, useRouter } from "next/navigation";
 import { type ReactNode, useState } from "react";
@@ -53,14 +53,15 @@ const outcomeBadge: Record<UptimeSample["outcome"], { label: string; tone: Statu
 
 // A check's own page, read-only: its live status and last result, the
 // response-time chart with the slow limit drawn, the last 50 results, and its
-// configuration beside them. Changing it is the Edit page; Check now and
-// Delete are deliberate buttons.
+// configuration beside them. Changing it is the Edit page; Check now, Pause
+// and Delete are deliberate buttons.
 export function EndpointDetail({ id }: { id: string }) {
   const router = useRouter();
   const { data, missing, error, refresh } = useEndpointDetail(id);
   const { watch, endpoints } = useEndpointStates();
   const now = useClock();
   const [checking, setChecking] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [actionError, setActionError] = useState<{ title: string; reason: string }>();
 
   if (missing) notFound();
@@ -96,6 +97,16 @@ export function EndpointDetail({ id }: { id: string }) {
     setChecking(false);
   }
 
+  async function toggle() {
+    setToggling(true);
+    setActionError(undefined);
+    const enabled = !check.enabled;
+    const result = await updateEndpoints((checks) => checks.map((c) => (c.id === id ? { ...c, enabled } : c)));
+    if (result.error) setActionError({ title: `Couldn't ${enabled ? "resume" : "pause"} the endpoint`, reason: result.error });
+    refresh();
+    setToggling(false);
+  }
+
   async function remove() {
     setActionError(undefined);
     const result = await updateEndpoints((checks) => checks.filter((c) => c.id !== id));
@@ -114,6 +125,10 @@ export function EndpointDetail({ id }: { id: string }) {
         <Button variant="outline" size="sm" onClick={() => void runNow()} disabled={checking}>
           {checking ? <LoaderCircleIcon className="animate-spin" /> : <ActivityIcon />}
           <span className={label}>Check now</span>
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => void toggle()} disabled={toggling}>
+          {toggling ? <LoaderCircleIcon className="animate-spin" /> : check.enabled ? <PauseIcon /> : <PlayIcon />}
+          <span className={label}>{check.enabled ? "Pause" : "Resume"}</span>
         </Button>
         <Button variant="outline" size="sm" asChild>
           <Link href={`/watch/endpoints/${check.id}/edit`}>
@@ -260,6 +275,12 @@ function Configuration({ check, uptime }: { check: UptimeCheck; uptime?: UptimeW
           <Fact label="URL">
             <span className="break-all font-mono text-xs">{check.url}</span>
           </Fact>
+          {check.auth && (
+            <Fact label="Credentials">
+              <span className="font-mono text-xs">{check.auth.header}</span> header
+              <span className="text-muted-foreground">, its value kept on the server</span>
+            </Fact>
+          )}
           <Fact label="Expected status">{min === max ? min : `${min}–${max}`}</Fact>
           <Fact label="Slow opens an incident after">
             {plural(check.slowChecksToOpen, "check", "checks")} slower than {duration(check.slowMs)} in a row
@@ -344,7 +365,7 @@ function DeleteEndpoint({ name, onConfirm }: { name: string; onConfirm: () => vo
           <AlertDialogTitle>Delete {name}?</AlertDialogTitle>
           <AlertDialogDescription>
             Triage stops checking it and forgets its results, and an incident it already opened stays. To stop it for a
-            while instead, pause it from its Edit page.
+            while instead, pause it.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

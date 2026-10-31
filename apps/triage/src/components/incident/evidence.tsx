@@ -225,7 +225,7 @@ export function Citation({ id }: { id: string }) {
         <button
           type="button"
           onClick={() => open(id)}
-          className="inline-flex h-4 min-w-4 items-center justify-center rounded bg-muted px-1 align-baseline font-mono text-[10px] text-muted-foreground tabular-nums transition-colors hover:bg-primary hover:text-primary-foreground"
+          className="inline-flex h-4 min-w-4 items-center justify-center rounded bg-muted px-1 align-baseline font-mono text-[10px] text-muted-foreground tabular-nums transition-colors hover:bg-primary hover:text-primary-foreground print:h-auto print:min-w-0 print:rounded-none print:bg-transparent print:px-0 print:align-super print:text-foreground print:before:content-['['] print:after:content-[']']"
         >
           {numberOf.get(id)}
         </button>
@@ -240,7 +240,8 @@ export function Citation({ id }: { id: string }) {
 
 export function Citations({ ids, className }: { ids: string[]; className?: string }) {
   return (
-    <span className={cn("inline-flex flex-wrap gap-0.5", className)}>
+    // On paper, plain footnote numbers: [3][7].
+    <span className={cn("inline-flex flex-wrap gap-0.5 print:gap-0", className)}>
       {ids.map((id) => (
         <Citation key={id} id={id} />
       ))}
@@ -272,7 +273,10 @@ function EvidenceDetail({ evidence, docked }: { evidence: Evidence; docked: bool
         <Title className="font-heading font-medium text-base text-foreground">{evidenceTitle(evidence)}</Title>
         <Description className="sr-only">Raw evidence returned by {evidence.tool}</Description>
       </SheetHeader>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 text-sm">
+      {/* Blocks keep their full height and the body scrolls. Without
+          shrink-0, a block that clips its overflow (the code block does)
+          shrinks to the panel's height and cuts its content off. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 text-sm *:shrink-0">
         <EvidenceBody evidence={evidence} />
       </div>
     </>

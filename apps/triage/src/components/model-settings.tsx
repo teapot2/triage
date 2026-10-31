@@ -2,6 +2,7 @@
 
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { FormField } from "@/components/form-fields";
 import { StageRow, useModelList } from "@/components/model-stage-row";
 import { DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -327,8 +328,16 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
       }
       {...row}
     >
-      <div className="flex flex-col gap-1.5">
-        <span className="font-medium text-xs">{provider.baseUrlEnv ? "URL and API key" : "API key"}</span>
+      <FormField
+        label={provider.baseUrlEnv ? "URL and API key" : "API key"}
+        hint={
+          ready
+            ? "Read from the server's environment. Change it in apps/triage/.env.local and restart."
+            : needsUrl
+              ? "Deploy infra/modal/glimmer.py, then add its URL (ending in /v1) and the key it checks to apps/triage/.env.local and restart the server."
+              : "Add this line to apps/triage/.env.local with your key, then restart the server."
+        }
+      >
         <div className="flex min-h-9 items-center gap-2 rounded-lg bg-muted px-3 py-1.5">
           <span className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-sm">
             {ready ? [provider.baseUrlEnv, provider.keyEnv].filter(Boolean).join(", ") : line}
@@ -341,14 +350,7 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
             </Button>
           )}
         </div>
-        <span className="text-muted-foreground text-xs">
-          {ready
-            ? "Read from the server's environment. Change it in apps/triage/.env.local and restart."
-            : needsUrl
-              ? "Deploy infra/modal/glimmer.py, then add its URL (ending in /v1) and the key it checks to apps/triage/.env.local and restart the server."
-              : "Add this line to apps/triage/.env.local with your key, then restart the server."}
-        </span>
-      </div>
+      </FormField>
       <TestResult result={result} onDismiss={() => setResult(undefined)} />
       {ready && (
         <div className="flex flex-col items-start gap-1.5">
@@ -385,6 +387,8 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
   const [error, setError] = useState<string>();
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<Verify>();
+  // Set when Test is tried with no URL to test.
+  const [noUrl, setNoUrl] = useState(false);
 
   const configured = Boolean(provider.baseUrl);
   const list = useModelList(configured ? provider : undefined);
@@ -424,6 +428,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
   }
 
   async function test() {
+    if (!url && !provider.defaultBaseUrl) return setNoUrl(true);
     setTesting(true);
     setResult(undefined);
     setResult(await verify({ provider: provider.id, baseUrl: url, ...(apiKey && { apiKey }) }));
@@ -434,6 +439,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
     setBaseUrl(provider.baseUrl);
     setApiKey("");
     setReplacing(false);
+    setNoUrl(false);
     setError(undefined);
     setResult(undefined);
     row.onOpenChange(false);
@@ -448,10 +454,14 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
       unsaved={dirty}
       {...row}
     >
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={`${id}-url`} className="font-medium text-xs">
-          Base URL
-        </label>
+      {/* Why the models couldn't be listed sits under the URL, until a
+          test says more. */}
+      <FormField
+        label="Base URL"
+        htmlFor={`${id}-url`}
+        hint={!result && list.error}
+        error={noUrl && !url ? "Enter the server's base URL to test it." : undefined}
+      >
         <div className="flex gap-2">
           <Input
             id={`${id}-url`}
@@ -461,6 +471,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
             inputMode="url"
             autoComplete="off"
             spellCheck={false}
+            aria-invalid={noUrl && !url}
             className="font-mono"
           />
           {provider.defaultBaseUrl && url !== provider.defaultBaseUrl && (
@@ -470,11 +481,8 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
             </Button>
           )}
         </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={provider.hasKey && !replacing ? undefined : `${id}-key`} className="font-medium text-xs">
-          API key <span className="font-normal text-muted-foreground">(optional)</span>
-        </label>
+      </FormField>
+      <FormField label="API key" htmlFor={provider.hasKey && !replacing ? undefined : `${id}-key`} optional>
         {provider.hasKey && !replacing ? (
           <div className="flex min-h-9 items-center gap-1 rounded-lg border border-dashed py-1 pr-1 pl-3">
             <span className="flex-1 text-muted-foreground text-sm">A key is saved</span>
@@ -497,8 +505,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
             autoComplete="new-password"
           />
         )}
-      </div>
-      {list.error && !result && <p className="break-words text-muted-foreground text-xs">{list.error}</p>}
+      </FormField>
       <TestResult result={result} onDismiss={() => setResult(undefined)} />
       {error && (
         <Alert key={error} variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setError(undefined)}>
@@ -507,7 +514,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
         </Alert>
       )}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button variant="outline" size="sm" onClick={test} disabled={testing || (!url && !provider.defaultBaseUrl)}>
+        <Button variant="outline" size="sm" onClick={test} disabled={testing}>
           {testing && <LoaderCircleIcon className="animate-spin" />}
           Test connection
           <span className="sr-only"> to {label}</span>

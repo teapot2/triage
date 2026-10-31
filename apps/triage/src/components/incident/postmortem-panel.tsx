@@ -1,6 +1,15 @@
 "use client";
 
-import { CopyIcon, DownloadIcon, FileTextIcon, LoaderCircleIcon, RotateCcwIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  CopyIcon,
+  DownloadIcon,
+  FileCodeIcon,
+  FileDownIcon,
+  FileTextIcon,
+  LoaderCircleIcon,
+  RotateCcwIcon,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -8,6 +17,7 @@ import { ExportMenu } from "@/components/export-menu";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { postmortemActions } from "@/lib/export/datasets/postmortem";
 import { downloadText } from "@/lib/export/download";
@@ -50,6 +60,35 @@ export function copyPostmortem(incident: Incident) {
 
 function downloadPostmortem(incident: Incident) {
   downloadText(postmortemMarkdown(incident), `postmortem-${incident.id}.md`, "text/markdown");
+}
+
+// Saves the postmortem as a PDF through the browser's print dialog ("Save
+// as PDF"): the page prints only the document (globals.css, under
+// printing-postmortem), and the browser names the file after the page's
+// title, so the title is the Markdown file's name while the dialog is open.
+// The palette may ask while the section is still mounting: it waits up to a
+// second for the document to be on the page.
+export async function savePostmortemPdf(incident: Incident) {
+  for (let i = 0; i < 20 && !document.querySelector("[data-print-root]"); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (!document.querySelector("[data-print-root]")) {
+    toast.error("Couldn't save the postmortem as a PDF", { description: "Open its section and try again." });
+    return;
+  }
+  const root = document.documentElement;
+  const title = document.title;
+  root.classList.add("printing-postmortem");
+  document.title = `postmortem-${incident.id}`;
+  window.addEventListener(
+    "afterprint",
+    () => {
+      root.classList.remove("printing-postmortem");
+      document.title = title;
+    },
+    { once: true },
+  );
+  window.print();
 }
 
 // The palette asks for a write while the section may still be mounting; the
@@ -224,22 +263,43 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}
-          <WriteButton refusal={refusal} sending={sending} onClick={write} size="sm" variant="outline">
+          {/* Quiet, icon-only: their names show on hover. */}
+          <WriteButton refusal={refusal} sending={sending} onClick={write} size="icon-sm" variant="ghost">
             Write again
           </WriteButton>
-          <Button variant="outline" size="sm" onClick={() => copyPostmortem(incident)}>
-            <CopyIcon />
-            Copy Markdown
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => downloadPostmortem(incident)}>
-            <DownloadIcon />
-            Download
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Copy Markdown" onClick={() => copyPostmortem(incident)}>
+                <CopyIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy Markdown</TooltipContent>
+          </Tooltip>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <DownloadIcon />
+                Download
+                <ChevronDownIcon className="text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onSelect={() => void savePostmortemPdf(incident)}>
+                <FileDownIcon />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => downloadPostmortem(incident)}>
+                <FileCodeIcon />
+                Markdown (.md)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* The action items alone, to file as tickets. */}
           {pm.actionItems?.length ? <ExportMenu exports={[{ dataset: postmortemActions, params: { id: incident.id } }]} /> : null}
         </div>
       </div>
-      <article className="rounded-lg border px-4 py-5 sm:px-8 sm:py-7">
+      {/* What Download's PDF prints. */}
+      <article data-print-root className="rounded-lg border px-4 py-5 sm:px-8 sm:py-7">
         <MarkdownDoc text={markdown} />
       </article>
     </div>
@@ -247,7 +307,8 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
 }
 
 // Write, Write again and Try again: disabled with the reason on hover while
-// the server would refuse, a spinner while the request is out.
+// the server would refuse, a spinner while the request is out. Ghost and
+// icon-only (Write again), with its name on hover instead.
 function WriteButton({
   refusal,
   sending,
@@ -260,15 +321,30 @@ function WriteButton({
   sending: boolean;
   onClick: () => void;
   children: string;
-  size?: "xs" | "sm";
-  variant?: "default" | "outline";
+  size?: "xs" | "sm" | "icon-sm";
+  variant?: "default" | "outline" | "ghost";
 }) {
+  const iconOnly = size === "icon-sm";
   const button = (
-    <Button size={size} variant={variant} disabled={sending || refusal !== undefined} onClick={onClick}>
-      {sending ? <LoaderCircleIcon className="animate-spin" /> : variant === "outline" && <RotateCcwIcon />}
-      {children}
+    <Button
+      size={size}
+      variant={variant}
+      disabled={sending || refusal !== undefined}
+      onClick={onClick}
+      aria-label={iconOnly ? children : undefined}
+    >
+      {sending ? <LoaderCircleIcon className="animate-spin" /> : variant !== "default" && <RotateCcwIcon />}
+      {!iconOnly && children}
     </Button>
   );
+  if (!refusal && iconOnly) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipContent>{children}</TooltipContent>
+      </Tooltip>
+    );
+  }
   if (!refusal) return button;
   // A disabled button gets no pointer events; its wrapper shows the tooltip.
   return (

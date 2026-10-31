@@ -2,7 +2,9 @@
 
 import { LoaderCircleIcon } from "lucide-react";
 import { notFound, useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
+import { FormAdvanced, FormField, FormRow, FormRows, FormSection, NumberInput } from "@/components/form-fields";
+import { SeverityBars, severityLabel } from "@/components/incident/status-badges";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -16,28 +18,37 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import {
+  checkHost,
   checkSchema,
+  DEFAULT_AUTH_HEADER,
   defaultCheck,
   describeCheck,
   MAX_CHECKS,
+  originOf,
+  ruleName,
+  ruleSeverity,
   type UptimeCheck,
+  type UptimeRule,
   urlProblem,
 } from "@/lib/investigation/uptime/model";
 import { updateEndpoints, useChecks } from "./endpoint-client";
-import { FormField, FormSection, NumberInput } from "./form-fields";
-import { sentence } from "./watch-client";
+import { plural, sentence } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
 // The form's draft: the check's fields as typed, numbers as text so a field
-// can be empty while it's edited.
+// can be empty while it's edited. The interval is picked, not typed. Whether
+// it's paused isn't here: that's the Pause button on the endpoint's page.
+// The auth header's value starts blank even when one is saved: the browser
+// never gets it, and blank means keep it.
 type Draft = {
   name: string;
   url: string;
-  enabled: boolean;
-  intervalSeconds: string;
+  authHeader: string;
+  authValue: string;
+  intervalSeconds: number;
   statusMin: string;
   statusMax: string;
   slowMs: string;
@@ -50,8 +61,9 @@ type Draft = {
 const toDraft = (c: UptimeCheck): Draft => ({
   name: c.name,
   url: c.url,
-  enabled: c.enabled,
-  intervalSeconds: String(c.intervalSeconds),
+  authHeader: c.auth?.header ?? "",
+  authValue: "",
+  intervalSeconds: c.intervalSeconds,
   statusMin: String(c.expectedStatus.min),
   statusMax: String(c.expectedStatus.max),
   slowMs: String(c.slowMs),
@@ -61,11 +73,13 @@ const toDraft = (c: UptimeCheck): Draft => ({
   healthyChecksToRecover: String(c.healthyChecksToRecover),
 });
 
-type Field = "name" | "url" | "intervalSeconds" | "status" | "slowMs" | "timeoutMs" | "slowChecksToOpen" | "downMinutesToOpen" | "healthyChecksToRecover";
+type Field = "name" | "url" | "auth" | "status" | "slowMs" | "timeoutMs" | "slowChecksToOpen" | "downMinutesToOpen" | "healthyChecksToRecover";
 
-// Each number's field, range and the words for when it's out of it.
+// The fields under Advanced, which opens when Save finds one of them wrong.
+const advancedFields: Field[] = ["auth", "status", "healthyChecksToRecover"];
+
+// Each typed number's field, range and the words for when it's out of it.
 const numbers: { key: keyof Draft; field: Field; min: number; max: number; error: string }[] = [
-  { key: "intervalSeconds", field: "intervalSeconds", min: 10, max: 300, error: "A whole number of seconds, from 10 to 300." },
   { key: "slowMs", field: "slowMs", min: 100, max: 30_000, error: "A whole number of milliseconds, from 100 to 30000." },
   { key: "timeoutMs", field: "timeoutMs", min: 1000, max: 30_000, error: "A whole number of milliseconds, from 1000 to 30000." },
   { key: "slowChecksToOpen", field: "slowChecksToOpen", min: 1, max: 10, error: "From 1 to 10 checks." },
@@ -79,13 +93,26 @@ const parseNumber = (s: string, min: number, max: number) => {
 };
 
 // The draft as a check, or what's wrong with it, field by field, in words.
-// The server checks the URL again on save, with DNS.
+// A blank name becomes the URL's host. The server checks the URL again on
+// save, with DNS. An auth header with no value typed keeps the saved value
+// (the server puts it back) while the URL stays on the saved origin; a
+// token meant for one host doesn't follow the check to another.
 function fromDraft(d: Draft, base: UptimeCheck): { check?: UptimeCheck; errors: Partial<Record<Field, string>> } {
   const errors: Partial<Record<Field, string>> = {};
-  if (!d.name.trim()) errors.name = "Give the endpoint a name.";
   const url = d.url.trim();
   const problem = url ? urlProblem(url) : "enter a URL";
   if (problem) errors.url = `${sentence(problem)}. Use a full address, like https://www.google.com.`;
+  const name = d.name.trim() || (problem ? "" : checkHost({ url }));
+  if (!name && !problem) errors.name = "Give the endpoint a name.";
+  const header = d.authHeader.trim() || (d.authValue ? DEFAULT_AUTH_HEADER : "");
+  let auth: UptimeCheck["auth"];
+  if (header && d.authValue) auth = { header, value: d.authValue };
+  else if (header && base.auth && (problem || originOf(url) === originOf(base.url))) auth = { header };
+  else if (header) {
+    errors.auth = base.auth
+      ? `The saved value was for ${checkHost(base)}. Enter the one for this address, or clear the header.`
+      : "Enter the header's value, or clear the header.";
+  }
   const n: Partial<Record<keyof Draft, number>> = {};
   for (const { key, field, min, max, error } of numbers) {
     n[key] = parseNumber(d[key] as string, min, max);
@@ -95,15 +122,17 @@ function fromDraft(d: Draft, base: UptimeCheck): { check?: UptimeCheck; errors: 
   const max = parseNumber(d.statusMax, 100, 599);
   if (min === undefined || max === undefined) errors.status = "Status codes from 100 to 599.";
   else if (min > max) errors.status = "The lowest status can't be above the highest.";
-  if (n.slowMs !== undefined && n.timeoutMs !== undefined && n.slowMs > n.timeoutMs) errors.slowMs = "The slow limit can't be past the point it gives up.";
+  if (n.slowMs !== undefined && n.timeoutMs !== undefined && n.slowMs > n.timeoutMs) {
+    errors.slowMs = "Can't be past No answer within, under Down.";
+  }
   if (Object.keys(errors).length > 0) return { errors };
 
   const parsed = checkSchema.safeParse({
     ...base,
-    name: d.name.trim(),
+    name,
     url,
-    enabled: d.enabled,
-    intervalSeconds: n.intervalSeconds,
+    auth,
+    intervalSeconds: d.intervalSeconds,
     timeoutMs: n.timeoutMs,
     slowMs: n.slowMs,
     expectedStatus: { min, max },
@@ -113,6 +142,10 @@ function fromDraft(d: Draft, base: UptimeCheck): { check?: UptimeCheck; errors: 
   });
   return parsed.success ? { check: parsed.data, errors } : { errors: { name: parsed.error.issues[0]?.message } };
 }
+
+const intervalOptions = [10, 30, 60, 120, 300];
+
+const intervalLabel = (s: number) => (s % 60 === 0 ? plural(s / 60, "minute", "minutes") : `${s} seconds`);
 
 // The Edit and New endpoint pages: loads the saved checks, then shows the
 // form. A bad id is a 404 like a rule's.
@@ -137,8 +170,9 @@ export function EndpointForm({ id }: { id?: string }) {
   return <EndpointFormBody check={check} count={checks.length} />;
 }
 
-// The check's fields in three sections and Save. A check changes only here,
-// on purpose. Cancel with changes asks first, and so does leaving the page.
+// What it checks, the two rules that open incidents, and the rest folded
+// under Advanced, then Save. A check changes only here, on purpose. Cancel
+// with changes asks first, and so does leaving the page.
 function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number }) {
   const isNew = !check;
   const id = useId();
@@ -153,19 +187,29 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
   const [error, setError] = useState<string>();
   // The server's reason for refusing the URL, until the URL changes.
   const [refused, setRefused] = useState<{ url: string; reason: string }>();
+  const [advanced, setAdvanced] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   // Set once saved, so leaving for the next page doesn't warn.
   const [done, setDone] = useState(false);
 
   const { check: candidate, errors } = fromDraft(draft, base);
-  // The draft as a check whatever its name, for the sentence in the header.
-  const unnamed = fromDraft({ ...draft, name: draft.name.trim() || "Untitled" }, base).check;
+  const url = draft.url.trim();
+  const urlOk = Boolean(url) && !urlProblem(url);
+  // The draft as a check before it has a name or a URL, for the sentence in
+  // the header, which says "the URL" until one is typed.
+  const unnamed = fromDraft({ ...draft, name: "Untitled", url: urlOk ? url : "https://example.com" }, base).check;
   const shown = tried ? errors : {};
   const changed = JSON.stringify(draft) !== JSON.stringify(toDraft(base));
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((d) => ({ ...d, [key]: value }));
   const back = isNew ? "/watch" : `/watch/endpoints/${base.id}`;
   const full = isNew && count >= MAX_CHECKS;
-  const urlError = shown.url ?? (refused?.url === draft.url.trim() ? refused.reason : undefined);
+  const urlError = shown.url ?? (refused?.url === url ? refused.reason : undefined);
+  const intervals = intervalOptions.includes(draft.intervalSeconds)
+    ? intervalOptions
+    : [...intervalOptions, draft.intervalSeconds].sort((a, b) => a - b);
+  const statusText = draft.statusMin === draft.statusMax ? draft.statusMin : `${draft.statusMin}–${draft.statusMax}`;
+  const authHeader = draft.authHeader.trim() || (draft.authValue ? DEFAULT_AUTH_HEADER : "");
+  const authText = authHeader ? ` · sends ${authHeader}` : "";
 
   useEffect(() => {
     if (!changed || done) return;
@@ -176,11 +220,13 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
 
   async function save() {
     setTried(true);
+    if (advancedFields.some((f) => errors[f])) setAdvanced(true);
     if (!candidate) return;
     setSaving(true);
     setError(undefined);
+    // Paused or not is the server's, so a pause made meanwhile stays.
     const result = await updateEndpoints((checks) =>
-      isNew ? [...checks, candidate] : checks.map((c) => (c.id === base.id ? candidate : c)),
+      isNew ? [...checks, candidate] : checks.map((c) => (c.id === base.id ? { ...candidate, enabled: c.enabled } : c)),
     );
     setSaving(false);
     if (result.refused) return setRefused({ url: candidate.url, reason: result.error ?? "The server refused this URL." });
@@ -205,9 +251,9 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
         current={isNew ? "New endpoint" : "Edit"}
         title={isNew ? "New endpoint" : `Edit ${base.name}`}
       >
-        {/* The check read back as it's edited; blank while a field is
-            invalid (it says why), keeping its line so nothing jumps. */}
-        <span className="min-h-5">{unnamed && describeCheck(unnamed)}</span>
+        {/* The check read back as it's edited; blank while a number is
+            invalid (its field says why), keeping its line so nothing jumps. */}
+        <span className="min-h-5">{unnamed && describeCheck(urlOk ? unnamed : { ...unnamed, url: "the URL" })}</span>
       </WatchHeader>
 
       {full && (
@@ -224,23 +270,7 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
           void save();
         }}
       >
-        <FormSection title="What it checks">
-          <FormField label="Name" htmlFor={`${id}-name`} error={shown.name}>
-            <Input
-              id={`${id}-name`}
-              value={draft.name}
-              onChange={(e) => set("name", e.target.value)}
-              placeholder="Google"
-              aria-invalid={Boolean(shown.name)}
-              autoComplete="off"
-            />
-          </FormField>
-          <FormField label="Checking" htmlFor={`${id}-enabled`}>
-            <label className="flex h-8 items-center gap-2 text-sm">
-              <Switch id={`${id}-enabled`} checked={draft.enabled} onCheckedChange={(v) => set("enabled", v)} />
-              {draft.enabled ? "On" : "Paused"}
-            </label>
-          </FormField>
+        <FormSection title="Endpoint">
           <FormField
             label="URL"
             htmlFor={`${id}-url`}
@@ -260,100 +290,157 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
               className="font-mono"
             />
           </FormField>
-          <FormField label="Check every" htmlFor={`${id}-interval`} error={shown.intervalSeconds}>
-            <NumberInput
-              id={`${id}-interval`}
-              unit="seconds"
-              value={draft.intervalSeconds}
-              onChange={(v) => set("intervalSeconds", v)}
-              invalid={Boolean(shown.intervalSeconds)}
+          {/* Left blank, the name is the URL's host, which the placeholder
+              shows once the URL reads as one. */}
+          <FormField label="Name" htmlFor={`${id}-name`} error={shown.name}>
+            <Input
+              id={`${id}-name`}
+              value={draft.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder={urlOk ? checkHost({ url }) : "Google"}
+              aria-invalid={Boolean(shown.name)}
+              autoComplete="off"
             />
           </FormField>
-          <FormField label="Expected status" htmlFor={`${id}-status-min`} error={shown.status} hint="Any status in this range is a good answer.">
-            <div className="flex items-center gap-2">
+          <FormField label="Check every" htmlFor={`${id}-interval`}>
+            <Select value={String(draft.intervalSeconds)} onValueChange={(v) => set("intervalSeconds", Number(v))}>
+              <SelectTrigger id={`${id}-interval`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {intervals.map((s) => (
+                  <SelectItem key={s} value={String(s)}>
+                    {intervalLabel(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        </FormSection>
+
+        {/* One row per rule, both on the same two columns: what counts on
+            the left, how long it lasts on the right. */}
+        <FormRows title="Opens an incident">
+          <RuleRow rule="down">
+            <FormField label="No answer within" htmlFor={`${id}-timeout`} error={shown.timeoutMs}>
+              <NumberInput
+                id={`${id}-timeout`}
+                unit="ms"
+                value={draft.timeoutMs}
+                onChange={(v) => set("timeoutMs", v)}
+                invalid={Boolean(shown.timeoutMs)}
+              />
+            </FormField>
+            <FormField
+              label="For"
+              htmlFor={`${id}-down`}
+              error={shown.downMinutesToOpen}
+              hint="With no good answer: a timeout, an error or an unexpected status."
+            >
+              <NumberInput
+                id={`${id}-down`}
+                unit="minutes"
+                value={draft.downMinutesToOpen}
+                onChange={(v) => set("downMinutesToOpen", v)}
+                invalid={Boolean(shown.downMinutesToOpen)}
+              />
+            </FormField>
+          </RuleRow>
+          <RuleRow rule="slow">
+            <FormField label="Slower than" htmlFor={`${id}-slow`} error={shown.slowMs}>
+              <NumberInput
+                id={`${id}-slow`}
+                unit="ms"
+                value={draft.slowMs}
+                onChange={(v) => set("slowMs", v)}
+                invalid={Boolean(shown.slowMs)}
+              />
+            </FormField>
+            <FormField label="For" htmlFor={`${id}-slow-checks`} error={shown.slowChecksToOpen}>
+              <NumberInput
+                id={`${id}-slow-checks`}
+                unit="checks in a row"
+                value={draft.slowChecksToOpen}
+                onChange={(v) => set("slowChecksToOpen", v)}
+                invalid={Boolean(shown.slowChecksToOpen)}
+              />
+            </FormField>
+          </RuleRow>
+        </FormRows>
+
+        <FormAdvanced
+          open={advanced}
+          onOpenChange={setAdvanced}
+          summary={`Expects ${statusText} · recovers after ${draft.healthyChecksToRecover === "1" ? "1 good check" : `${draft.healthyChecksToRecover} good checks`}${authText}`}
+        >
+          {/* For an endpoint behind a token. The value is typed blind and
+              kept on the server: when one is saved, the field stays blank
+              and says so, and typing replaces it. */}
+          <FormField
+            label="Credentials"
+            htmlFor={`${id}-auth-value`}
+            error={shown.auth}
+            hint={
+              base.auth
+                ? "A header sent with every request. The saved value stays on the server; type one to replace it."
+                : "A header sent with every request, like Authorization: Bearer …. The value stays on the server."
+            }
+            wide
+          >
+            <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-2">
+              <Input
+                id={`${id}-auth-header`}
+                aria-label="Header name"
+                value={draft.authHeader}
+                onChange={(e) => set("authHeader", e.target.value)}
+                placeholder={DEFAULT_AUTH_HEADER}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+              <Input
+                id={`${id}-auth-value`}
+                type="password"
+                aria-label="Header value"
+                value={draft.authValue}
+                onChange={(e) => set("authValue", e.target.value)}
+                placeholder={base.auth ? "Saved" : "Bearer …"}
+                aria-invalid={Boolean(shown.auth)}
+                autoComplete="new-password"
+                spellCheck={false}
+                className="font-mono"
+              />
+            </div>
+          </FormField>
+          <FormField label="Expected status" htmlFor={`${id}-status-min`} error={shown.status}>
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
               <NumberInput
                 id={`${id}-status-min`}
-                unit="from"
+                aria-label="Lowest expected status"
                 value={draft.statusMin}
                 onChange={(v) => set("statusMin", v)}
                 invalid={Boolean(shown.status)}
               />
+              <span className="text-muted-foreground text-sm">to</span>
               <NumberInput
                 id={`${id}-status-max`}
-                unit="to"
+                aria-label="Highest expected status"
                 value={draft.statusMax}
                 onChange={(v) => set("statusMax", v)}
                 invalid={Boolean(shown.status)}
               />
             </div>
           </FormField>
-        </FormSection>
-
-        <FormSection title="When it's slow">
-          <FormField label="Slower than" htmlFor={`${id}-slow`} error={shown.slowMs} hint="A good answer past this is slow.">
-            <NumberInput
-              id={`${id}-slow`}
-              unit="ms"
-              value={draft.slowMs}
-              onChange={(v) => set("slowMs", v)}
-              invalid={Boolean(shown.slowMs)}
-            />
-          </FormField>
-          <FormField label="Gives up after" htmlFor={`${id}-timeout`} error={shown.timeoutMs} hint="No answer by then is down.">
-            <NumberInput
-              id={`${id}-timeout`}
-              unit="ms"
-              value={draft.timeoutMs}
-              onChange={(v) => set("timeoutMs", v)}
-              invalid={Boolean(shown.timeoutMs)}
-            />
-          </FormField>
-          <FormField
-            label="Opens an incident after"
-            htmlFor={`${id}-slow-checks`}
-            error={shown.slowChecksToOpen}
-            hint="Slow checks in a row. Severity SEV3."
-          >
-            <NumberInput
-              id={`${id}-slow-checks`}
-              unit="checks"
-              value={draft.slowChecksToOpen}
-              onChange={(v) => set("slowChecksToOpen", v)}
-              invalid={Boolean(shown.slowChecksToOpen)}
-            />
-          </FormField>
-        </FormSection>
-
-        <FormSection title="When it's down">
-          <FormField
-            label="Opens an incident after"
-            htmlFor={`${id}-down`}
-            error={shown.downMinutesToOpen}
-            hint="With no good answer. Severity SEV2."
-          >
-            <NumberInput
-              id={`${id}-down`}
-              unit="minutes"
-              value={draft.downMinutesToOpen}
-              onChange={(v) => set("downMinutesToOpen", v)}
-              invalid={Boolean(shown.downMinutesToOpen)}
-            />
-          </FormField>
-          <FormField
-            label="Recovered after"
-            htmlFor={`${id}-healthy`}
-            error={shown.healthyChecksToRecover}
-            hint="Good, fast checks in a row. One could be luck."
-          >
+          <FormField label="Recovered after" htmlFor={`${id}-healthy`} error={shown.healthyChecksToRecover}>
             <NumberInput
               id={`${id}-healthy`}
-              unit="checks"
+              unit="good checks in a row"
               value={draft.healthyChecksToRecover}
               onChange={(v) => set("healthyChecksToRecover", v)}
               invalid={Boolean(shown.healthyChecksToRecover)}
             />
           </FormField>
-        </FormSection>
+        </FormAdvanced>
 
         {error && (
           <Alert key={error} variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setError(undefined)}>
@@ -396,5 +483,23 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// A rule's row: its name and the severity it opens at, over its two fields.
+function RuleRow({ rule, children }: { rule: UptimeRule; children: ReactNode }) {
+  const severity = ruleSeverity(rule);
+  return (
+    <FormRow
+      title={ruleName(rule)}
+      aside={
+        <>
+          <SeverityBars severity={severity} />
+          {severity.toUpperCase()} · {severityLabel[severity]}
+        </>
+      }
+    >
+      {children}
+    </FormRow>
   );
 }

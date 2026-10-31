@@ -3,6 +3,7 @@
 import { LoaderCircleIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
+import { FormAdvanced, FormField, FormSection, NumberInput } from "@/components/form-fields";
 import { SeverityBars, severityLabel } from "@/components/incident/status-badges";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -28,7 +29,6 @@ import {
   type WatchRule,
   type WatchTarget,
 } from "@/lib/investigation/watch-rule-model";
-import { FormField, FormSection, NumberInput } from "./form-fields";
 import { BacktestResult, sentence, updateRules, useBacktest, windowLabel } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
@@ -151,7 +151,8 @@ const windowOptions = [30, 60, 120, 300, 600, 900];
 const severities: WatchRule["severity"][] = ["sev1", "sev2", "sev3", "sev4"];
 
 // The Edit and New rule pages: the rule's fields in three sections, the
-// backtest of the draft under them, and Save. A rule changes only here, on
+// minimum traffic folded under Advanced, the backtest of the draft under
+// them, and Save. A rule changes only here, on
 // purpose. Cancel with changes asks first, and so does leaving the page
 // (reload, close); the sidebar's links don't ask.
 export function RuleForm({ rule }: { rule?: WatchRule }) {
@@ -165,6 +166,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
   const [tried, setTried] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [advanced, setAdvanced] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   // Set once saved or deleted, so leaving for the next page doesn't warn.
   const [done, setDone] = useState(false);
@@ -188,6 +190,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
 
   async function save() {
     setTried(true);
+    if (errors.minRequests) setAdvanced(true);
     if (!candidate) return;
     setSaving(true);
     setError(undefined);
@@ -248,7 +251,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
             its cell, and numbers carry their unit inside the field, so the
             edges line up from top to bottom. The header reads the rule back
             as a sentence while it's edited. */}
-        <FormSection title="What it watches">
+        <FormSection title="Rule">
           <FormField label="Name" htmlFor={`${id}-name`} error={shown.name}>
             <Input
               id={`${id}-name`}
@@ -295,8 +298,8 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
           )}
         </FormSection>
 
-        <FormSection title="When it's over its limit">
-          <FormField label="Condition" htmlFor={`${id}-metric`}>
+        <FormSection title="Condition">
+          <FormField label="Measure" htmlFor={`${id}-metric`}>
             <Select value={draft.metric} onValueChange={(v) => set("metric", v as WatchCondition["metric"])}>
               <SelectTrigger id={`${id}-metric`} className="w-full">
                 <SelectValue />
@@ -317,15 +320,15 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
             </FormField>
           )}
           {(draft.metric === "slowCount" || draft.metric === "slowShare") && (
-            <FormField label="Slower than" htmlFor={`${id}-ms`} error={shown.ms} hint="What counts as a slow request.">
+            <FormField label="Slower than" htmlFor={`${id}-ms`} error={shown.ms}>
               <NumberInput id={`${id}-ms`} unit="ms" value={draft.ms} onChange={(v) => set("ms", v)} invalid={Boolean(shown.ms)} />
             </FormField>
           )}
           {draft.metric === "slowCount" && (
-            <FormField label="More than" htmlFor={`${id}-count`} error={shown.count} hint="Slow requests in the window.">
+            <FormField label="More than" htmlFor={`${id}-count`} error={shown.count}>
               <NumberInput
                 id={`${id}-count`}
-                unit="requests"
+                unit="slow requests"
                 value={draft.count}
                 onChange={(v) => set("count", v)}
                 invalid={Boolean(shown.count)}
@@ -333,10 +336,10 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
             </FormField>
           )}
           {draft.metric === "slowShare" && (
-            <FormField label="More than" htmlFor={`${id}-percent`} error={shown.percent} hint="Of the requests in the window.">
+            <FormField label="More than" htmlFor={`${id}-percent`} error={shown.percent}>
               <NumberInput
                 id={`${id}-percent`}
-                unit="%"
+                unit="% of requests"
                 value={draft.percent}
                 onChange={(v) => set("percent", v)}
                 invalid={Boolean(shown.percent)}
@@ -368,34 +371,13 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
               </SelectContent>
             </Select>
           </FormField>
-          {draft.metric !== "slowCount" && (
-            <FormField
-              label="Minimum requests"
-              htmlFor={`${id}-min`}
-              error={shown.minRequests}
-              hint="A route with fewer in the window isn't judged."
-            >
-              <NumberInput
-                id={`${id}-min`}
-                unit="requests"
-                value={draft.minRequests}
-                onChange={(v) => set("minRequests", v)}
-                invalid={Boolean(shown.minRequests)}
-              />
-            </FormField>
-          )}
         </FormSection>
 
-        <FormSection title="When it opens an incident">
-          <FormField
-            label="Opens after"
-            htmlFor={`${id}-checks`}
-            error={shown.checksToOpen}
-            hint="In a row over the limit. The watch checks every 10 seconds."
-          >
+        <FormSection title="Opens an incident">
+          <FormField label="After" htmlFor={`${id}-checks`} error={shown.checksToOpen} hint="The watch checks every 10 seconds.">
             <NumberInput
               id={`${id}-checks`}
-              unit="checks"
+              unit="checks in a row"
               value={draft.checksToOpen}
               onChange={(v) => set("checksToOpen", v)}
               invalid={Boolean(shown.checksToOpen)}
@@ -417,6 +399,30 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
             </Select>
           </FormField>
         </FormSection>
+
+        {/* A counting rule judges any traffic, so it has nothing here. */}
+        {draft.metric !== "slowCount" && (
+          <FormAdvanced
+            open={advanced}
+            onOpenChange={setAdvanced}
+            summary={`Judges a route with at least ${draft.minRequests === "1" ? "1 request" : `${draft.minRequests} requests`} in the window`}
+          >
+            <FormField
+              label="Minimum requests"
+              htmlFor={`${id}-min`}
+              error={shown.minRequests}
+              hint="A route with fewer in the window isn't judged."
+            >
+              <NumberInput
+                id={`${id}-min`}
+                unit="requests"
+                value={draft.minRequests}
+                onChange={(v) => set("minRequests", v)}
+                invalid={Boolean(shown.minRequests)}
+              />
+            </FormField>
+          </FormAdvanced>
+        )}
 
         {unnamed && <BacktestResult backtest={backtest} checksToOpen={unnamed.checksToOpen} />}
 

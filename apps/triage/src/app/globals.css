@@ -542,3 +542,66 @@
     @apply font-sans;
   }
 }
+/* Saving the postmortem as a PDF (savePostmortemPdf): the browser prints
+   only the document marked data-print-root, black on white whatever the
+   theme. Everything that neither is it, holds it, nor sits inside it is
+   hidden; what holds it loses its own layout, so the document starts at
+   the top of the page at its full width. A print of the page any other
+   way is left as it is. */
+@media print {
+  @page {
+    margin: 16mm 14mm;
+  }
+  /* White paper, also with the dialog's background graphics on. */
+  html.printing-postmortem {
+    color-scheme: light !important;
+    background: #fff !important;
+  }
+  html.printing-postmortem body *:not([data-print-root], [data-print-root] *, :has([data-print-root])) {
+    display: none !important;
+  }
+  html.printing-postmortem body,
+  html.printing-postmortem body :has([data-print-root]) {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: none !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+  html.printing-postmortem [data-print-root] {
+    color-scheme: light;
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.45 0 0);
+    --border: oklch(0.85 0 0);
+    --primary: oklch(0.55 0.22 292);
+    --primary-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    color: var(--foreground);
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+  }
+  html.printing-postmortem [data-print-root] :is(h3, h4, h5) {
+    break-after: avoid;
+  }
+  html.printing-postmortem [data-print-root] :is(tr, li) {
+    break-inside: avoid;
+  }
+  html.printing-postmortem [data-print-root] [data-slot="table-container"] {
+    overflow: visible;
+  }
+}

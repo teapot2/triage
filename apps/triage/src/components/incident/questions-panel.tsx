@@ -12,13 +12,16 @@ import {
   CircleXIcon,
   CopyIcon,
   CornerDownLeftIcon,
+  CornerDownRightIcon,
   EllipsisIcon,
   GitCommitHorizontalIcon,
   LoaderCircleIcon,
   type LucideIcon,
+  PencilIcon,
   RotateCcwIcon,
   ScanSearchIcon,
   TimerIcon,
+  XIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -57,15 +60,19 @@ import { StepRow } from "./investigation-timeline";
 // the incident, which the page refreshes every second while one is being
 // answered. The one this tab asked renders from its own stream until it
 // ends, so the text arrives token by token rather than in one-second steps;
-// then the saved copy takes over. The state lives in useAskQuestion, in
-// the incident view, so switching sections mid-answer doesn't drop the
-// stream.
+// then the saved copy takes over. Asked while an answer is still coming
+// (here or in another tab), a question waits in a queue above the composer
+// and goes out once the one before it is answered. The state lives in
+// useAskQuestion, in the incident view, so switching sections mid-answer
+// doesn't drop the stream or the queue.
 
 // When a tool call began and ended, by this tab's clock: the stream carries
 // no timestamps.
 type Timing = Map<string, { start: number; end?: number }>;
 
 export interface LiveQuestion {
+  // The turn's key from the moment it's sent; the server's ID comes later.
+  key: string;
   // Known once the server accepts the question.
   id?: string;
   text: string;
@@ -76,22 +83,55 @@ export interface LiveQuestion {
   error?: string;
 }
 
+export interface QueuedQuestion {
+  key: string;
+  text: string;
+}
+
 export interface Ask {
   live: LiveQuestion | undefined;
-  // Why the composer is disabled, or undefined when it can take a question.
+  // Why the composer is disabled (no report yet), or undefined when it can
+  // take a question.
   refusal: string | undefined;
+  // A question is being answered, here or in another tab: what's sent now
+  // waits in the queue.
+  busy: boolean;
+  // Questions waiting their turn, in the order they'll be asked.
+  queue: QueuedQuestion[];
+  // The server turned the queue's next question down: it waits at the front
+  // until resumed.
+  paused: boolean;
   // The last request the server turned down, shown by the composer.
   error: string | undefined;
   draft: string;
   setDraft: (text: string) => void;
+  // Asks now, or queues behind the answer in progress.
   send: (text: string) => void;
+  unqueue: (key: string) => void;
+  // Takes a queued question back into the composer to change it.
+  editQueued: (key: string) => void;
+  resume: () => void;
+  // The key a saved question's turn renders under: the one it streamed
+  // under, if this tab asked it, so the saved copy taking over (or the ID
+  // arriving) doesn't remount the turn and replay its entrance.
+  keyFor: (id: string) => string;
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0];
 
+// Turn and queue keys, unique in this tab.
+let lastKey = 0;
+const newKey = () => `c${++lastKey}`;
+
+// A question put back into the composer goes before whatever is typed there.
+const withDraft = (text: string) => (draft: string) => (draft.trim() ? `${text}\n${draft}` : text);
+
 export function useAskQuestion(incident: Incident): Ask {
   const router = useRouter();
   const [live, setLive] = useState<LiveQuestion>();
+  const [queue, setQueue] = useState<QueuedQuestion[]>([]);
+  const [paused, setPaused] = useState(false);
+  const [keys, setKeys] = useState<Record<string, string>>({});
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState("");
   const busy = useRef(false);
@@ -109,22 +149,23 @@ export function useAskQuestion(incident: Incident): Ask {
     }
   }, [live, saved]);
 
-  const send = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || busy.current) return;
+  // Asks one question. Typed, it clears the composer; from the queue, it
+  // leaves what's being typed alone.
+  const ask = useCallback(
+    async (question: QueuedQuestion, queued: boolean) => {
+      if (busy.current) return;
       busy.current = true;
       setError(undefined);
-      setDraft("");
+      if (!queued) setDraft("");
       const timing: Timing = new Map();
-      setLive({ text: trimmed, startedAt: new Date().toISOString(), status: "posting", timing });
+      setLive({ key: question.key, text: question.text, startedAt: new Date().toISOString(), status: "posting", timing });
 
       let res: Response;
       try {
         res = await fetch(`/api/incidents/${incident.id}/questions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: trimmed }),
+          body: JSON.stringify({ text: question.text }),
         });
       } catch (err) {
         res = Response.json({ error: `Couldn't reach the server: ${errorText(err)}` }, { status: 0 });
@@ -132,13 +173,22 @@ export function useAskQuestion(incident: Incident): Ask {
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         setLive(undefined);
-        setDraft(trimmed);
+        // Turned down, a typed question goes back into the composer; a
+        // queued one back to the front of the queue, which then waits for
+        // the person rather than trying again on its own.
+        if (queued) {
+          setQueue((q) => [question, ...q]);
+          setPaused(true);
+        } else {
+          setDraft(withDraft(question.text));
+        }
         setError(data.error ?? `HTTP ${res.status}`);
         busy.current = false;
         return;
       }
 
       const id = res.headers.get("x-question-id") ?? undefined;
+      if (id) setKeys((k) => ({ ...k, [id]: question.key }));
       setLive((l) => l && { ...l, id, status: "streaming" });
       try {
         const stream = sseJsonStream<UIMessageChunk>(res.body);
@@ -161,15 +211,77 @@ export function useAskQuestion(incident: Incident): Ask {
     [incident.id, router],
   );
 
-  return { live, refusal: live ? "Wait for the current question to finish" : composerRefusal(incident), error, draft, setDraft, send };
+  const refusal = composerRefusal(incident);
+  const waiting = live !== undefined || (incident.questions ?? []).some((q) => q.status === "answering");
+
+  // The queue's next question goes out once nothing is being answered.
+  useEffect(() => {
+    if (queue.length === 0) {
+      if (paused) setPaused(false);
+      return;
+    }
+    if (waiting || paused || refusal) return;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    void ask(next, true);
+  }, [queue, waiting, paused, refusal, ask]);
+
+  // Behind an answer, or behind questions already waiting, a new one joins
+  // the end of the queue so they go out in the order asked.
+  const send = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const question = { key: newKey(), text: trimmed };
+      if (waiting || paused || queue.length > 0 || busy.current) {
+        setQueue((q) => [...q, question]);
+        setDraft("");
+      } else {
+        void ask(question, false);
+      }
+    },
+    [waiting, paused, queue.length, ask],
+  );
+
+  const unqueue = useCallback((key: string) => setQueue((q) => q.filter((x) => x.key !== key)), []);
+  const editQueued = useCallback(
+    (key: string) => {
+      const question = queue.find((x) => x.key === key);
+      if (!question) return;
+      setQueue((q) => q.filter((x) => x.key !== key));
+      setDraft(withDraft(question.text));
+    },
+    [queue],
+  );
+  const resume = useCallback(() => {
+    setPaused(false);
+    setError(undefined);
+  }, []);
+  const keyFor = useCallback((id: string) => keys[id] ?? id, [keys]);
+
+  return {
+    live,
+    refusal,
+    busy: waiting,
+    queue,
+    paused,
+    error,
+    draft,
+    setDraft,
+    send,
+    unqueue,
+    editQueued,
+    resume,
+    keyFor,
+  };
 }
 
-// The server's rule, in the composer's words.
+// The server's rule, in the composer's words: closed until there's a
+// report. Its other refusal, a question already being answered, the queue
+// waits out instead.
 function composerRefusal(incident: Incident): string | undefined {
-  const refusal = askRefusal(incident);
-  if (!refusal) return undefined;
-  if (!incident.report) return "Questions open once the investigation has a report";
-  return "Wait for the current question to finish";
+  if (!askRefusal(incident) || (incident.questions ?? []).some((q) => q.status === "answering")) return undefined;
+  return "Questions open once the investigation has a report";
 }
 
 // Whoever opens the Ask section to ask (the palette) focuses the
@@ -232,12 +344,12 @@ interface QuestionView {
   answeredAt?: string;
 }
 
-function savedView(q: Question): QuestionView {
+function savedView(q: Question, key: string): QuestionView {
   // The last model call's text is the answer itself, recorded as a thought
   // like every call's; the thread shows it once, as the answer.
   const answer = q.answer.trim();
   return {
-    key: q.id,
+    key,
     text: q.text,
     askedAt: q.askedAt,
     status: q.status,
@@ -300,7 +412,7 @@ function liveView(live: LiveQuestion): QuestionView {
   });
   const status: Question["status"] = live.status === "failed" ? "failed" : live.status === "done" ? "answered" : "answering";
   return {
-    key: live.id ?? "live",
+    key: live.key,
     text: live.text,
     askedAt: live.startedAt,
     status,
@@ -319,7 +431,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   const saved = (incident.questions ?? []).filter(
     (q) => !live || !(live.id ? q.id === live.id : q.status === "answering"),
   );
-  const views = [...saved.map(savedView), ...(live ? [liveView(live)] : [])];
+  const views = [...saved.map((q) => savedView(q, ask.keyFor(q.id))), ...(live ? [liveView(live)] : [])];
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -353,7 +465,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   useLayoutEffect(() => {
     if (scrollsItself(threadRef.current)) scrollToEnd(threadRef.current, endRef.current);
   }, []);
-  const liveKey = live ? "live" : undefined;
+  const liveKey = live?.key;
   useEffect(() => {
     if (liveKey) scrollToEnd(threadRef.current, endRef.current, "smooth");
   }, [liveKey]);
@@ -405,8 +517,13 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
         // Wider than the column by a gutter each side, padded back in: a
         // scroll box clips what overflows it, and the copy button (pulled
         // left to line up with the text) and focus rings sit just outside
-        // the text; on the right the gutter holds the scrollbar.
-        className="@2xl:-mr-3 @2xl:-ml-2 @2xl:min-h-0 @2xl:flex-1 @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pr-3 @2xl:pl-2 @2xl:scrollbar-subtle"
+        // the text; on the right the gutter holds the scrollbar. The bottom
+        // padding (taken off the gap to the composer) holds what moves past
+        // the last line while an answer comes in: a new turn sliding up 4px,
+        // a spinner's corners as it turns. Without it a box that just fits
+        // overflows by a pixel or two, and its scrollbar blinks on and off,
+        // pushing the text sideways each time.
+        className="@2xl:-mr-3 @2xl:-ml-2 @2xl:min-h-0 @2xl:flex-1 @2xl:overflow-y-auto @2xl:overscroll-contain @2xl:pr-3 @2xl:pb-2 @2xl:pl-2 @2xl:scrollbar-subtle"
       >
         <ol aria-label="Conversation with Triage" className="flex flex-col gap-9">
           {views.map((v) => (
@@ -418,7 +535,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
           conversation, so picking one is next to where you'd type. */}
       <div
         ref={endRef}
-        className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:pb-0"
+        className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:mt-4 @2xl:pb-0"
       >
         {/* Under what follows (-z-10), so it doesn't cut the top of their
             focus rings; still over the conversation, as this row is z-10. */}
@@ -802,6 +919,62 @@ function ReplyDetails({ view }: { view: QuestionView }) {
   );
 }
 
+// The questions waiting their turn, as a tab on the composer's top edge:
+// how many and when they go out, then a line each, with buttons (on hover
+// or focus, or always on touch screens) to take one back into the composer
+// or drop it. Paused, after the server turned the next one down, it says so
+// and offers to carry on.
+function QueueTab({ ask, onEdit }: { ask: Ask; onEdit: (key: string) => void }) {
+  return (
+    <section
+      aria-label="Queued questions"
+      className={cn("mx-3 flex flex-col rounded-t-lg border border-b-0 bg-muted/50 p-1", enterMotion)}
+    >
+      <div className="flex h-6 items-center gap-2 px-2 text-muted-foreground text-xs">
+        <span className="min-w-0 flex-1 truncate">
+          {ask.queue.length} queued · {ask.paused ? "paused" : "sent when Triage finishes"}
+        </span>
+        {ask.paused && (
+          <Button variant="ghost" size="xs" onClick={ask.resume}>
+            Resume
+          </Button>
+        )}
+      </div>
+      <ol className="flex flex-col">
+        {ask.queue.map((q) => (
+          <li
+            key={q.key}
+            className="group/queued flex items-center gap-2 rounded-md py-0.5 pr-0.5 pl-2 text-xs transition-colors hover:bg-muted"
+          >
+            <CornerDownRightIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate" title={q.text}>
+              {q.text}
+            </span>
+            <div className="flex text-muted-foreground opacity-0 transition-opacity group-focus-within/queued:opacity-100 group-hover/queued:opacity-100 [@media(hover:none)]:opacity-100">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" aria-label="Edit queued question" onClick={() => onEdit(q.key)}>
+                    <PencilIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Edit</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" aria-label="Remove from queue" onClick={() => ask.unqueue(q.key)}>
+                    <XIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Remove</TooltipContent>
+              </Tooltip>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 // What the answer will read from, behind the composer's mode icon.
 const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detail: string }> = {
   tools: {
@@ -825,7 +998,9 @@ const withDictation = (typed: string, said: string) =>
 // the server's limit; then the mode icon, which says on hover or focus
 // what the answer reads from, the microphone when voice input is on in
 // Settings, and the send button. Disabled, with the reason on hover, while
-// a question is being answered or there's no report yet.
+// there's no report yet. While a question is being answered it stays open:
+// what's sent then waits in the queue, a tab on the composer's top edge,
+// and ↑ in an empty composer takes the last one back to change it.
 //
 // Dictating writes the transcript into the textarea as it streams in, after
 // whatever was typed, with a level meter and a "Listening" line so it's
@@ -890,10 +1065,24 @@ function Composer({
     else if (dictating) return;
     else if (canSend) ask.send(ask.draft);
   };
+  const editQueued = (key: string) => {
+    ask.editQueued(key);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      el?.focus();
+      el?.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Escape" && dictating) {
       e.preventDefault();
       cancelDictating();
+      return;
+    }
+    const lastQueued = ask.queue.at(-1);
+    if (e.key === "ArrowUp" && !ask.draft && !dictating && lastQueued) {
+      e.preventDefault();
+      editQueued(lastQueued.key);
       return;
     }
     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
@@ -925,7 +1114,15 @@ function Composer({
         readOnly={dictating}
         rows={1}
         maxLength={MAX_QUESTION_CHARS}
-        placeholder={disabled ? ask.refusal : dictating ? "Listening…" : "Ask about this incident…"}
+        placeholder={
+          disabled
+            ? ask.refusal
+            : dictating
+              ? "Listening…"
+              : ask.busy
+                ? "Ask a follow-up, sent when Triage finishes…"
+                : "Ask about this incident…"
+        }
         aria-invalid={ask.error ? true : undefined}
         aria-describedby={ask.error ? "ask-triage-error" : "ask-triage-mode"}
         className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
@@ -982,28 +1179,33 @@ function Composer({
             type="submit"
             size="icon-sm"
             disabled={dictation.status === "listening" ? disabled : !canSend || dictating}
-            aria-label="Send"
+            aria-label={ask.busy ? "Queue" : "Send"}
           >
             <ArrowUpIcon />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Enter to send · Shift+Enter for a new line</TooltipContent>
+        <TooltipContent>
+          {ask.busy ? "Enter to queue" : "Enter to send"} · Shift+Enter for a new line
+        </TooltipContent>
       </Tooltip>
     </form>
   );
 
   return (
     <div className="flex flex-col gap-2">
-      {disabled ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div>{box}</div>
-          </TooltipTrigger>
-          <TooltipContent>{ask.refusal}</TooltipContent>
-        </Tooltip>
-      ) : (
-        box
-      )}
+      <div className="flex flex-col">
+        {ask.queue.length > 0 && <QueueTab ask={ask} onEdit={editQueued} />}
+        {disabled ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div>{box}</div>
+            </TooltipTrigger>
+            <TooltipContent>{ask.refusal}</TooltipContent>
+          </Tooltip>
+        ) : (
+          box
+        )}
+      </div>
       {ask.error && (
         <p id="ask-triage-error" role="alert" className="flex items-center gap-1.5 text-destructive text-xs">
           <CircleXIcon className="size-3.5 shrink-0" />

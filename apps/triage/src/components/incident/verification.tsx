@@ -4,6 +4,7 @@ import { CheckIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, TriangleAl
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
+import { FormField } from "@/components/form-fields";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -132,10 +133,7 @@ export function ReopenDialog({
             It goes back to what it was waiting on, with the diagnosis as it stands. Nothing is investigated again.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={id} className="font-medium text-sm">
-            Why? <span className="font-normal text-muted-foreground">(optional)</span>
-          </label>
+        <FormField label="Why?" htmlFor={id} optional>
           <Textarea
             id={id}
             value={note}
@@ -150,7 +148,7 @@ export function ReopenDialog({
               }
             }}
           />
-        </div>
+        </FormField>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={confirm}>Reopen</AlertDialogAction>

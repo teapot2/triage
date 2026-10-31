@@ -122,9 +122,7 @@ export function SpeechSettings() {
               Voice input
             </label>
             <span id="voice-input-description" className="max-w-xl text-muted-foreground text-sm">
-              A microphone in the Ask composer that transcribes as you speak, with Meta&apos;s muse-voice-transcribe-1.0.
-              It uses the same Meta API key (MODEL_API_KEY) as investigations and incidents, and Meta bills each
-              minute of audio (about $0.18 an hour).
+              Speak your questions in Ask. Transcribed with your Meta API key, at about $0.18 an hour of audio.
             </span>
             {preferences.voiceInput && !canRecord && (
               <span className="text-destructive text-xs">This browser can&apos;t record audio here.</span>
@@ -143,8 +141,7 @@ export function SpeechSettings() {
               Send when transcription finishes
             </label>
             <span id="voice-auto-send-description" className="max-w-xl text-muted-foreground text-sm">
-              Send the question as soon as you stop the microphone and the transcript is in, instead of waiting for
-              Enter.
+              Sends the question when you stop the microphone, instead of waiting for Enter.
             </span>
           </div>
           <Switch

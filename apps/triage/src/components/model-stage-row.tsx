@@ -2,6 +2,7 @@
 
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { FormField } from "@/components/form-fields";
 import { formatDuration } from "@/components/incident/format";
 import type { ModelUpdate, Provider, SaveModelSettings, StageModel } from "@/components/model-settings";
 import { ModelPicker } from "@/components/model-picker";
@@ -83,6 +84,8 @@ export function StageRow({
   // model the provider leaves out of its list.
   const [custom, setCustom] = useState(false);
   const [saving, setSaving] = useState(false);
+  // The model's error shows once Save or Test has been tried.
+  const [tried, setTried] = useState(false);
   const [saveError, setSaveError] = useState<string>();
   const [checking, setChecking] = useState(false);
   const [check, setCheck] = useState<Check | null>(null);
@@ -99,6 +102,22 @@ export function StageRow({
   const listed = !list.loading && !list.error && list.models.length > 0;
   const known = list.models.includes(model);
   const unlisted = listed && Boolean(model) && !known;
+  // Why the draft model can't be saved, or undefined when it can.
+  const modelError = !model
+    ? "Choose a model, or enter its ID."
+    : unlisted && !custom
+      ? `${provider?.label} doesn't list this model. Choose one from the list, or use a custom ID.`
+      : undefined;
+  // The Model field's note: its error once tried, else what it should know
+  // about the list. A missing key has its own notice below.
+  const modelHint =
+    !list.loading && !listed && !missingKey
+      ? `${list.error ?? `${provider?.label ?? "This provider"} listed no models.`} Enter the model ID.`
+      : unlisted && custom
+        ? `Not in ${provider?.label}'s model list. Test it before you save.`
+        : unlisted
+          ? modelError
+          : undefined;
 
   // Whether the saved stage can run, from its provider's model list. The
   // list follows the draft's provider, so a draft on another one shows none.
@@ -123,9 +142,12 @@ export function StageRow({
     else if (from?.spark && draft.model === from.spark) next = to?.spark ?? "";
     setDraft({ provider: id, model: next });
     setCustom(false);
+    setTried(false);
   }
 
   async function save() {
+    setTried(true);
+    if (modelError) return;
     setSaving(true);
     setSaveError(undefined);
     const update: ModelUpdate = { stages: { [stage]: { provider: draft.provider, model } } };
@@ -138,12 +160,15 @@ export function StageRow({
   function cancel() {
     setDraft(saved);
     setCustom(false);
+    setTried(false);
     setSaveError(undefined);
     setCheck(null);
     onOpenChange(false);
   }
 
   async function ping() {
+    setTried(true);
+    if (!model) return;
     setChecking(true);
     setCheck(null);
     const started = performance.now();
@@ -178,11 +203,8 @@ export function StageRow({
       onOpenChange={onOpenChange}
     >
       <p className="text-muted-foreground text-xs">{description}</p>
-      <div className="grid gap-3 sm:grid-cols-[13rem_1fr]">
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`${id}-provider`} className="font-medium text-xs">
-            Provider
-          </label>
+      <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+        <FormField label="Provider" htmlFor={`${id}-provider`}>
           <Select value={draft.provider} onValueChange={(v) => changeProvider(v as ProviderId)}>
             <SelectTrigger id={`${id}-provider`} className="w-full">
               <SelectValue />
@@ -195,11 +217,8 @@ export function StageRow({
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <label htmlFor={`${id}-model`} className="font-medium text-xs">
-            Model
-          </label>
+        </FormField>
+        <FormField label="Model" htmlFor={`${id}-model`} hint={modelHint} error={tried ? modelError : undefined}>
           <ModelPicker
             id={`${id}-model`}
             models={list.models}
@@ -212,23 +231,7 @@ export function StageRow({
               setCustom(c);
             }}
           />
-          {/* A missing key has its own notice below. */}
-          {!list.loading && !listed && !missingKey && (
-            <span className="break-words text-muted-foreground text-xs">
-              {list.error ?? `${provider?.label ?? "This provider"} listed no models.`} Enter the model ID.
-            </span>
-          )}
-          {unlisted && custom && (
-            <span className="text-muted-foreground text-xs">
-              Not in {provider?.label}&apos;s model list. Test it before you save.
-            </span>
-          )}
-          {unlisted && !custom && (
-            <span className="text-[color-mix(in_oklab,var(--warning)_55%,black)] text-xs dark:text-warning">
-              {provider?.label} doesn&apos;t list this model. Choose one from the list, or use a custom ID.
-            </span>
-          )}
-        </div>
+        </FormField>
       </div>
       {missingKey && (
         <Alert variant="warning">
@@ -258,7 +261,7 @@ export function StageRow({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="outline" size="sm" onClick={ping} disabled={!model || checking}>
+            <Button variant="outline" size="sm" onClick={ping} disabled={checking}>
               {checking && <LoaderCircleIcon className="animate-spin" />}
               Test model
               <span className="sr-only"> for {label}</span>
@@ -270,7 +273,7 @@ export function StageRow({
           <Button variant="ghost" size="sm" onClick={cancel}>
             Cancel
           </Button>
-          <Button size="sm" onClick={save} disabled={!dirty || !model || saving || list.loading || (unlisted && !custom)}>
+          <Button size="sm" onClick={save} disabled={!dirty || saving || list.loading}>
             {saving && <LoaderCircleIcon className="animate-spin" />}
             Save
             <span className="sr-only"> {label}</span>

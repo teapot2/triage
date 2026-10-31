@@ -553,7 +553,9 @@ export const harnessPaths = [
   "src/app/api/ops/",
   "src/lib/ops.ts",
   "src/lib/traffic.ts",
+  "src/lib/traffic-profile.ts",
   "src/db/pool-watch.ts",
+  "scripts/shoppers.ts",
 ];
 const isHarness = (rel: string) => harnessPaths.some((h) => (h.endsWith("/") ? rel.startsWith(h) : rel === h));
 

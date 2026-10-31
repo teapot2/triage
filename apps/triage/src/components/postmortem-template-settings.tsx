@@ -3,6 +3,7 @@
 import { ChevronDownIcon, ChevronUpIcon, LoaderCircleIcon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
+import { FormField } from "@/components/form-fields";
 import { SettingsSectionHeader } from "@/components/settings-list";
 import {
   AlertDialog,
@@ -402,10 +403,7 @@ function SectionDialog({
               The model writes this section from the incident&apos;s record, following your instructions.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={`${id}-name`} className="font-medium text-xs">
-              Name
-            </label>
+          <FormField label="Name" htmlFor={`${id}-name`} error={tried ? nameError : undefined}>
             <Input
               ref={nameField}
               id={`${id}-name`}
@@ -415,23 +413,15 @@ function SectionDialog({
               placeholder="Customer communication"
               autoComplete="off"
               aria-invalid={tried && Boolean(nameError)}
-              aria-describedby={tried && nameError ? `${id}-name-error` : undefined}
+              aria-describedby={tried && nameError ? `${id}-name-message` : undefined}
             />
-            {tried && nameError && (
-              <p id={`${id}-name-error`} className="text-destructive text-xs">
-                {nameError}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-2">
-              <label htmlFor={`${id}-instructions`} className="font-medium text-xs">
-                Instructions
-              </label>
-              <span className="text-muted-foreground text-xs" aria-hidden>
-                {instructions.length}/{instructionsMax}
-              </span>
-            </div>
+          </FormField>
+          <FormField
+            label="Instructions"
+            htmlFor={`${id}-instructions`}
+            error={tried ? instructionsError : undefined}
+            count={{ length: instructions.length, max: instructionsMax }}
+          >
             <Textarea
               ref={instructionsField}
               id={`${id}-instructions`}
@@ -441,14 +431,9 @@ function SectionDialog({
               rows={5}
               placeholder="Who was told what and when, from the record; say if nothing was recorded."
               aria-invalid={tried && Boolean(instructionsError)}
-              aria-describedby={tried && instructionsError ? `${id}-instructions-error` : undefined}
+              aria-describedby={tried && instructionsError ? `${id}-instructions-message` : undefined}
             />
-            {tried && instructionsError && (
-              <p id={`${id}-instructions-error`} className="text-destructive text-xs">
-                {instructionsError}
-              </p>
-            )}
-          </div>
+          </FormField>
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="outline" disabled={saving}>
