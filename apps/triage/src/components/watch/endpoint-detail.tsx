@@ -4,6 +4,7 @@ import { ActivityIcon, LoaderCircleIcon, PencilIcon } from "lucide-react";
 import Link from "next/link";
 import { notFound, useRouter } from "next/navigation";
 import { type ReactNode, useState } from "react";
+import { ExportMenu } from "@/components/export-menu";
 import { formatTime } from "@/components/incident/format";
 import { MetricChart } from "@/components/incident/metric-chart";
 import { Timestamp } from "@/components/timestamp";
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { endpointHourly, endpointResults } from "@/lib/export/datasets/endpoint";
 import { describeCheck, duration, type UptimeCheck, type UptimeSample } from "@/lib/investigation/uptime/model";
 import { cn } from "@/lib/utils";
 import {
@@ -119,6 +121,14 @@ export function EndpointDetail({ id }: { id: string }) {
             <span className={label}>Edit</span>
           </Link>
         </Button>
+        {!bar && (
+          <ExportMenu
+            exports={[
+              { dataset: endpointResults, params: { id: check.id } },
+              { dataset: endpointHourly, params: { id: check.id } },
+            ]}
+          />
+        )}
         {!bar && <DeleteEndpoint name={check.name} onConfirm={() => void remove()} />}
       </>
     );

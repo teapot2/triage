@@ -8,6 +8,7 @@ import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { downloadText } from "@/lib/export/download";
 import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
 import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
 import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
@@ -46,15 +47,7 @@ export function copyPostmortem(incident: Incident) {
 }
 
 function downloadPostmortem(incident: Incident) {
-  const blob = new Blob([postmortemMarkdown(incident)], { type: "text/markdown" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `postmortem-${incident.id}.md`;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadText(postmortemMarkdown(incident), `postmortem-${incident.id}.md`, "text/markdown");
 }
 
 // The palette asks for a write while the section may still be mounting; the
