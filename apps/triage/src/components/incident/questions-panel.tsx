@@ -15,8 +15,10 @@ import {
   CornerDownRightIcon,
   EllipsisIcon,
   GitCommitHorizontalIcon,
+  ImageIcon,
   LoaderCircleIcon,
   type LucideIcon,
+  PaperclipIcon,
   PencilIcon,
   RotateCcwIcon,
   ScanSearchIcon,
@@ -25,6 +27,8 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -40,11 +44,13 @@ import { SpeakButton } from "@/components/speech/speak-button";
 import { Timestamp } from "@/components/timestamp";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDictation, useDictationSupported } from "@/hooks/use-dictation";
 import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
-import { askRefusal, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
+import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shrink";
+import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { providerLabels } from "@/lib/models/labels";
@@ -70,12 +76,19 @@ import { StepRow } from "./investigation-timeline";
 // no timestamps.
 type Timing = Map<string, { start: number; end?: number }>;
 
+// A screenshot attached to a question, already shrunk (lib/images/shrink),
+// with an object URL for its thumbnail until the saved copy takes over.
+export interface Attachment extends ShrunkImage {
+  url: string;
+}
+
 export interface LiveQuestion {
   // The turn's key from the moment it's sent; the server's ID comes later.
   key: string;
   // Known once the server accepts the question.
   id?: string;
   text: string;
+  image?: Attachment;
   startedAt: string;
   status: "posting" | "streaming" | "done" | "failed";
   message?: UIMessage;
@@ -86,6 +99,7 @@ export interface LiveQuestion {
 export interface QueuedQuestion {
   key: string;
   text: string;
+  image?: Attachment;
 }
 
 export interface Ask {
@@ -105,8 +119,16 @@ export interface Ask {
   error: string | undefined;
   draft: string;
   setDraft: (text: string) => void;
-  // Asks now, or queues behind the answer in progress.
-  send: (text: string) => void;
+  // The screenshot attached to the draft, and whether one is being shrunk.
+  image: Attachment | undefined;
+  attaching: boolean;
+  // Shrinks a pasted, dropped or picked image and attaches it, replacing
+  // any other; one it can't read leaves the error.
+  attach: (file: Blob) => void;
+  detach: () => void;
+  // Asks now, or queues behind the answer in progress. With an image and no
+  // text it asks DEFAULT_IMAGE_QUESTION.
+  send: (text: string, image?: Attachment) => void;
   unqueue: (key: string) => void;
   // Takes a queued question back into the composer to change it.
   editQueued: (key: string) => void;
@@ -126,6 +148,29 @@ const newKey = () => `c${++lastKey}`;
 // A question put back into the composer goes before whatever is typed there.
 const withDraft = (text: string) => (draft: string) => (draft.trim() ? `${text}\n${draft}` : text);
 
+// Lets go of an attachment no turn, queue entry or draft shows any more.
+const release = (image: Attachment | undefined) => {
+  if (image) URL.revokeObjectURL(image.url);
+};
+
+// The request for one question: JSON as before, or a form with the image
+// and its size when one is attached.
+function questionRequest(question: QueuedQuestion): RequestInit {
+  if (!question.image) {
+    return {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: question.text }),
+    };
+  }
+  const form = new FormData();
+  form.append("text", question.text);
+  form.append("image", question.image.blob, `screenshot.${question.image.mediaType.split("/")[1]}`);
+  form.append("width", String(question.image.width));
+  form.append("height", String(question.image.height));
+  return { method: "POST", body: form };
+}
+
 export function useAskQuestion(incident: Incident): Ask {
   const router = useRouter();
   const [live, setLive] = useState<LiveQuestion>();
@@ -134,7 +179,46 @@ export function useAskQuestion(incident: Incident): Ask {
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState("");
+  const [image, setImage] = useState<Attachment>();
+  const [attaching, setAttaching] = useState(false);
   const busy = useRef(false);
+  // The latest attach, so a slow shrink doesn't land after a newer one.
+  const attachSeq = useRef(0);
+
+  // The draft's image, swapped for another (or none), letting go of the one
+  // it replaces.
+  const putImage = useCallback((next: Attachment | undefined) => {
+    setImage((prev) => {
+      if (prev !== next) release(prev);
+      return next;
+    });
+  }, []);
+
+  const attach = useCallback(
+    (file: Blob) => {
+      const seq = ++attachSeq.current;
+      setAttaching(true);
+      setError(undefined);
+      shrinkImage(file).then(
+        (shrunk) => {
+          if (seq !== attachSeq.current) return;
+          putImage({ ...shrunk, url: URL.createObjectURL(shrunk.blob) });
+          setAttaching(false);
+        },
+        (err) => {
+          if (seq !== attachSeq.current) return;
+          setError(err instanceof UnreadableImage ? err.message : `Couldn't attach that image: ${errorText(err)}`);
+          setAttaching(false);
+        },
+      );
+    },
+    [putImage],
+  );
+  const detach = useCallback(() => {
+    attachSeq.current++;
+    setAttaching(false);
+    putImage(undefined);
+  }, [putImage]);
 
   // The saved copy takes over once it has caught up: after the stream ends
   // it is final (the server saves before closing the stream), and after a
@@ -144,6 +228,8 @@ export function useAskQuestion(incident: Incident): Ask {
   useEffect(() => {
     if (!live || (live.status !== "done" && live.status !== "failed")) return;
     if (!live.id || (saved && (live.status === "failed" || saved.status !== "answering"))) {
+      // The saved copy shows its image from the server.
+      release(live.image);
       setLive(undefined);
       busy.current = false;
     }
@@ -156,17 +242,24 @@ export function useAskQuestion(incident: Incident): Ask {
       if (busy.current) return;
       busy.current = true;
       setError(undefined);
-      if (!queued) setDraft("");
+      if (!queued) {
+        setDraft("");
+        // Moves to the turn, which lets go of it later.
+        setImage(undefined);
+      }
       const timing: Timing = new Map();
-      setLive({ key: question.key, text: question.text, startedAt: new Date().toISOString(), status: "posting", timing });
+      setLive({
+        key: question.key,
+        text: question.text,
+        image: question.image,
+        startedAt: new Date().toISOString(),
+        status: "posting",
+        timing,
+      });
 
       let res: Response;
       try {
-        res = await fetch(`/api/incidents/${incident.id}/questions`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ text: question.text }),
-        });
+        res = await fetch(`/api/incidents/${incident.id}/questions`, questionRequest(question));
       } catch (err) {
         res = Response.json({ error: `Couldn't reach the server: ${errorText(err)}` }, { status: 0 });
       }
@@ -181,6 +274,7 @@ export function useAskQuestion(incident: Incident): Ask {
           setPaused(true);
         } else {
           setDraft(withDraft(question.text));
+          if (question.image) putImage(question.image);
         }
         setError(data.error ?? `HTTP ${res.status}`);
         busy.current = false;
@@ -208,7 +302,7 @@ export function useAskQuestion(incident: Incident): Ask {
       }
       router.refresh();
     },
-    [incident.id, router],
+    [incident.id, router, putImage],
   );
 
   const refusal = composerRefusal(incident);
@@ -229,13 +323,15 @@ export function useAskQuestion(incident: Incident): Ask {
   // Behind an answer, or behind questions already waiting, a new one joins
   // the end of the queue so they go out in the order asked.
   const send = useCallback(
-    (text: string) => {
+    (text: string, image?: Attachment) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
-      const question = { key: newKey(), text: trimmed };
+      if (!trimmed && !image) return;
+      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image };
       if (waiting || paused || queue.length > 0 || busy.current) {
         setQueue((q) => [...q, question]);
         setDraft("");
+        // Moves to the queue entry.
+        if (image) setImage(undefined);
       } else {
         void ask(question, false);
       }
@@ -243,15 +339,22 @@ export function useAskQuestion(incident: Incident): Ask {
     [waiting, paused, queue.length, ask],
   );
 
-  const unqueue = useCallback((key: string) => setQueue((q) => q.filter((x) => x.key !== key)), []);
+  const unqueue = useCallback(
+    (key: string) => {
+      release(queue.find((x) => x.key === key)?.image);
+      setQueue((q) => q.filter((x) => x.key !== key));
+    },
+    [queue],
+  );
   const editQueued = useCallback(
     (key: string) => {
       const question = queue.find((x) => x.key === key);
       if (!question) return;
       setQueue((q) => q.filter((x) => x.key !== key));
       setDraft(withDraft(question.text));
+      if (question.image) putImage(question.image);
     },
-    [queue],
+    [queue, putImage],
   );
   const resume = useCallback(() => {
     setPaused(false);
@@ -268,6 +371,10 @@ export function useAskQuestion(incident: Incident): Ask {
     error,
     draft,
     setDraft,
+    image,
+    attaching,
+    attach,
+    detach,
     send,
     unqueue,
     editQueued,
@@ -331,6 +438,9 @@ export function suggestedQuestions(incident: Incident): Suggestion[] {
 interface QuestionView {
   key: string;
   text: string;
+  // The attached screenshot: this tab's copy while it streams, then the
+  // server's.
+  image?: { url: string; width: number; height: number };
   askedAt: string;
   status: Question["status"];
   answer: string;
@@ -345,13 +455,18 @@ interface QuestionView {
   answeredAt?: string;
 }
 
-function savedView(q: Question, key: string): QuestionView {
+function savedView(q: Question, key: string, incidentId: string): QuestionView {
   // The last model call's text is the answer itself, recorded as a thought
   // like every call's; the thread shows it once, as the answer.
   const answer = q.answer.trim();
   return {
     key,
     text: q.text,
+    image: q.image && {
+      url: `/api/incidents/${incidentId}/questions/${q.id}/image`,
+      width: q.image.width,
+      height: q.image.height,
+    },
     askedAt: q.askedAt,
     status: q.status,
     answer: q.answer,
@@ -416,6 +531,7 @@ function liveView(live: LiveQuestion): QuestionView {
   return {
     key: live.key,
     text: live.text,
+    image: live.image && { url: live.image.url, width: live.image.width, height: live.image.height },
     askedAt: live.startedAt,
     status,
     answer,
@@ -433,7 +549,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   const saved = (incident.questions ?? []).filter(
     (q) => !live || !(live.id ? q.id === live.id : q.status === "answering"),
   );
-  const views = [...saved.map((q) => savedView(q, ask.keyFor(q.id))), ...(live ? [liveView(live)] : [])];
+  const views = [...saved.map((q) => savedView(q, ask.keyFor(q.id), incident.id)), ...(live ? [liveView(live)] : [])];
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -481,8 +597,16 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     views.length > 0,
   );
 
-  const askAgain = (text: string) => {
-    ask.setDraft(text);
+  // A failed question goes back into the composer, with its screenshot
+  // fetched back from the server.
+  const askAgain = (view: QuestionView) => {
+    ask.setDraft(view.text);
+    if (view.image) {
+      void fetch(view.image.url)
+        .then((res) => (res.ok ? res.blob() : undefined))
+        .then((blob) => blob && ask.attach(blob))
+        .catch(() => undefined);
+    }
     requestAnimationFrame(focusComposer);
   };
 
@@ -731,7 +855,7 @@ function ChatTurn({
 }: {
   view: QuestionView;
   latest: boolean;
-  onAskAgain: (text: string) => void;
+  onAskAgain: (view: QuestionView) => void;
 }) {
   const answering = view.status === "answering";
   const t0 = Date.parse(view.askedAt);
@@ -792,9 +916,12 @@ function ChatTurn({
 
   return (
     <li className={cn("group/turn relative flex flex-col gap-3", answering && enterMotion)}>
-      <p className="max-w-[85%] self-end whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-sm leading-relaxed">
-        {view.text}
-      </p>
+      <div className="flex max-w-[85%] flex-col items-end gap-1.5 self-end">
+        {view.image && <QuestionImage image={view.image} />}
+        <p className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-sm leading-relaxed">
+          {view.text}
+        </p>
+      </div>
 
       <div className="flex flex-col gap-2">
         {rows.length > 0 && !answering ? (
@@ -822,7 +949,7 @@ function ChatTurn({
               <CircleXIcon className="mt-[3px] size-3.5 shrink-0" />
               {view.error ?? "The answer failed."}
             </p>
-            <Button variant="outline" size="sm" onClick={() => onAskAgain(view.text)}>
+            <Button variant="outline" size="sm" onClick={() => onAskAgain(view)}>
               <RotateCcwIcon />
               Ask again
             </Button>
@@ -854,6 +981,44 @@ function ChatTurn({
         )}
       </div>
     </li>
+  );
+}
+
+// The screenshot sent with a question, above its bubble: at most 160 px
+// tall, and full size in a dialog on click. Its width and height are set
+// from the record so the thread doesn't jump as it loads.
+function QuestionImage({ image }: { image: NonNullable<QuestionView["image"]> }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          aria-label="Open the screenshot"
+          className="overflow-hidden rounded-xl rounded-br-md border bg-muted outline-none transition-opacity hover:opacity-90 focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {/* A local API route or object URL: nothing for next/image to optimize. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={image.url}
+            alt="Screenshot attached to the question"
+            width={image.width}
+            height={image.height}
+            className="block h-auto max-h-40 w-auto max-w-full object-contain"
+          />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="w-auto max-w-[calc(100vw-2rem)] p-2 sm:max-w-[min(90vw,1600px)]">
+        <DialogTitle className="sr-only">Screenshot attached to the question</DialogTitle>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={image.url}
+          alt="Screenshot attached to the question"
+          width={image.width}
+          height={image.height}
+          className="h-auto max-h-[calc(100dvh-4rem)] w-auto max-w-full rounded-lg object-contain"
+        />
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -951,6 +1116,7 @@ function QueueTab({ ask, onEdit }: { ask: Ask; onEdit: (key: string) => void }) 
             className="group/queued flex items-center gap-2 rounded-md py-0.5 pr-0.5 pl-2 text-xs transition-colors hover:bg-muted"
           >
             <CornerDownRightIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            {q.image && <ImageIcon aria-label="With a screenshot" className="size-3.5 shrink-0 text-muted-foreground" />}
             <span className="min-w-0 flex-1 truncate" title={q.text}>
               {q.text}
             </span>
@@ -993,6 +1159,35 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
   },
 };
 
+// The draft's screenshot, above the text: a thumbnail, its size as sent,
+// and × to take it off; "Preparing image" while it's being shrunk.
+function AttachmentChip({ image, onRemove }: { image: Attachment | undefined; onRemove: () => void }) {
+  const kb = image && Math.max(1, Math.round(image.blob.size / 1000));
+  return (
+    <div className={cn("flex items-center gap-2 self-start rounded-md border bg-muted/50 p-1 text-xs", enterMotion)}>
+      {image ? (
+        // eslint-disable-next-line @next/next/no-img-element -- an object URL: nothing for next/image to optimize
+        <img src={image.url} alt="Attached screenshot" className="h-10 max-w-20 rounded-sm object-cover" />
+      ) : (
+        <span className="flex size-10 items-center justify-center rounded-sm bg-muted">
+          <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground" />
+        </span>
+      )}
+      <span className="text-muted-foreground tabular-nums">
+        {image ? `${image.width} × ${image.height} · ${kb} KB` : "Preparing image…"}
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button type="button" variant="ghost" size="icon-xs" aria-label="Remove the screenshot" onClick={onRemove}>
+            <XIcon />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Remove</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 // What was typed before dictating, then what is being said.
 const withDictation = (typed: string, said: string) =>
   [typed.trimEnd(), said.trim()].filter(Boolean).join(typed.endsWith("\n") ? "\n" : " ");
@@ -1011,6 +1206,11 @@ const withDictation = (typed: string, said: string) =>
 // plain the microphone is on. The mic button stops it and leaves the text
 // to edit and send; Enter stops it and sends; Escape drops what was said.
 // With "Send when transcription finishes" on, stopping sends too.
+//
+// A screenshot comes in by pasting, dropping it on the composer, or the
+// paperclip; it's shrunk in the browser and shown as a chip above the text,
+// and Send then works with no text (the question becomes "What does this
+// screenshot show…"). One per question: another replaces it.
 function Composer({
   ask,
   mode,
@@ -1022,7 +1222,10 @@ function Composer({
 }) {
   const disabled = ask.refusal !== undefined;
   const length = ask.draft.length;
-  const canSend = !disabled && ask.draft.trim().length > 0 && length <= MAX_QUESTION_CHARS;
+  const hasContent = ask.draft.trim().length > 0 || ask.image !== undefined;
+  const canSend = !disabled && !ask.attaching && hasContent && length <= MAX_QUESTION_CHARS;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   const hint = modeHint[mode];
   const HintIcon = hint.icon;
 
@@ -1056,8 +1259,9 @@ function Composer({
     if (said === undefined) return;
     const text = withDictation(typed.current, said);
     setDraft(text);
-    if ((send || preferences.voiceAutoSend) && text.trim() && text.length <= MAX_QUESTION_CHARS) ask.send(text);
-    else textareaRef.current?.focus();
+    if ((send || preferences.voiceAutoSend) && (text.trim() || ask.image) && !ask.attaching && text.length <= MAX_QUESTION_CHARS) {
+      ask.send(text, ask.image);
+    } else textareaRef.current?.focus();
   };
   const cancelDictating = () => {
     dictation.cancel();
@@ -1067,7 +1271,36 @@ function Composer({
   const submit = () => {
     if (dictation.status === "listening") void stopDictating(true);
     else if (dictating) return;
-    else if (canSend) ask.send(ask.draft);
+    else if (canSend) ask.send(ask.draft, ask.image);
+  };
+
+  // An image pasted with the text keeps the text's paste as it is; only a
+  // clipboard holding a file attaches it.
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const file = [...e.clipboardData.files].find((f) => f.type.startsWith("image/"));
+    if (!file) return;
+    e.preventDefault();
+    ask.attach(file);
+  };
+  const hasFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
+  const onDragOver = (e: DragEvent<HTMLFormElement>) => {
+    if (disabled || !hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDragging(true);
+  };
+  const onDragLeave = (e: DragEvent<HTMLFormElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+  };
+  // Whatever file is dropped is tried: one that isn't an image says so.
+  const onDrop = (e: DragEvent<HTMLFormElement>) => {
+    setDragging(false);
+    if (disabled || !hasFiles(e)) return;
+    e.preventDefault();
+    const files = [...e.dataTransfer.files];
+    const file = files.find((f) => f.type.startsWith("image/")) ?? files[0];
+    if (file) ask.attach(file);
+    textareaRef.current?.focus();
   };
   const editQueued = (key: string) => {
     ask.editQueued(key);
@@ -1100,98 +1333,138 @@ function Composer({
         e.preventDefault();
         submit();
       }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       className={cn(
-        "flex items-end gap-1 rounded-lg border bg-background p-1.5 pl-3 transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "flex flex-col gap-1.5 rounded-lg border bg-background p-1.5 pl-3 transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        dragging && "border-ring border-dashed ring-3 ring-ring/50",
         disabled && "opacity-60",
       )}
     >
-      <label htmlFor="ask-triage" className="sr-only">
-        Ask Triage about this incident
-      </label>
-      <textarea
-        id="ask-triage"
-        ref={textareaRef}
-        value={ask.draft}
-        onChange={(e) => ask.setDraft(e.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={disabled}
-        readOnly={dictating}
-        rows={1}
-        maxLength={MAX_QUESTION_CHARS}
-        placeholder={
-          disabled
-            ? ask.refusal
-            : dictating
-              ? "Listening…"
-              : ask.busy
-                ? "Ask a follow-up, sent when Triage finishes…"
-                : "Ask about this incident…"
-        }
-        aria-invalid={ask.error ? true : undefined}
-        aria-describedby={ask.error ? "ask-triage-error" : "ask-triage-mode"}
-        className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-      />
-      {length > MAX_QUESTION_CHARS * 0.8 && (
-        <span
-          className={cn(
-            "self-center px-1 text-muted-foreground text-xs tabular-nums",
-            length >= MAX_QUESTION_CHARS && "text-destructive",
-          )}
-        >
-          {length}/{MAX_QUESTION_CHARS}
+      {(ask.image || ask.attaching) && <AttachmentChip image={ask.image} onRemove={ask.detach} />}
+      <div className="flex items-end gap-1">
+        <label htmlFor="ask-triage" className="sr-only">
+          Ask Triage about this incident
+        </label>
+        <textarea
+          id="ask-triage"
+          ref={textareaRef}
+          value={ask.draft}
+          onChange={(e) => ask.setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          disabled={disabled}
+          readOnly={dictating}
+          rows={1}
+          maxLength={MAX_QUESTION_CHARS}
+          placeholder={
+            disabled
+              ? ask.refusal
+              : dictating
+                ? "Listening…"
+                : ask.busy
+                  ? "Ask a follow-up, sent when Triage finishes…"
+                  : ask.image
+                    ? "Ask about this screenshot…"
+                    : "Ask about this incident…"
+          }
+          aria-invalid={ask.error ? true : undefined}
+          aria-describedby={ask.error ? "ask-triage-error" : "ask-triage-mode"}
+          className="field-sizing-content max-h-40 min-w-0 flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+        />
+        {length > MAX_QUESTION_CHARS * 0.8 && (
+          <span
+            className={cn(
+              "self-center px-1 text-muted-foreground text-xs tabular-nums",
+              length >= MAX_QUESTION_CHARS && "text-destructive",
+            )}
+          >
+            {length}/{MAX_QUESTION_CHARS}
+          </span>
+        )}
+        <span id="ask-triage-mode" className="sr-only">
+          {hint.detail}
         </span>
-      )}
-      <span id="ask-triage-mode" className="sr-only">
-        {hint.detail}
-      </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={disabled}
-            aria-label={`Answers from: ${hint.text}`}
-            className="text-muted-foreground"
-          >
-            <HintIcon />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-64 flex-col items-start gap-0.5">
-          <span className="font-medium">{hint.text}</span>
-          <span className="opacity-70">{hint.detail}</span>
-        </TooltipContent>
-      </Tooltip>
-      {showMic && (
-        <>
-          {dictation.status === "listening" && <LevelBars level={dictation.level} className="mx-1 self-center" />}
-          <MicButton
-            status={dictation.status}
-            disabled={disabled}
-            onClick={() => {
-              if (dictation.status === "idle") startDictating();
-              else if (dictation.status === "listening") void stopDictating(false);
-              else if (dictation.status === "starting") cancelDictating();
-              textareaRef.current?.focus();
-            }}
-          />
-        </>
-      )}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="submit"
-            size="icon-sm"
-            disabled={dictation.status === "listening" ? disabled : !canSend || dictating}
-            aria-label={ask.busy ? "Queue" : "Send"}
-          >
-            <ArrowUpIcon />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          {ask.busy ? "Enter to queue" : "Enter to send"} · Shift+Enter for a new line
-        </TooltipContent>
-      </Tooltip>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          className="hidden"
+          tabIndex={-1}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) ask.attach(file);
+            // The same file picked again still fires a change.
+            e.target.value = "";
+            textareaRef.current?.focus();
+          }}
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={disabled}
+              aria-label="Attach a screenshot"
+              className="text-muted-foreground"
+              onClick={() => fileRef.current?.click()}
+            >
+              <PaperclipIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Attach a screenshot · or paste or drop one</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={disabled}
+              aria-label={`Answers from: ${hint.text}`}
+              className="text-muted-foreground"
+            >
+              <HintIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-64 flex-col items-start gap-0.5">
+            <span className="font-medium">{hint.text}</span>
+            <span className="opacity-70">{hint.detail}</span>
+          </TooltipContent>
+        </Tooltip>
+        {showMic && (
+          <>
+            {dictation.status === "listening" && <LevelBars level={dictation.level} className="mx-1 self-center" />}
+            <MicButton
+              status={dictation.status}
+              disabled={disabled}
+              onClick={() => {
+                if (dictation.status === "idle") startDictating();
+                else if (dictation.status === "listening") void stopDictating(false);
+                else if (dictation.status === "starting") cancelDictating();
+                textareaRef.current?.focus();
+              }}
+            />
+          </>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="submit"
+              size="icon-sm"
+              disabled={dictation.status === "listening" ? disabled : !canSend || dictating}
+              aria-label={ask.busy ? "Queue" : "Send"}
+            >
+              <ArrowUpIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {ask.busy ? "Enter to queue" : "Enter to send"} · Shift+Enter for a new line
+          </TooltipContent>
+        </Tooltip>
+      </div>
     </form>
   );
 

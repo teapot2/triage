@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "../fixtures";
 import type { Incident, Question } from "../schema";
-import { askRefusal, conversationHistory, knownEvidenceIds, nextQuestionId, parseCitations, plainAnswer } from "./rules";
+import {
+  askRefusal,
+  conversationHistory,
+  knownEvidenceIds,
+  nextQuestionId,
+  parseCitations,
+  plainAnswer,
+  sniffImageType,
+} from "./rules";
 
 const finished = (): Incident => structuredClone(exampleIncidents[0]);
 
@@ -102,6 +110,29 @@ describe("conversationHistory", () => {
       2,
     );
     assert.equal(history, "Q: Why the pool?\nA: It leaked [ev_log_3].\n\nQ: And the fix?\nA: (no answer: model timed out)");
+  });
+
+  it("marks a question that came with a screenshot, without the image", () => {
+    const image = { mediaType: "image/webp", width: 1600, height: 900, bytes: 310_000 };
+    const history = conversationHistory([question("q_1", { text: "Does this match?", image, answer: "Yes [ev_log_3]." })], 6);
+    assert.equal(history, "Q (with a screenshot): Does this match?\nA: Yes [ev_log_3].");
+  });
+});
+
+describe("sniffImageType", () => {
+  const bytes = (...b: number[]) => new Uint8Array([...b, ...new Array(16).fill(0)]);
+
+  it("knows the four types the models take by their first bytes", () => {
+    assert.equal(sniffImageType(bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)), "image/png");
+    assert.equal(sniffImageType(bytes(0xff, 0xd8, 0xff, 0xe0)), "image/jpeg");
+    assert.equal(sniffImageType(bytes(...Buffer.from("GIF89a"))), "image/gif");
+    assert.equal(sniffImageType(bytes(...Buffer.from("RIFF"), 1, 2, 3, 4, ...Buffer.from("WEBPVP8 "))), "image/webp");
+  });
+
+  it("refuses anything else, whatever the file is called", () => {
+    assert.equal(sniffImageType(bytes(...Buffer.from("<svg xmlns="))), undefined);
+    assert.equal(sniffImageType(bytes(...Buffer.from("RIFF"), 1, 2, 3, 4, ...Buffer.from("WAVE"))), undefined);
+    assert.equal(sniffImageType(new Uint8Array()), undefined);
   });
 });
 

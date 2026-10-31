@@ -1,5 +1,6 @@
 import { readdir, unlink } from "node:fs/promises";
 import path from "node:path";
+import { removeQuestionImages } from "./ask/images";
 import { exampleIncidents } from "./fixtures";
 import { type Incident, type IncidentStatus, incidentSchema } from "./schema";
 import { saveIncident } from "./store";
@@ -116,6 +117,11 @@ export async function removeDemoIncidents(): Promise<number> {
     return 0;
   }
   const demo = names.filter((n) => isDemo(n) && n.endsWith(".json"));
-  await Promise.all(demo.map((n) => unlink(path.join(dir, n))));
+  await Promise.all(
+    demo.map(async (n) => {
+      await unlink(path.join(dir, n));
+      await removeQuestionImages(n.slice(0, -".json".length));
+    }),
+  );
   return demo.length;
 }

@@ -273,6 +273,7 @@ export function answerRows(incident: Incident): AnswerRow[] {
 const answerColumns: Column<AnswerRow>[] = [
   { key: "question_id", value: (r) => r.question.id },
   { key: "question", value: (r) => r.question.text },
+  { key: "has_screenshot", value: (r) => r.question.image !== undefined },
   { key: "asked_at", value: (r) => r.question.askedAt },
   { key: "answered_at", value: (r) => r.question.answeredAt },
   { key: "status", value: (r) => r.question.status },
@@ -309,7 +310,12 @@ function answersMarkdown(rows: AnswerRow[]): string {
   }
   rows.forEach(({ question: q, cited }, i) => {
     lines.push(`## ${i + 1}. ${oneLine(q.text)}`, "");
-    const when: Cell[] = [`Asked ${q.askedAt}`, q.answeredAt && `answered ${q.answeredAt}`, q.model && `by ${q.model}`];
+    const when: Cell[] = [
+      `Asked ${q.askedAt}`,
+      q.image && "with a screenshot (not exported)",
+      q.answeredAt && `answered ${q.answeredAt}`,
+      q.model && `by ${q.model}`,
+    ];
     lines.push(when.filter(Boolean).join(" · "), "");
     if (q.status === "failed") lines.push(`_Not answered: ${oneLine(q.error ?? "the answer failed")}_`, "");
     else if (q.status === "answering") lines.push("_Still being answered when exported._", "");

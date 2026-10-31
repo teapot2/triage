@@ -36,7 +36,7 @@ A recovery says the metric came back; the verification checks that it stayed bac
 
 ## Ask Triage
 
-After the report, a person can ask Triage follow-up questions on the incident page and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
+After the report, a person can ask Triage follow-up questions on the incident page, with a pasted screenshot if they have one (a dashboard panel, an error page), and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
 
 ## Postmortem
 

@@ -131,7 +131,9 @@ function timelineBlock(incident: Incident): string {
     events.push([a.requestedAt, "Approval of the fix requested"]);
     events.push([a.decidedAt, `Fix ${a.state}${a.reason ? `, reason: ${a.reason}` : ""}`]);
   }
-  for (const q of incident.questions ?? []) events.push([q.askedAt, `Question asked: ${q.text}`]);
+  for (const q of incident.questions ?? []) {
+    events.push([q.askedAt, `Question asked${q.image ? " (with a screenshot)" : ""}: ${q.text}`]);
+  }
   const lines = events
     .filter((e): e is [string, string] => e[0] !== undefined)
     .sort((x, y) => Date.parse(x[0]) - Date.parse(y[0]))

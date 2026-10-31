@@ -358,6 +358,16 @@ export type Run = z.infer<typeof runSchema>;
 export const questionSchema = z.object({
   id: z.string().regex(/^q_\d+$/).describe("Sequential per incident; also the evidence ID prefix"),
   text: z.string().min(1).max(500),
+  // A screenshot attached to the question, shrunk in the browser. The bytes
+  // live beside the incident (ask/images.ts), not in this record.
+  image: z
+    .object({
+      mediaType: z.string(),
+      width: z.number().int(),
+      height: z.number().int(),
+      bytes: z.number().int(),
+    })
+    .optional(),
   askedAt: timestamp,
   answeredAt: timestamp.optional().describe("Set on finish or failure"),
   status: z.enum(["answering", "answered", "failed"]),

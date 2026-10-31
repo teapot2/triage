@@ -5,6 +5,7 @@ import {
   ToolLoopAgent,
   type ToolSet,
   type UIMessageStreamWriter,
+  type UserContent,
 } from "ai";
 import { cacheKey, languageModel, modelOptions, reasoningKind } from "../../models/client";
 import { stageModel, stageProblem } from "../../models/settings";
@@ -17,6 +18,7 @@ import type { Incident, Question } from "../schema";
 import { sourceFor } from "../source-for";
 import type { TelemetrySource } from "../source";
 import { createInvestigationTools, forModel } from "../tools";
+import { readQuestionImage } from "./images";
 import { conversationHistory, knownEvidenceIds, parseCitations } from "./rules";
 
 // Stage "ask": a follow-up question on a finished incident, answered by a
@@ -32,7 +34,16 @@ const NUDGE = "You have not answered yet. Answer the question now, citing eviden
 // Earlier questions and answers given as context.
 const HISTORY = 6;
 
-function instructions(mode: Question["mode"]): string {
+// Only when the question carries a screenshot: what it shows is the
+// person's, not evidence, so it's said in words and checked against the
+// evidence rather than cited.
+const IMAGE_RULES = `
+- The person attached a screenshot. Read what it shows (the service, the time range, the values) before answering.
+- Say in words what comes from the screenshot, e.g. "the screenshot shows p95 at 2.4 s from 14:05". Never cite it with an evidence ID: it isn't evidence.
+- Check what it shows against the evidence and cite those IDs. If its service, times or numbers don't match the incident, say so plainly.
+- If you can't read it (blurry, cropped, not a chart or an error), say what you can't make out.`;
+
+function instructions(mode: Question["mode"], image: boolean): string {
   const tools =
     mode === "tools"
       ? `- Use the tools only when the question is about the system and the recorded evidence does not answer it. Prefer evidence that could disprove a claim: to say why something was ruled out, say what was checked and what it showed.
@@ -44,7 +55,7 @@ function instructions(mode: Question["mode"]): string {
 
 Rules:
 - Cite every claim about the system or the incident with an evidence ID in square brackets, e.g. [ev_log_3]. Cite only IDs listed below or returned by a tool. Never invent one. Questions about this conversation, the report, the incident's page or Triage itself need no citations.
-${tools}
+${tools}${image ? IMAGE_RULES : ""}
 - A question about Triage or about something on the incident's page (a label, a status, a section) is on topic: answer it from the incident details below.
 - Thanks, an acknowledgement or a reaction (frustration included) is not a question: reply in a sentence, plainly, without asking them to clarify.
 - Only when you can't tell what the message means (stray keys, a fragment) say so in one sentence and ask what they mean. Don't investigate anything that isn't about the system.
@@ -66,6 +77,8 @@ ${evidence || "(none)"}
 ${history ? `\nEarlier questions:\n${history}\n` : ""}
 Question: ${question.text}`;
 }
+
+const NO_VISION_HINT = "(This model may not read images: pick a vision model for Ask in Settings.)";
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 500);
 
@@ -95,6 +108,9 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
   // An error the stream already carried to the tab, so it isn't sent twice.
   let streamed = false;
   let stepsUsed = 0;
+  // Whether the model was called, so a failure before it isn't blamed on
+  // the image.
+  let calledModel = false;
   try {
     const stage = await stageModel("ask");
     recorder.update({ provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) });
@@ -111,6 +127,18 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     recorder.update({ mode });
     const tools: ToolSet = source ? createInvestigationTools(source, recorder, { submit: false }) : {};
 
+    // The screenshot goes with this question only, after its text; the
+    // provider client turns the part into input_image or image_url.
+    const question = recorder.question;
+    const image = await readQuestionImage(incident.id, question);
+    if (question.image && !image) throw new Error("The attached image couldn't be read back: ask again with it");
+    const content: UserContent = image
+      ? [
+          { type: "text", text: prompt(incident, question, source) },
+          { type: "file", mediaType: image.mediaType, data: image.bytes },
+        ]
+      : prompt(incident, question, source);
+
     // As in the investigation: Meta's API only supports tool_choice "auto",
     // so the last step has no tools and must answer, and a run that stops
     // after tool calls without text is nudged once.
@@ -118,7 +146,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       model: languageModel(stage),
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
-      instructions: instructions(mode),
+      instructions: instructions(mode, image !== undefined),
       tools,
       stopWhen: () => stepsUsed >= MAX_STEPS,
       prepareStep: () => {
@@ -127,9 +155,10 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       },
     });
 
-    const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, recorder.question, source) }];
+    const messages: ModelMessage[] = [{ role: "user", content }];
     const tokens = noTokens();
     let text = "";
+    calledModel = true;
     for (let pass = 0; pass <= MAX_NUDGES && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });
       const result = await agent.stream({ messages });
@@ -181,7 +210,10 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     writer.write({ type: "finish" });
   } catch (err) {
     console.error("[triage] question failed", incident.id, recorder.question.id, err);
-    const message = errorText(err);
+    // A model that can't see refuses the image with its own wording, which
+    // Triage can't tell apart from other errors: with an image attached,
+    // the likely cause is said too.
+    const message = recorder.question.image && calledModel ? `${errorText(err)} ${NO_VISION_HINT}` : errorText(err);
     recorder.update({ status: "failed", error: message, answeredAt: new Date().toISOString() });
     if (!streamed) writer.write({ type: "error", errorText: message });
   } finally {

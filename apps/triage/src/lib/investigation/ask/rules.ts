@@ -5,6 +5,26 @@ import type { Incident, Question } from "../schema";
 
 export const MAX_QUESTION_CHARS = 500;
 
+// An attached image, after the browser has shrunk it (long side 1,600 px,
+// WebP): a screenshot lands at 100 to 400 KB. Meta documents a 1 MiB cap on
+// a request body, so the image and the prompt fit under it together.
+export const MAX_IMAGE_BYTES = 1_000_000;
+export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+
+// The question an image sent without text asks.
+export const DEFAULT_IMAGE_QUESTION = "What does this screenshot show, and does it match the incident?";
+
+// The image's media type from its first bytes, or undefined when it isn't
+// one the models take. The browser's type for a file is only its name's.
+export function sniffImageType(bytes: Uint8Array): (typeof IMAGE_TYPES)[number] | undefined {
+  const starts = (sig: number[], at = 0) => sig.every((b, i) => bytes[at + i] === b);
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (starts([0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (starts([0x47, 0x49, 0x46, 0x38])) return "image/gif";
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return "image/webp";
+  return undefined;
+}
+
 // Why the incident can't take a question now, or undefined when it can:
 // only once a report exists, and one question at a time.
 export function askRefusal(incident: Incident): string | undefined {
@@ -24,12 +44,16 @@ export function nextQuestionId(incident: Incident): string {
 
 // The conversation so far, as the model gets it: the last `limit` finished
 // questions with their answers, and a failed one with what went wrong, so
-// a follow-up like "try again" knows what it follows.
+// a follow-up like "try again" knows what it follows. An earlier image isn't
+// sent again: it's marked, and its answer says what it showed.
 export function conversationHistory(questions: Question[], limit: number): string {
   return questions
     .filter((q) => q.status !== "answering")
     .slice(-limit)
-    .map((q) => `Q: ${q.text}\nA: ${q.status === "failed" ? `(no answer${q.error ? `: ${q.error}` : ""})` : q.answer}`)
+    .map(
+      (q) =>
+        `Q${q.image ? " (with a screenshot)" : ""}: ${q.text}\nA: ${q.status === "failed" ? `(no answer${q.error ? `: ${q.error}` : ""})` : q.answer}`,
+    )
     .join("\n\n");
 }
 

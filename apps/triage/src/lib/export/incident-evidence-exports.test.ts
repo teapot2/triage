@@ -433,6 +433,7 @@ describe("GET /api/export/ask-answers", () => {
     assert.deepEqual(file.rows[0], {
       question_id: "q_1",
       question: "Why did the pool\nrun out?",
+      has_screenshot: false,
       asked_at: "2026-10-23T02:31:00.000Z",
       answered_at: "2026-10-23T02:31:40.000Z",
       status: "answered",
