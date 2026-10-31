@@ -20,7 +20,7 @@ const p95Values = [
 
 const poolLeakPatch = `--- a/src/lib/stock.ts
 +++ b/src/lib/stock.ts
-@@ -6,14 +6,17 @@ const DEFAULT_STOCK = 0;
+@@ -6,13 +6,16 @@ const DEFAULT_STOCK = 0;
  export async function getStockLevel(productId: number): Promise<number> {
    const client = await pool.connect();
 -  const { rows } = await client.query(
@@ -49,7 +49,7 @@ const poolLeakPatch = `--- a/src/lib/stock.ts
  }
 --- /dev/null
 +++ b/src/lib/stock.test.ts
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,11 @@
 +import { expect, test } from "vitest";
 +import { pool } from "@/db/client";
 +import { getStockLevel } from "./stock";
