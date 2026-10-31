@@ -156,6 +156,7 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
     summary: null,
     evidence_ids: null,
     error: null,
+    turn: null,
     reasoning: null,
     reasoning_kind: null,
     text: null,
@@ -216,6 +217,8 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
         summary: s.summary ?? null,
         evidence_ids: s.evidenceIds,
         error: s.error ?? null,
+        // The thought ID of the model call that asked for it.
+        turn: s.turn ?? null,
       };
     }
   }

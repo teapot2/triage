@@ -274,9 +274,14 @@ export async function runFixStage(
 
   let steps = 0;
   const tokens = noTokens();
+  // One tool call at a time, unlike the other stages: two submit_fix calls
+  // in one turn would both pass the attempt check and prove in the sandbox
+  // at once. Meta is asked for one call per response; other providers may
+  // still send several, which then run in turn.
   const agent = new ToolLoopAgent({
     model: languageModel(stage),
-    providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id)),
+    providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id), { parallel: false }),
+    toolCallConcurrency: 1,
     instructions,
     tools,
     stopWhen: [

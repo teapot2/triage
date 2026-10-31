@@ -39,7 +39,16 @@ export function languageModel(s: StageModel & Endpoint) {
 //   stage and incident (cacheKey()): each step of a stage's tool loop
 //   resends everything before it, and an incident's questions share the
 //   evidence they're asked over.
-export function modelOptions(s: Pick<StageModel, "provider" | "effort">, cache?: { key: string }) {
+// - parallelToolCalls: several tool calls in one response, which the SDK
+//   then runs at once. Meta's default is on; it's sent anyway so a stage
+//   that must go one call at a time (the fix stage) can turn it off. Spark
+//   1.3 and Wonder 1.0 both honor it (checked Oct 31: three calls with it
+//   on, one with it off), and accept it on calls without tools.
+export function modelOptions(
+  s: Pick<StageModel, "provider" | "effort">,
+  cache?: { key: string },
+  { parallel = true }: { parallel?: boolean } = {},
+) {
   if (s.provider !== "meta") return undefined;
   return {
     openai: {
@@ -48,6 +57,7 @@ export function modelOptions(s: Pick<StageModel, "provider" | "effort">, cache?:
       reasoningSummary: "auto",
       store: false,
       include: ["reasoning.encrypted_content"],
+      parallelToolCalls: parallel,
       ...(s.effort && { reasoningEffort: s.effort }),
       ...(cache && { promptCacheKey: cache.key }),
     },

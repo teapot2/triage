@@ -31,6 +31,7 @@ import { useIncident } from "./incident-export";
 import { evidenceTitle } from "./metric-labels";
 import { activeFilterCount, emptyFilters, type Filters, filterSteps, matchSnippet } from "./log-filters";
 import { LogToolbar } from "./log-toolbar";
+import { countTurns, groupTurns, type Turn, turnTiming } from "./turns";
 
 // A finished tool call shows what kind of call it was, so a metrics query,
 // a log search and a source read look different at a glance; a running one
@@ -88,37 +89,6 @@ interface PhaseGroup {
 }
 
 type TimelineView = "phases" | "steps";
-
-// A turn of the step-by-step view: a model call's thinking and the tool
-// calls it led to. No thought when it's filtered out (its calls then show
-// without one) or for calls made before the first recorded thought.
-interface Turn {
-  key: string;
-  thought?: Thought;
-  steps: InvestigationStep[];
-}
-
-// Each step belongs to the latest thought that started before it: a model
-// call ends, then the tool calls it asked for run, then the next call
-// starts. Turns are cut by every thought, shown or not, so a hidden
-// thought's calls don't join the previous one's.
-function groupTurns(all: Thought[], shown: Thought[], steps: InvestigationStep[]): Turn[] {
-  const visible = new Set(shown.map((t) => t.id));
-  const turns: Turn[] = [{ key: "start", steps: [] }];
-  const starts = all.map((t) => ({ at: Date.parse(t.startedAt), t })).sort((a, b) => a.at - b.at);
-  let next = 0;
-  for (const step of [...steps].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt))) {
-    while (next < starts.length && starts[next].at <= Date.parse(step.startedAt)) {
-      const { t } = starts[next++];
-      turns.push({ key: t.id, thought: visible.has(t.id) ? t : undefined, steps: [] });
-    }
-    turns.at(-1)!.steps.push(step);
-  }
-  // Thoughts after the last step (the model's final call, or one still
-  // thinking).
-  for (const { t } of starts.slice(next)) turns.push({ key: t.id, thought: visible.has(t.id) ? t : undefined, steps: [] });
-  return turns.filter((turn) => turn.thought || turn.steps.length > 0);
-}
 
 // Phases in the order the agent first reached them.
 function groupByPhase(steps: InvestigationStep[]): PhaseGroup[] {
@@ -179,6 +149,10 @@ export function InvestigationTimeline({
   const took = run?.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : undefined;
   // Ticks up as the agent adds calls, rather than jumping.
   const callCount = Math.round(useCountUp(steps.length, { duration: 400 }));
+  const turnCount = countTurns(steps);
+  // A turn's own calls, whatever a search or filter leaves on show, for its
+  // caption.
+  const callsByTurn = useMemo(() => Map.groupBy(steps, (s) => s.turn), [steps]);
 
   // "/" opens search and focuses it, as in Sentry and GitHub.
   useEffect(() => {
@@ -272,6 +246,7 @@ export function InvestigationTimeline({
         <span className="tabular-nums">
           {took && `${took} · `}
           {callCount} tool {callCount === 1 ? "call" : "calls"}
+          {turnCount !== undefined && ` in ${turnCount} ${turnCount === 1 ? "turn" : "turns"}`}
           {run && ` · ${modelLabel(run.model, run.provider, run.reasoningEffort)}`}
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -352,8 +327,17 @@ export function InvestigationTimeline({
                   <li>
                     {/* Under a thought, its calls hang off a rail from the
                         thought's icon (15px: the row's padding and half the
-                        icon). */}
-                    <ol className={cn("flex flex-col", turn.thought && "ml-[15px] border-l pl-1.5")}>
+                        icon). Calls one model call made together get the
+                        rail with or without a thought, tinted, and a caption
+                        saying they ran at once. */}
+                    <ol
+                      className={cn(
+                        "flex flex-col",
+                        (turn.thought || parallel(turn)) && "ml-[15px] border-l pl-1.5",
+                        parallel(turn) && "border-brand/40",
+                      )}
+                    >
+                      {parallel(turn) && <ParallelCaption steps={callsByTurn.get(turn.key) ?? turn.steps} running={running} />}
                       {turn.steps.map((step) => (
                         <StepRow
                           key={step.id}
@@ -471,6 +455,27 @@ export function InvestigationTimeline({
         )}
       </div>
     </div>
+  );
+}
+
+// Two or more calls known to come from one model call.
+const parallel = (turn: Turn) => turn.together && turn.steps.length > 1;
+
+// "4 calls at once · 1.92 s", and what they'd have taken one after another
+// when that's at least half as long again. Times once every call is done.
+function ParallelCaption({ steps, running }: { steps: InvestigationStep[]; running: boolean }) {
+  const { calls, wallMs, serialMs } = turnTiming(steps);
+  return (
+    <li className={cn("px-2 pt-1 pb-0.5 text-muted-foreground text-xs", running && enterMotion)}>
+      <span className="font-medium text-foreground">{calls} calls at once</span>
+      {wallMs !== undefined && (
+        <span className="tabular-nums">
+          {" · "}
+          {formatDuration(wallMs)}
+          {serialMs !== undefined && serialMs >= 1.5 * wallMs && ` (${formatDuration(serialMs)} one after another)`}
+        </span>
+      )}
+    </li>
   );
 }
 

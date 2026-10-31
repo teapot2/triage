@@ -36,6 +36,8 @@ Method:
 4. Cover the whole dependency path, including services that look quiet. Ask what stopped emitting, not only what is loud.
 5. Form competing hypotheses and test each against evidence. Reject the ones the evidence contradicts.
 
+Make independent queries in the same turn: metrics, logs and traces for several services at once, then read the results together.
+
 Rules:
 - Every claim must cite evidence IDs exactly as tools returned them (ev_metric_1, ev_log_2, ...). Never invent an ID.
 - For a root_cause verdict give at least 3 hypotheses: one leading, the others plausible or rejected, each rejection with rejectedBecause citing evidence.

@@ -59,6 +59,27 @@ describe("QuestionRecorder", () => {
     return r.flush();
   });
 
+  it("marks each step with the model call that asked for it, even when its thought is dropped", () => {
+    const { r } = recorder("q_1");
+    r.startStep("call_0", "query_logs", {});
+    r.startThought("th_a");
+    r.endThought("th_a", { text: "Logs and traces at once." });
+    r.startStep("call_1", "query_logs", {});
+    r.startStep("call_2", "query_traces", {});
+    // An empty thought goes, but its calls still belong to it.
+    r.startThought("th_b");
+    r.endThought("th_b", {});
+    r.startStep("call_3", "deploy_history", {});
+    assert.deepEqual(r.question.thoughts?.map((t) => t.id), ["th_a"]);
+    assert.deepEqual(r.question.steps.map((s) => [s.id, s.turn]), [
+      ["call_0", undefined],
+      ["call_1", "th_a"],
+      ["call_2", "th_a"],
+      ["call_3", "th_b"],
+    ]);
+    return r.flush();
+  });
+
   it("batches saves while the answer streams, and flush writes the last state", async () => {
     const { r, saved } = recorder("q_1");
     for (const t of ["The pool ", "leaks ", "[ev_log_1]."]) r.appendAnswer(t);

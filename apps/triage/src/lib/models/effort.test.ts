@@ -33,6 +33,11 @@ describe("modelOptions", () => {
     assert.equal(modelOptions({ provider: "meta" }, cacheKey("ask", "inc_1"))?.openai.promptCacheKey, "triage:ask:inc_1");
     assert.equal(modelOptions({ provider: "meta" })?.openai.promptCacheKey, undefined);
   });
+
+  it("asks for parallel tool calls unless a stage turns them off", () => {
+    assert.equal(modelOptions({ provider: "meta" })?.openai.parallelToolCalls, true);
+    assert.equal(modelOptions({ provider: "meta" }, undefined, { parallel: false })?.openai.parallelToolCalls, false);
+  });
 });
 
 describe("effortsFor", () => {

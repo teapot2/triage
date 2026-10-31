@@ -106,6 +106,11 @@ export const investigationStepSchema = z.object({
   summary: z.string().optional(),
   evidenceIds: z.array(evidenceId),
   error: z.string().optional(),
+  // The model call that asked for it: its thought's ID. Calls from one model
+  // call share it and ran at the same time. Kept when the thought itself is
+  // dropped for being empty. Missing on runs recorded before Oct 31 and on
+  // stages that record no thoughts.
+  turn: z.string().optional(),
 });
 export type InvestigationStep = z.infer<typeof investigationStepSchema>;
 

@@ -322,6 +322,7 @@ describe("GET /api/export/investigation-trace", () => {
       summary: null,
       evidence_ids: null,
       error: null,
+      turn: null,
       reasoning: null,
       reasoning_kind: null,
       text: null,

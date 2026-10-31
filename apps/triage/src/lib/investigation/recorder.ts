@@ -35,6 +35,8 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
   rejectedReports = 0;
   private counters = new Map<EvidenceKind, number>();
   private writes: Promise<void> = Promise.resolve();
+  // The model call whose tool calls run now: the last thought started.
+  private currentCall: string | undefined;
 
   constructor(
     public incident: Incident,
@@ -54,7 +56,7 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
   }
 
   startStep(id: string, tool: ToolName, input: Record<string, unknown>) {
-    this.incident.steps.push(runningStep(id, tool, input));
+    this.incident.steps.push(runningStep(id, tool, input, this.currentCall));
     this.persist();
   }
 
@@ -67,6 +69,7 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
 
   // A model call began: shown as "Thinking…" until it ends.
   startThought(id: string) {
+    this.currentCall = id;
     this.incident.thoughts = startedThought(this.incident.thoughts, id);
     this.persist();
   }
@@ -154,6 +157,7 @@ export class QuestionRecorder implements StepRecorder, ThoughtRecorder {
   private counters = new Map<EvidenceKind, number>();
   private writes: Promise<void> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private currentCall: string | undefined;
 
   constructor(
     public question: Question,
@@ -163,7 +167,7 @@ export class QuestionRecorder implements StepRecorder, ThoughtRecorder {
   ) {}
 
   startStep(id: string, tool: ToolName, input: Record<string, unknown>) {
-    this.question.steps.push(runningStep(id, tool, input));
+    this.question.steps.push(runningStep(id, tool, input, this.currentCall));
     this.persist();
   }
 
@@ -180,6 +184,7 @@ export class QuestionRecorder implements StepRecorder, ThoughtRecorder {
   }
 
   startThought(id: string) {
+    this.currentCall = id;
     this.question.thoughts = startedThought(this.question.thoughts, id);
     this.persist();
   }
@@ -254,8 +259,8 @@ function assignId(counters: Map<EvidenceKind, number>, prefix: string, draft: Ev
   return { ...draft, id: `${prefix}${draft.kind}_${n}`, tool } as Evidence;
 }
 
-function runningStep(id: string, tool: ToolName, input: Record<string, unknown>): Step {
-  return { id, tool, input, status: "running", startedAt: new Date().toISOString(), evidenceIds: [] };
+function runningStep(id: string, tool: ToolName, input: Record<string, unknown>, turn?: string): Step {
+  return { id, tool, input, status: "running", startedAt: new Date().toISOString(), evidenceIds: [], ...(turn && { turn }) };
 }
 
 function completedStep(step: Step, summary: string, evidence: Evidence[]): Step {
