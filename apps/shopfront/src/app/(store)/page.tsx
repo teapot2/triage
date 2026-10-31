@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, type SQL } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, type SQL } from "drizzle-orm";
 import { ArrowRight, Leaf, RotateCcw, Truck } from "lucide-react";
 import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
@@ -7,7 +7,7 @@ import { ProductCard } from "@/components/product-card";
 import { Button } from "@/components/ui/button";
 import { db } from "@/db/client";
 import { products, type Product } from "@/db/schema";
-import { catalog, categories, categoryBlurbs, type Category } from "@/lib/catalog";
+import { catalog, categories, categoryBlurbs, newArrivals, type Category } from "@/lib/catalog";
 import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +54,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<Sea
   return (
     <>
       <Hero />
+      <Suspense>
+        <NewArrivals />
+      </Suspense>
       <CategoryTiles />
       <section id="shop" aria-labelledby="shop-title" className="mx-auto max-w-6xl scroll-mt-32 px-4 pt-20 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -105,6 +108,38 @@ async function ProductResults({ category, q }: { category: Category | undefined;
           </ul>
         )}
     </>
+  );
+}
+
+// The latest products, in catalog order. A nice-to-have above the fold, so
+// if it can't load the row is left out and the page carries on.
+async function NewArrivals() {
+  const rows = await db
+    .select()
+    .from(products)
+    .where(inArray(products.name, newArrivals))
+    .orderBy(asc(products.id))
+    .catch((err) => {
+      logger.error("home: failed to load new arrivals", { "error.message": String(err) });
+      return [] as Product[];
+    });
+  if (rows.length === 0) return null;
+  return (
+    <section aria-labelledby="new-arrivals-title" className="mx-auto max-w-6xl px-4 pt-20 sm:px-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <h2 id="new-arrivals-title" className="font-serif text-2xl font-semibold tracking-tight">
+          New arrivals
+        </h2>
+        <p className="text-sm text-muted-foreground">Just in from our makers</p>
+      </div>
+      <ul className="mt-6 grid grid-cols-2 gap-x-4 gap-y-10 sm:gap-x-6 lg:grid-cols-4">
+        {rows.map((p) => (
+          <li key={p.id}>
+            <ProductCard product={p} />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

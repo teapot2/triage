@@ -136,12 +136,47 @@ export const catalog: NewProduct[] = [
     art: "planter",
     tint: "clay",
   },
+  // New arrivals (see newArrivals below).
+  {
+    name: "Stoneware Pasta Bowls, Set of 2",
+    category: "Tableware",
+    priceCents: 5200,
+    description: "Wide, low bowls in a glossy sage glaze, deep enough for soup and broad enough for pasta.",
+    ratingTenths: 49,
+    reviewCount: 38,
+    art: "bowl",
+    tint: "sage",
+  },
+  {
+    name: "Linen Apron",
+    category: "Linen",
+    priceCents: 4600,
+    description: "A full-length apron in heavy washed linen, with a deep front pocket and long ties.",
+    ratingTenths: 47,
+    reviewCount: 27,
+    art: "towel",
+    tint: "sand",
+  },
+  {
+    name: "Ribbed Ceramic Vase",
+    category: "Home",
+    priceCents: 6400,
+    description: "A tall vase with a hand-carved ribbed body, glazed inside to hold water.",
+    ratingTenths: 48,
+    reviewCount: 19,
+    art: "vase",
+    tint: "clay",
+  },
 ];
+
+// Just in from our makers, featured on the home page. Their first delivery
+// hasn't been counted into stock yet, so they show as sold out until it is.
+export const newArrivals = ["Stoneware Pasta Bowls, Set of 2", "Linen Apron", "Ribbed Ceramic Vase"];
 
 // Units on hand when seeded, by product name. A spread on purpose: plenty,
 // a few left, and one sold out, so every buy box state is on the shelf.
-// The Cast Iron Teapot is left out: it has no stock row yet, which shows as
-// sold out.
+// The Cast Iron Teapot and the new arrivals are left out: they have no stock
+// row yet, which shows as sold out.
 export const openingStock: Record<string, number> = {
   "Stoneware Mug": 64,
   "Speckled Serving Bowl": 18,
