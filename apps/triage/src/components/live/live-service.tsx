@@ -2,7 +2,7 @@
 
 import { ArrowDownIcon, LoaderCircleIcon, PauseIcon, PlayIcon, SearchIcon, XIcon } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useState } from "react";
 import { formatTime } from "@/components/incident/format";
 import { type ChartMarker, MetricChart, type TimeRange } from "@/components/incident/metric-chart";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -80,6 +80,8 @@ export function LiveService({ service }: { service: string }) {
   const stale = snapshot && (silentFor === undefined || silentFor > STALE_MS);
   const markers: ChartMarker[] = (snapshot?.incidents ?? []).map((i) => ({ t: i.detectedAt, label: "Incident" }));
   const onSelect = watched ? setSelection : undefined;
+  // Each chart's points as drawn, the window on screen (held while paused).
+  const exportAs = { subject: { kind: "service", id: service, name: service } };
 
   return (
     <div className="flex flex-col gap-6">
@@ -161,6 +163,7 @@ export function LiveService({ service }: { service: string }) {
               markers={markers}
               selection={selection}
               onSelect={onSelect}
+              exportAs={exportAs}
             />
             <ChartCard
               title="p95 latency"
@@ -171,6 +174,7 @@ export function LiveService({ service }: { service: string }) {
               selection={selection}
               onSelect={onSelect}
               threshold={snapshot.limits.p95Ms}
+              exportAs={exportAs}
               note={snapshot.limits.p95Ms ? "All routes together; the line is the API latency rule's limit." : undefined}
             />
             <ChartCard
@@ -182,6 +186,7 @@ export function LiveService({ service }: { service: string }) {
               selection={selection}
               onSelect={onSelect}
               threshold={snapshot.limits.errorPercent}
+              exportAs={exportAs}
             />
             <ChartCard
               title="Database connections in use"
@@ -192,6 +197,7 @@ export function LiveService({ service }: { service: string }) {
               selection={selection}
               onSelect={onSelect}
               threshold={snapshot.limits.poolMax}
+              exportAs={exportAs}
               note={waitingNote(snapshot.series.poolWaiting)}
               empty="No connection pool readings in this window"
             />
@@ -390,6 +396,7 @@ function ChartCard({
   markers,
   selection,
   onSelect,
+  exportAs,
   note,
   empty = "No requests in this window",
 }: {
@@ -401,6 +408,7 @@ function ChartCard({
   markers?: ChartMarker[];
   selection?: TimeRange;
   onSelect?: (range: TimeRange | undefined) => void;
+  exportAs?: ComponentProps<typeof MetricChart>["exportAs"];
   note?: string;
   // What to say when every point is a gap.
   empty?: string;
@@ -424,6 +432,7 @@ function ChartCard({
           markers={markers}
           selection={selection}
           onSelect={onSelect}
+          exportAs={exportAs}
         />
       )}
       {note && <p className="text-muted-foreground text-xs">{note}</p>}

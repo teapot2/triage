@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ReferenceArea, ReferenceLine, XAxis, YAxis } from "recharts";
 import {
   type ChartConfig,
@@ -8,6 +8,9 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import { ExportMenu } from "@/components/export-menu";
+import type { ExportSubject } from "@/lib/export/dataset";
+import { chartRows, chartSeriesDataset } from "@/lib/export/datasets/chart";
 import type { ChartPoint } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { formatTime } from "./format";
@@ -55,6 +58,7 @@ export function MetricChart({
   onHover,
   selection,
   onSelect,
+  exportAs,
   className,
 }: {
   series: ChartPoint[];
@@ -74,6 +78,9 @@ export function MetricChart({
   // Makes the chart selectable: drag across it to pick a range; a click
   // without a drag clears it (undefined).
   onSelect?: (range: TimeRange | undefined) => void;
+  // Offers the points drawn as CSV or JSON, named for this subject, from an
+  // icon in the top-right corner.
+  exportAs?: { subject: ExportSubject };
   className?: string;
 }) {
   // The range being dragged out, from where the drag started to the point
@@ -127,11 +134,21 @@ export function MetricChart({
   const fillSplit = lowerIsWorse ? 0 : split(0);
   const [above, below] = lowerIsWorse ? ["var(--color-value)", "var(--destructive)"] : ["var(--destructive)", "var(--color-value)"];
 
-  return (
+  // Named for the chart, so two charts' exports differ in the palette.
+  const dataset = useMemo(() => ({ ...chartSeriesDataset, name: label }), [label]);
+  // Only whether to export: callers pass a fresh exportAs object each render.
+  const exporting = exportAs !== undefined;
+  const rows = useMemo(
+    () => (exporting ? chartRows(series, { metric: label, unit, limit: threshold }) : []),
+    [exporting, series, label, unit, threshold],
+  );
+
+  const chart = (
     <ChartContainer config={config} className={cn("aspect-auto h-40 w-full", className)}>
       <AreaChart
         data={series}
-        margin={compact ? { left: 0, right: 0, top: 4, bottom: 0 } : { left: 0, right: 8, top: 8, bottom: 0 }}
+        // With an export button, the plot ends left of it rather than under it.
+        margin={compact ? { left: 0, right: 0, top: 4, bottom: 0 } : { left: 0, right: exporting ? 32 : 8, top: 8, bottom: 0 }}
         className={cn(onSelect && "cursor-crosshair select-none")}
         onMouseMove={(state) => {
           onHover?.(state.isTooltipActive ? series[Number(state.activeTooltipIndex)] : undefined);
@@ -171,6 +188,8 @@ export function MetricChart({
         <YAxis hide={compact} tickLine={false} axisLine={false} width={44} />
         <ChartTooltip
           cursor={compact ? { stroke: "var(--muted-foreground)", strokeWidth: 1 } : undefined}
+          // Above the export button, which is above the chart.
+          wrapperStyle={exporting ? { zIndex: 20 } : undefined}
           content={
             compact ? (
               () => null
@@ -242,5 +261,16 @@ export function MetricChart({
         />
       </AreaChart>
     </ChartContainer>
+  );
+  if (!exportAs) return chart;
+  // Over the chart's surface, which spans the gutter and would take its
+  // clicks, but under the tooltip (wrapperStyle above).
+  return (
+    <div className="relative">
+      <div className="absolute top-0 right-0 z-10">
+        <ExportMenu iconOnly size="xs" exports={[{ dataset, rows, subject: exportAs.subject }]} />
+      </div>
+      {chart}
+    </div>
   );
 }

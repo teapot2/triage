@@ -46,7 +46,7 @@ import type { Evidence, EvidenceKind } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Timestamp } from "@/components/timestamp";
 import { formatDuration } from "./format";
-import { MetricChart } from "./metric-chart";
+import { EvidenceMetricChart } from "./incident-export";
 import { LogLevelBadge } from "./outcome-badges";
 import { evidenceTitle, metricLabel } from "./metric-labels";
 
@@ -367,7 +367,7 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
               </span>
             </Field>
           </div>
-          <MetricChart series={evidence.series} label={metricLabel(evidence.metric)} unit={evidence.unit} className="h-48" />
+          <EvidenceMetricChart series={evidence.series} label={metricLabel(evidence.metric)} unit={evidence.unit} className="h-48" />
           {/* Metric names run long with labels and have no spaces; break
               anywhere rather than scroll the panel sideways. */}
           <span className="break-all font-mono text-muted-foreground text-xs">{evidence.metric}</span>

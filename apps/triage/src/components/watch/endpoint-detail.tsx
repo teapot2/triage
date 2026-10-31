@@ -176,7 +176,13 @@ export function EndpointDetail({ id }: { id: string }) {
                 </p>
               ) : (
                 <div className="flex flex-col gap-2 rounded-lg border p-4">
-                  <MetricChart series={points} label="Response time" unit="ms" threshold={check.slowMs} />
+                  <MetricChart
+                    series={points}
+                    label="Response time"
+                    unit="ms"
+                    threshold={check.slowMs}
+                    exportAs={{ subject: { kind: "endpoint", id: check.id, name: check.name } }}
+                  />
                 </div>
               )}
             </Section>

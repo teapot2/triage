@@ -23,6 +23,7 @@ import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { EndpointCard } from "./endpoint-card";
 import { FailedRunNotice } from "./failed-run-notice";
 import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
+import { incidentSubject } from "./incident-export";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { type ChartMarker, MetricChart } from "./metric-chart";
 import { lowerIsWorse, metricLabel } from "./metric-labels";
@@ -195,6 +196,7 @@ export function IncidentReport({
             threshold={trigger.threshold}
             lowerIsWorse={lowerIsWorse(trigger.metric)}
             markers={markers}
+            exportAs={{ subject: incidentSubject(incident) }}
           />
         </div>
       </div>
