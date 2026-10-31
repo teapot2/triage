@@ -129,10 +129,10 @@ describe("GET /api/export/postmortem-actions", () => {
       `"${kind}, from the postmortem of ""p95 latency and 500s on GET /api/products/:id"": http://localhost:3021/incidents/inc_export_pm"`;
     const link = "inc_export_pm,http://localhost:3021/incidents/inc_export_pm";
     assert.deepEqual(csvRows(await text(res)), [
-      "title,description,priority,labels,incident_id,incident_url,evidence_ids",
-      `Lint for pooled clients acquired without a release in a finally block,${description("Prevent the class")},P2,postmortem;prevent_class,${link},ev_source_stock`,
-      `Alert when DB pool connections in use stay at the maximum for 2 minutes,${description("Detect sooner")},P2,postmortem;detect_sooner,${link},ev_metric_pool`,
-      `Document turning off FF_STOCK_DIRECT_QUERY in the shopfront runbook,${description("Mitigate faster")},P3,postmortem;mitigate_faster,${link},ev_commit_flag`,
+      "title,description,priority,labels,owner,due_date,incident_id,incident_url,evidence_ids",
+      `Lint for pooled clients acquired without a release in a finally block,${description("Prevent the class")},P2,postmortem;prevent_class,,,${link},ev_source_stock`,
+      `Alert when DB pool connections in use stay at the maximum for 2 minutes,${description("Detect sooner")},P2,postmortem;detect_sooner,,,${link},ev_metric_pool`,
+      `Document turning off FF_STOCK_DIRECT_QUERY in the shopfront runbook,${description("Mitigate faster")},P3,postmortem;mitigate_faster,,,${link},ev_commit_flag`,
     ]);
   });
 
@@ -147,6 +147,8 @@ describe("GET /api/export/postmortem-actions", () => {
       description: 'Mitigate faster, from the postmortem of "p95 latency and 500s on GET /api/products/:id": https://triage.example.com/incidents/inc_export_pm',
       priority: "P3",
       labels: "postmortem;mitigate_faster",
+      owner: null,
+      due_date: null,
       incident_id: "inc_export_pm",
       incident_url: "https://triage.example.com/incidents/inc_export_pm",
       evidence_ids: "ev_commit_flag",

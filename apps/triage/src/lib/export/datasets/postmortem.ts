@@ -34,6 +34,10 @@ export const postmortemActions = defineDataset<ActionItemRow>({
     // Two labels, semicolon-separated: one to find every postmortem item,
     // one for its kind. The kind stays in snake_case, as labels take no spaces.
     { key: "labels", value: ({ item }) => `postmortem;${item.kind}` },
+    // Left for the team, as in the postmortem's own table: empty columns an
+    // importer can map to assignee and due date.
+    { key: "owner", value: () => undefined },
+    { key: "due_date", value: () => undefined },
     { key: "incident_id", value: ({ incident }) => incident.id },
     { key: "incident_url", value: ({ url }) => url },
     { key: "evidence_ids", value: ({ item }) => item.evidenceIds?.join(" ") },
