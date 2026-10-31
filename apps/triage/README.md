@@ -29,7 +29,7 @@ pnpm check:sandbox  # proves a known-good fix in the sandbox, no model calls
 - `GET /api/health` returns each stage's provider, model and any problem (`{ ok, stages }`) without calling a model.
 - `GET /api/ping-model?stage=<id>` (or `?provider=<id>&model=<id>`) calls that model once and returns `{ ok, text, usage }`.
 - `GET`/`PUT /api/settings/models` read and change each stage's model and the local/custom endpoints (keys are write-only). `GET /api/settings/models/list?provider=<id>` lists a provider's chat models.
-- `POST /api/investigations` with `{ "scenario": "pool-leak" | "healthy" }` starts an investigation and returns `{ id }` (202). The agent runs after the response and saves progress to `.data/incidents/<id>.json` (gitignored); open `/incidents/<id>` to watch it.
+- `POST /api/investigations` with `{ "scenario": "pool-leak" | "price-gap" | "healthy" }` starts an investigation and returns `{ id }` (202). The agent runs after the response and saves progress to `.data/incidents/<id>.json` (gitignored); open `/incidents/<id>` to watch it.
 
 ## Watch (Stage 1)
 
@@ -100,6 +100,8 @@ Once an incident has a finished report that isn't healthy, its **Postmortem** se
 
 `src/lib/investigation/` holds Stage 2: a `ToolLoopAgent` on the Investigate stage's model (Settings → Models) with seven telemetry tools and a `submit_report` tool. Reports are validated (schema, `reportProblems`, unknown evidence IDs, every service queried); rejections go back to the model to fix. Tools read from a `TelemetrySource`; today that is a recorded scenario in `scenarios/`, and the live telemetry store will implement the same interface.
 
+**Scenarios and grading.** `scenarios/` holds three recorded runs: `pool-leak`, `price-gap` and `healthy`. `price-gap` is the price list gap: 500s on `GET /api/products/[id]` after `FF_LIST_PRICES` went on, raised by the Server errors rule and replayed from a real run's telemetry, database diagnostics and Shopfront files. Each scenario carries its ground truth as `expected`, which never shows in the scenario's description, the tool descriptions or any query result (`scenarios.test.ts` checks). `grade(report, mitigation, expected, evidence)` in `scenarios/grade.ts` scores a finished run. A root cause hits when the summary or the leading hypothesis (its title and causal chain) names or cites a root-cause file, uses a word from every `mustMention` group, and the proposed mitigation matches. For `price-gap` that is `src/lib/prices.ts`; `product_prices`; stock or join; that the row is missing; and turning off `FF_LIST_PRICES`. A healthy scenario hits on any verdict but `root_cause`.
+
 ## Fix and proof (Stages 3 and 4)
 
 `src/lib/investigation/fix/` runs after a live run's root-cause verdict. The model reads the code and submits exact edits plus a new vitest regression test (`submit_fix`). `prove.ts` checks them in a throwaway copy of Shopfront under the OS temp dir (`fix/sandbox.ts`; node_modules linked, never the app itself). Three checks:
@@ -109,6 +111,16 @@ Once an incident has a finished report that isn't healthy, its **Postmortem** se
 3. The patched app must typecheck.
 
 A failed proof goes back to the model with the reasons (up to 4 submissions), and each rejection is kept on `fixRun.rejections`. A proven fix is saved as `fix` (with a git-style diff) and `validation` (each run's command, exit code and output), and the incident moves to `awaiting_approval`. Recorded scenarios stop at the diagnosis: they have no code to run.
+
+## Fixes that change stored data
+
+Some bugs leave bad rows behind that a code fix alone doesn't repair: the price list gap leaves products with no `product_prices` row. A fix may then add one migration under `drizzle/` that repairs those rows. Approving it takes an explicit acknowledgment.
+
+- **What counts:** Triage works it out from the edits, not from the model's word alone (`fix/data-change.ts`). A fix changes data when it adds or changes a file under `drizzle/` or ending in `.sql`, or adds upper-case SQL at the start of a statement that writes rows or changes the schema (`INSERT INTO`, `UPDATE … SET`, `DELETE FROM`, `ALTER`, `CREATE` or `DROP` of a table, index and the like, `TRUNCATE`). It also counts when the model says the fix touches data (`touchesData`). Drizzle query-builder writes (`db.insert(...)`) don't count. The result is saved on the fix as `dataChange` (`detected`, `reasons`, `files`, `unproven`); older fixes have it worked out from their patch, without the regression test.
+- **The migration:** the model creates it with an edit whose `find` is empty, named `drizzle/<words>.sql`. Triage renames it to the next number (`drizzle/0005_backfill_product_prices.sql`) and writes its entry in `drizzle/meta/_journal.json` itself (`fix/migration.ts`), with a `when` later than the last entry's, since Drizzle's migrator skips older ones. The model never edits the journal, and no snapshot is written. Triage sends back a fix with more than one new migration, or one whose migration changes the schema (`ALTER`, `CREATE`, `DROP` go through `db:generate`).
+- **Never run:** Triage never runs the SQL. The sandbox proves the code half as usual but runs no migration, so the Fix section and the approve dialog mark the migration and the journal "Not proven in the sandbox".
+- **The acknowledgment:** the approve dialog shows a "Changes stored data" banner with the reasons, the SQL and the journal entry. Approve stays disabled until "I've reviewed the data change" is ticked. `POST /api/incidents/<id>/approval` answers 409 to an approval of such a fix unless it sends `"dataReviewed": true`, and the approval records `dataReviewed`. Deny needs nothing.
+- **The PR:** its description opens with a warning that the data change wasn't proven, the reasons, and a checklist: review the SQL, run it against a copy of production data, and note that merging ships it with the deploy.
 
 ## Pull request (Stage 5)
 
