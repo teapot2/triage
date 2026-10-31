@@ -2,11 +2,21 @@
 
 import { CircleDotIcon, ServerIcon, SignalIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ExportMenu } from "@/components/export-menu";
 import { SeverityBars, severityLabel, StatusIcon, statusGroupOf, statusLabel } from "@/components/incident/status-badges";
 import { type FilterFacet, FilterChips, FilterMenu, type FilterValues } from "@/components/list-controls/filter-menu";
 import { SearchInput } from "@/components/list-controls/search-input";
+import { incidentList } from "@/lib/export/datasets/incidents";
 import { severityIds, statusIds } from "@/lib/sidebar-filters";
-import { type IncidentFacet, type IncidentFilters, incidentFacetIds, isFiltering, type ListParams } from "./list-params";
+import {
+  defaultPageSize,
+  type IncidentFacet,
+  type IncidentFilters,
+  incidentFacetIds,
+  isFiltering,
+  type ListParams,
+  listHref,
+} from "./list-params";
 import { IncidentSortMenu } from "./sort-menu";
 import { useListNavigation } from "./use-list-navigation";
 
@@ -74,6 +84,9 @@ export function IncidentToolbar({
   };
 
   const facets = incidentFacets(counts);
+  // The list's own query (search, filters, sort), so the file holds the rows
+  // shown, on every page; the size and page are left out of the link.
+  const exportParams = Object.fromEntries(new URLSearchParams(listHref({ ...params, size: defaultPageSize, page: 1 }).split("?")[1]));
   return (
     <div className="flex flex-col gap-2">
       {/* The search box gives way to its own row on narrow screens. */}
@@ -88,6 +101,7 @@ export function IncidentToolbar({
         <div className="flex items-center gap-2">
           <FilterMenu facets={facets} values={params.filters} onChange={setFilters} />
           <IncidentSortMenu params={params} variant="outline" />
+          <ExportMenu exports={[{ dataset: incidentList, params: exportParams }]} />
         </div>
       </div>
       {(isFiltering(params) || query.trim() !== "") && (

@@ -4,10 +4,12 @@ import { CopyIcon, DownloadIcon, FileTextIcon, LoaderCircleIcon, RotateCcwIcon }
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ExportMenu } from "@/components/export-menu";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { postmortemActions } from "@/lib/export/datasets/postmortem";
 import { downloadText } from "@/lib/export/download";
 import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
 import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
@@ -233,6 +235,8 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
             <DownloadIcon />
             Download
           </Button>
+          {/* The action items alone, to file as tickets. */}
+          {pm.actionItems?.length ? <ExportMenu exports={[{ dataset: postmortemActions, params: { id: incident.id } }]} /> : null}
         </div>
       </div>
       <article className="rounded-lg border px-4 py-5 sm:px-8 sm:py-7">
