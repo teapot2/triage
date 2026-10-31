@@ -213,7 +213,9 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
 // The write gate's confirmation: approving is the one action that changes
 // something outside Triage, so it says what will happen and asks once. A
 // fix that changes stored data also shows that change, and Approve waits
-// for the box saying it was reviewed.
+// for the box saying it was reviewed. That change can be taller than the
+// window, so it scrolls between a fixed header and footer, and Cancel and
+// Approve stay in reach.
 export function ApproveDialog({
   fix,
   opensPr,
@@ -240,7 +242,7 @@ export function ApproveDialog({
         onOpenChange(next);
       }}
     >
-      <AlertDialogContent className={cn(change.detected && "data-[size=default]:sm:max-w-lg")}>
+      <AlertDialogContent className={cn(change.detected && "flex flex-col data-[size=default]:sm:max-w-lg")}>
         <AlertDialogHeader>
           <AlertDialogTitle>Approve this fix?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -257,7 +259,9 @@ export function ApproveDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         {change.detected && (
-          <DataChangeReview fix={fix} change={change} reviewed={reviewed} onReviewedChange={setReviewed} />
+          <div className="-mx-4 min-h-0 overflow-y-auto overscroll-contain px-4 pb-1 scrollbar-subtle">
+            <DataChangeReview fix={fix} change={change} reviewed={reviewed} onReviewedChange={setReviewed} />
+          </div>
         )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

@@ -45,7 +45,7 @@ export function DataChangeReview({
       <Alert variant="warning" icon={<DatabaseIcon />}>
         <AlertTitle>Changes stored data</AlertTitle>
         <AlertDescription className="flex flex-col gap-1.5">
-          <ul className="list-disc pl-4">
+          <ul className="list-disc pl-4 wrap-anywhere">
             {change.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
@@ -67,7 +67,7 @@ export function DataChangeReview({
               Not proven in the sandbox
             </Badge>
           </div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-xs leading-relaxed">
+          <pre className="max-h-[min(12rem,25dvh)] overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-2 font-mono text-xs leading-relaxed">
             {sqlText(fix, file)}
           </pre>
         </div>
