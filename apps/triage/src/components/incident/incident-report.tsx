@@ -15,9 +15,10 @@ import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { dataChangeOf } from "@/lib/investigation/fix/data-change";
-import type { ChartPoint, Incident } from "@/lib/investigation/schema";
+import type { Incident } from "@/lib/investigation/schema";
 import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
+import { chartSeries } from "./chart-series";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { EndpointCard } from "./endpoint-card";
 import { FailedRunNotice } from "./failed-run-notice";
@@ -276,33 +277,4 @@ function resolutionMarkers(incident: Incident): ChartMarker[] {
     ...[...resolved].map((t): ChartMarker => ({ t, label: "resolved", tone: "success" })),
     ...reopenings.map((r): ChartMarker => ({ t: r.at, label: "reopened", tone: "warning" })),
   ];
-}
-
-// How far past the last point a marker may stretch the chart: a reopening
-// by hand comes after the verification's last minute. Further than this the
-// chart's scale would say nothing, and the notice says it instead.
-const STRETCH_MS = 30 * 60_000;
-
-// The alert's metric as far as it was watched: the alert's series, the
-// recovery watch's, then the verification's, one point per time. Empty
-// minutes stretch it to a marker shortly after its last point.
-function chartSeries(incident: Incident, markers: ChartMarker[]): ChartPoint[] {
-  const byTime = new Map<string, ChartPoint>();
-  for (const p of [
-    ...incident.trigger.series,
-    ...(incident.mitigation?.recovery?.series ?? []),
-    ...(incident.verification?.series ?? []),
-  ]) {
-    if (!byTime.has(p.t)) byTime.set(p.t, p);
-  }
-  const series: ChartPoint[] = [...byTime.values()].sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
-  if (series.length < 2) return series;
-  const end = Date.parse(series[series.length - 1].t);
-  const step = end - Date.parse(series[series.length - 2].t) || 60_000;
-  const reach = Math.max(
-    end,
-    ...markers.map((m) => Date.parse(m.t)).filter((t) => t > end && t - end <= STRETCH_MS),
-  );
-  for (let t = end + step; t - step < reach; t += step) series.push({ t: new Date(t).toISOString(), value: null });
-  return series;
 }
