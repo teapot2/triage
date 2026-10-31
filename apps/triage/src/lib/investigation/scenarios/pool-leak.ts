@@ -280,4 +280,10 @@ export const poolLeak: Scenario = {
   ],
   // The flag off and held connections recycled: the queue drains in minutes.
   recovery: [2910, 1480, 520, 210, 140, 121].map((value, i) => ({ t: minutesBefore(now, -i), value })),
+  expected: {
+    verdict: "root_cause",
+    rootCauseFiles: ["src/lib/stock.ts"],
+    mustMention: [["release"], ["pool", "connection"]],
+    mitigation: { kind: "flag_off", target: "FF_STOCK_DIRECT_QUERY" },
+  },
 };

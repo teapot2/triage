@@ -35,6 +35,19 @@ export interface Scenario {
   deploys: DeployRecord[];
   // The alert's metric after the mitigation, for the simulated apply.
   recovery?: MetricPoint[];
+  // Ground truth for grading a run (grade.ts). Never reaches the model:
+  // createScenarioSource doesn't read it.
+  expected?: Expected;
+}
+
+export interface Expected {
+  verdict: "root_cause" | "no_root_cause";
+  // Shopfront paths; the diagnosis must name or cite one of them.
+  rootCauseFiles: string[];
+  // Each inner list is one point the diagnosis must make, in any of these
+  // words (case-insensitive).
+  mustMention: string[][];
+  mitigation?: { kind: "flag_off"; target: string };
 }
 
 const levelRank = { debug: 0, info: 1, warn: 2, error: 3 } as const;

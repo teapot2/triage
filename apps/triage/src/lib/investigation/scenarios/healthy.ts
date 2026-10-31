@@ -170,4 +170,5 @@ export const healthy: Scenario = {
     ...commonCommits(now),
   ],
   deploys: [{ service: "shopfront", sha: "e4f1a07", deployedAt: minutesBefore(now, 60 * 6 - 5) }],
+  expected: { verdict: "no_root_cause", rootCauseFiles: [], mustMention: [] },
 };
