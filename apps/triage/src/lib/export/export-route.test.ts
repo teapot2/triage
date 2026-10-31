@@ -52,7 +52,20 @@ function assertDownload(res: Response, contentType: string, filename: RegExp) {
 
 describe("GET /api/export/[dataset]", () => {
   it("registers each dataset once, by its id", () => {
-    assert.deepEqual([...exportEntries.keys()], ["endpoint-results", "endpoint-hourly", "incidents", "postmortem-actions"]);
+    assert.deepEqual([...exportEntries.keys()], [
+      "endpoint-results",
+      "endpoint-hourly",
+      "incidents",
+      "postmortem-actions",
+      "incident",
+      "evidence-logs",
+      "evidence-spans",
+      "evidence-metrics",
+      "evidence-db",
+      "investigation-trace",
+      "fix-patch",
+      "ask-answers",
+    ]);
   });
 
   it("writes an endpoint's results as CSV", async () => {

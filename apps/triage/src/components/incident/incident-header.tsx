@@ -4,6 +4,7 @@ import { CheckCheckIcon, CheckIcon, EllipsisIcon, LoaderCircleIcon, RotateCcwIco
 import Link from "next/link";
 import { useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
+import { ExportMenu } from "@/components/export-menu";
 import { StickyHeader } from "@/components/sticky-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import type { Incident } from "@/lib/investigation/schema";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
+import { incidentExports } from "./incident-export";
 import { MetricBadges } from "./outcome-badges";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
@@ -137,7 +139,12 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
           </nav>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <h1 className="font-heading font-semibold text-2xl tracking-tight">{incident.title}</h1>
-            {actions}
+            {/* Export stays out of the sticky bar: it's for checking the
+                record, not an action to keep in reach. */}
+            <div className="flex items-center gap-2">
+              {actions}
+              <ExportMenu exports={incidentExports(incident)} />
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-muted-foreground text-sm">
             {/* The badges first (state, severity, value against its limit),

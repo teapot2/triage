@@ -2,12 +2,31 @@ import { z } from "zod";
 import { parseListParams } from "@/app/list-params";
 import { filterIncidents } from "@/lib/investigation/filter";
 import { sortIncidents } from "@/lib/investigation/sort";
+import type { Incident } from "@/lib/investigation/schema";
 import { getIncident, listIncidents } from "@/lib/investigation/store";
 import { checkIdPattern, readChecks } from "@/lib/investigation/uptime/checks";
 import { readHourly, readSamplesSince } from "@/lib/investigation/uptime/samples";
 import { endpointHourly, endpointResults } from "./datasets/endpoint";
+import {
+  answerRows,
+  askAnswers,
+  dbRows,
+  evidenceDb,
+  evidenceLogs,
+  evidenceMetrics,
+  evidenceSpans,
+  fixPatch,
+  incidentRecord,
+  incidentSubject,
+  investigationTrace,
+  logRows,
+  metricRows,
+  spanRows,
+  traceRows,
+} from "./datasets/incident";
 import { incidentList, incidentUrl } from "./datasets/incidents";
 import { postmortemActions } from "./datasets/postmortem";
+import type { Dataset } from "./dataset";
 import { defineExport, exportRegistry } from "./registry";
 
 // Every server export, by dataset id: /api/export/<id>. Add one per line.
@@ -32,6 +51,20 @@ const listParams = z.object({ q: listKey, status: listKey, severity: listKey, se
 
 // As the store names incident files.
 const incidentParams = z.object({ id: z.string().regex(/^inc_[a-z0-9_]+$/, "id: an incident id (inc_ and lowercase letters, digits or _)") });
+
+// An incident's export: a 404 without the incident, or when it has nothing
+// of this kind (no spans, no fix), as the page then offers no such file.
+function incidentExport<Row>(dataset: Dataset<Row>, rowsOf: (incident: Incident) => Row[]) {
+  return defineExport({
+    dataset,
+    params: incidentParams,
+    load: async ({ id }) => {
+      const incident = await getIncident(id);
+      const rows = incident ? rowsOf(incident) : [];
+      return incident && rows.length > 0 ? { subject: incidentSubject(incident), rows } : undefined;
+    },
+  });
+}
 
 export const exportEntries = exportRegistry([
   defineExport({
@@ -80,4 +113,12 @@ export const exportEntries = exportRegistry([
       };
     },
   }),
+  incidentExport(incidentRecord, (incident) => [incident]),
+  incidentExport(evidenceLogs, logRows),
+  incidentExport(evidenceSpans, spanRows),
+  incidentExport(evidenceMetrics, metricRows),
+  incidentExport(evidenceDb, dbRows),
+  incidentExport(investigationTrace, traceRows),
+  incidentExport(fixPatch, (incident) => (incident.fix ? [incident.fix] : [])),
+  incidentExport(askAnswers, answerRows),
 ]);

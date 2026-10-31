@@ -21,11 +21,13 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { useCountUp } from "@/hooks/use-count-up";
+import { incidentSubject, investigationTrace, traceRows } from "@/lib/export/datasets/incident";
 import type { InvestigationStep, Run, Thought, ToolName } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations, evidenceIcons, useEvidence } from "./evidence";
 import { modelLabel } from "@/lib/models/labels";
 import { formatDuration, formatTime } from "./format";
+import { useIncident } from "./incident-export";
 import { evidenceTitle } from "./metric-labels";
 import { activeFilterCount, emptyFilters, type Filters, filterSteps, matchSnippet } from "./log-filters";
 import { LogToolbar } from "./log-toolbar";
@@ -156,6 +158,7 @@ export function InvestigationTimeline({
   const [openedLive] = useState(running);
   const view: TimelineView = thoughts.length > 0 ? (chosenView ?? (openedLive ? "steps" : "phases")) : "phases";
   const { byId, numberOf, open, focused, covered } = useEvidence();
+  const incident = useIncident();
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -250,6 +253,13 @@ export function InvestigationTimeline({
   const rowCount = shownThoughts.length + (filtering ? shown : steps).length;
   const lastThought = thoughts.at(-1)?.id;
   const nothingShown = view === "phases" ? groups.length === 0 : rowCount === 0;
+  // The rows on show, in the trace export's shape, to hand on what a
+  // search found. The phases view shows no thoughts.
+  const exportAs = incident && {
+    dataset: investigationTrace,
+    rows: traceRows({ run, steps: shown, thoughts: view === "steps" ? shownThoughts : [] }),
+    subject: incidentSubject(incident),
+  };
   const changeView = (next: TimelineView) => {
     setView(next);
     // Type is a step-by-step filter; the phases hold only tool calls.
@@ -312,6 +322,7 @@ export function InvestigationTimeline({
             total={view === "steps" ? steps.length + thoughts.length : steps.length}
             thoughtCount={view === "steps" ? thoughts.length : 0}
             inputRef={inputRef}
+            exportAs={exportAs}
           />
         )}
 

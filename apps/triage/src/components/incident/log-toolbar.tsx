@@ -2,6 +2,7 @@
 
 import { CircleDotIcon, FileSearchIcon, type LucideIcon, ServerIcon, ShapesIcon, WrenchIcon } from "lucide-react";
 import type { RefObject } from "react";
+import { ExportMenu, type ExportSource } from "@/components/export-menu";
 import { type FilterFacet, FilterChips, FilterMenu } from "@/components/list-controls/filter-menu";
 import { SearchInput } from "@/components/list-controls/search-input";
 import type { InvestigationStep } from "@/lib/investigation/schema";
@@ -31,6 +32,7 @@ export function LogToolbar({
   total = steps.length,
   thoughtCount = 0,
   inputRef,
+  exportAs,
 }: {
   steps: InvestigationStep[];
   query: string;
@@ -44,6 +46,8 @@ export function LogToolbar({
   // offers Type (thoughts or tool calls). Without, there's nothing to pick.
   thoughtCount?: number;
   inputRef: RefObject<HTMLInputElement | null>;
+  // What's shown, as a file, while a search or filter narrows it.
+  exportAs?: ExportSource;
 }) {
   const options = (facet: Facet) =>
     facet === "kind"
@@ -76,6 +80,7 @@ export function LogToolbar({
           shortcut="/"
         />
         <FilterMenu facets={menuFacets} values={filters} onChange={setFilters} />
+        {filtering && exportAs && <ExportMenu iconOnly exports={[exportAs]} />}
       </div>
       {filtering && (
         <FilterChips

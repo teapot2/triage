@@ -49,6 +49,7 @@ import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
 import { formatDuration } from "./format";
+import { AskExport } from "./incident-export";
 import { StepRow } from "./investigation-timeline";
 
 // Follow-up questions on a finished incident: the thread oldest first, then
@@ -398,6 +399,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   // composer sticks to the bottom of the window.
   return (
     <div ref={boxRef} className="flex flex-col @2xl:max-h-[var(--chat-max,calc(100dvh_-_6.5rem))]">
+      <AskExport incident={incident} className="flex shrink-0 justify-end pb-3" />
       <div
         ref={threadRef}
         // Wider than the column by a gutter each side, padded back in: a

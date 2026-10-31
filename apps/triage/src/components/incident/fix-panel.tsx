@@ -1,15 +1,21 @@
 "use client";
 
-import { ArrowRightIcon, ChevronRightIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronRightIcon, DownloadIcon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { Terminal } from "@/components/ai-elements/terminal";
+import { useRegisterCommands } from "@/components/command-registry";
 import { DiffViewer } from "@/components/diff-viewer";
+import { exportHref } from "@/components/export-menu";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { fixPatch } from "@/lib/export/datasets/incident";
+import { downloadUrl } from "@/lib/export/download";
 import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Fix, FixAttempt, FixRun, SandboxRun } from "@/lib/investigation/schema";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
+import { useIncident } from "./incident-export";
 import { HttpStatusBadge, TestResultBadge } from "./outcome-badges";
 
 // One line of proof the fix works, before -> after in the sandbox: the
@@ -200,10 +206,13 @@ export function FixView({
       </div>
 
       <Tabs defaultValue="diff" className="gap-3">
-        <TabsList variant="line">
-          <TabsTrigger value="diff">Diff</TabsTrigger>
-          {validation && <TabsTrigger value="sandbox">Sandbox output</TabsTrigger>}
-        </TabsList>
+        <div className="flex items-center justify-between gap-2">
+          <TabsList variant="line">
+            <TabsTrigger value="diff">Diff</TabsTrigger>
+            {validation && <TabsTrigger value="sandbox">Sandbox output</TabsTrigger>}
+          </TabsList>
+          <PatchDownload />
+        </div>
         <TabsContent value="diff">
           <DiffViewer patch={fix.patch} />
         </TabsContent>
@@ -218,5 +227,25 @@ export function FixView({
 
       <EarlierAttempts attempts={attempts} className="border-t pt-4" />
     </div>
+  );
+}
+
+// The diff as a file to `git apply`, exactly as stored: one format, so a
+// link rather than a menu. Also in the search palette.
+function PatchDownload() {
+  const incident = useIncident();
+  const href = incident && exportHref(fixPatch, { id: incident.id }, "patch");
+  useRegisterCommands(
+    "fix-patch",
+    href ? [{ id: "download-patch", group: "Export", label: "Download the fix as a .patch", icon: DownloadIcon, keywords: "export diff git apply", run: () => downloadUrl(href) }] : [],
+  );
+  if (!href) return null;
+  return (
+    <Button variant="ghost" size="xs" asChild>
+      <a href={href} download>
+        <DownloadIcon />
+        .patch
+      </a>
+    </Button>
   );
 }
