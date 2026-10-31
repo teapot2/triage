@@ -8,10 +8,11 @@ type Props = { params: Promise<{ id: string }> };
 
 // One uptime check. Its state and results change every few seconds, so the
 // page reads them in the browser, as the Watch list does; the shell
-// prerenders and the id is awaited inside Suspense (Cache Components).
+// prerenders and the id is awaited inside Suspense (Cache Components). The
+// detail lays out its own column, so its sticky header can span the page.
 export default function EndpointPage({ params }: Props) {
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 pt-2 pb-8 md:pt-8 sm:px-6">
+    <div className="pt-2 pb-8 md:pt-8">
       <Suspense fallback={<EndpointSkeleton />}>
         <Endpoint params={params} />
       </Suspense>

@@ -2,8 +2,9 @@
 
 import { CheckCheckIcon, CheckIcon, EllipsisIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, ShieldIcon, XIcon } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
+import { StickyHeader } from "@/components/sticky-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,16 +15,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Incident } from "@/lib/investigation/schema";
-import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
 import { MetricBadges } from "./outcome-badges";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
-
-// Height of the sticky bar; the report's section menu sticks below it.
-const BAR_HEIGHT = 48;
 
 // Why a deny with feedback starts no new attempt on this incident, or
 // undefined when it does: the client's view of canRerunFix. Only a fix
@@ -121,48 +118,15 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
     </div>
   );
 
-  const headerRef = useRef<HTMLElement>(null);
-  const [scrolledPast, setScrolledPast] = useState(false);
-  useEffect(() => {
-    const header = headerRef.current;
-    if (!header) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setScrolledPast(!entry.isIntersecting && entry.boundingClientRect.top < BAR_HEIGHT),
-      { rootMargin: `-${BAR_HEIGHT}px 0px 0px 0px` },
-    );
-    observer.observe(header);
-    return () => observer.disconnect();
-  }, []);
-
   return (
     <>
-      <div className="sticky top-0 z-20 h-0">
-        <div
-          inert={!scrolledPast}
-          aria-hidden={!scrolledPast}
-          style={{ height: BAR_HEIGHT }}
-          className={cn(
-            "absolute inset-x-0 top-0 border-b bg-background/95 backdrop-blur transition-[opacity,translate] duration-200 supports-backdrop-filter:bg-background/80 motion-reduce:transition-none",
-            scrolledPast ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0",
-          )}
-        >
-          <div className="mx-auto flex h-full w-full max-w-6xl items-center gap-3 px-4 sm:px-6">
-            <button
-              type="button"
-              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-              className="min-w-0 truncate text-left font-medium text-sm hover:text-muted-foreground"
-            >
-              {incident.title}
-            </button>
-            <span className="hidden shrink-0 sm:inline-flex">
-              <IncidentStatusBadge status={incident.status} />
-            </span>
-            <div className="ml-auto shrink-0">{actions}</div>
-          </div>
-        </div>
-      </div>
-
-      <header ref={headerRef} className="mx-auto w-full max-w-6xl px-4 pt-2 sm:px-6 md:pt-8">
+      <StickyHeader
+        title={incident.title}
+        status={<IncidentStatusBadge status={incident.status} />}
+        actions={actions}
+        column="max-w-6xl px-4 sm:px-6"
+        className="pt-2 md:pt-8"
+      >
         <div className="flex flex-col gap-2 border-b pb-4">
           <nav className="flex items-center gap-1.5 text-muted-foreground text-sm">
             <Link href="/" className="hover:text-foreground">
@@ -193,7 +157,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             </span>
           </div>
         </div>
-      </header>
+      </StickyHeader>
       <ReopenDialog
         open={reopeningOpen}
         onOpenChange={setReopeningOpen}

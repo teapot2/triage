@@ -1,14 +1,21 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { StickyHeader } from "@/components/sticky-header";
 
 // A Watch subpage's header: a breadcrumb back up (Watch / API latency /
 // Edit), the title with the page's actions beside it, and a line of facts
 // under it. The incident page's header, in miniature.
+//
+// With `sticky`, a compact bar keeps the title, `sticky.status` and the
+// actions (or `sticky.actions`, a shorter set) in view once the header scrolls
+// away. It then spans the page, so place it outside the page's column and pass
+// the column's width and gutters.
 export function WatchHeader({
   crumbs,
   current,
   title,
   actions,
+  sticky,
   children,
 }: {
   // Every level above this page, nearest last.
@@ -17,10 +24,11 @@ export function WatchHeader({
   current?: string;
   title: string;
   actions?: ReactNode;
+  sticky?: { status?: ReactNode; actions?: ReactNode; column: string };
   children?: ReactNode;
 }) {
-  return (
-    <header className="flex flex-col gap-2 border-b pb-6">
+  const body = (
+    <>
       <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-sm">
         {crumbs.map((c) => (
           <span key={c.href} className="flex items-center gap-1.5">
@@ -39,6 +47,18 @@ export function WatchHeader({
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
       {children && <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-muted-foreground text-sm">{children}</div>}
-    </header>
+    </>
+  );
+  if (!sticky) return <header className="flex flex-col gap-2 border-b pb-6">{body}</header>;
+  const barActions = sticky.actions ?? actions;
+  return (
+    <StickyHeader
+      title={title}
+      status={sticky.status}
+      actions={barActions && <div className="flex items-center gap-2">{barActions}</div>}
+      column={sticky.column}
+    >
+      <div className="flex flex-col gap-2 border-b pb-6">{body}</div>
+    </StickyHeader>
   );
 }

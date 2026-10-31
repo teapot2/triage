@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { describeCheck, duration, type UptimeCheck, type UptimeSample } from "@/lib/investigation/uptime/model";
+import { cn } from "@/lib/utils";
 import {
   checkNow,
   EndpointBadge,
@@ -36,6 +37,9 @@ import {
 } from "./endpoint-client";
 import { plural } from "./watch-client";
 import { WatchHeader } from "./watch-header";
+
+// The page's column. The header spans the page so its sticky bar can.
+const COLUMN = "max-w-4xl px-4 sm:px-6";
 
 const outcomeBadge: Record<UptimeSample["outcome"], { label: string; tone: StatusTone }> = {
   ok: { label: "OK", tone: "success" },
@@ -58,15 +62,17 @@ export function EndpointDetail({ id }: { id: string }) {
   if (missing) notFound();
   if (!data) {
     return error ? (
-      <Alert variant="destructive">
-        <AlertTitle>Couldn&apos;t load the endpoint</AlertTitle>
-        <AlertDescription className="break-words">{error}</AlertDescription>
-        <AlertAction>
-          <Button variant="outline" size="xs" onClick={refresh}>
-            Retry
-          </Button>
-        </AlertAction>
-      </Alert>
+      <div className={cn("mx-auto w-full", COLUMN)}>
+        <Alert variant="destructive">
+          <AlertTitle>Couldn&apos;t load the endpoint</AlertTitle>
+          <AlertDescription className="break-words">{error}</AlertDescription>
+          <AlertAction>
+            <Button variant="outline" size="xs" onClick={refresh}>
+              Retry
+            </Button>
+          </AlertAction>
+        </Alert>
+      </div>
     ) : (
       <EndpointSkeleton />
     );
@@ -95,26 +101,33 @@ export function EndpointDetail({ id }: { id: string }) {
   }
 
   const points = samples.map((s) => ({ t: s.at, value: s.ms }));
+  // The header's buttons. The sticky bar leaves Delete to the header and, on
+  // phones, shows icons only, so the title keeps some room.
+  const actions = (bar: boolean) => {
+    const label = cn(bar && "max-sm:sr-only");
+    return (
+      <>
+        <Button variant="outline" size="sm" onClick={() => void runNow()} disabled={checking}>
+          {checking ? <LoaderCircleIcon className="animate-spin" /> : <ActivityIcon />}
+          <span className={label}>Check now</span>
+        </Button>
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/watch/endpoints/${check.id}/edit`}>
+            <PencilIcon />
+            <span className={label}>Edit</span>
+          </Link>
+        </Button>
+        {!bar && <DeleteEndpoint name={check.name} onConfirm={() => void remove()} />}
+      </>
+    );
+  };
   return (
-    <div className="flex flex-col gap-6">
+    <>
       <WatchHeader
         crumbs={[{ label: "Watch", href: "/watch" }]}
         title={check.name}
-        actions={
-          <>
-            <Button variant="outline" size="sm" onClick={() => void runNow()} disabled={checking}>
-              {checking ? <LoaderCircleIcon className="animate-spin" /> : <ActivityIcon />}
-              Check now
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link href={`/watch/endpoints/${check.id}/edit`}>
-                <PencilIcon />
-                Edit
-              </Link>
-            </Button>
-            <DeleteEndpoint name={check.name} onConfirm={() => void remove()} />
-          </>
-        }
+        sticky={{ status: <EndpointBadge status={status} />, actions: actions(true), column: COLUMN }}
+        actions={actions(false)}
       >
         <EndpointBadge status={status} />
         <span className="sm:ml-1">
@@ -122,51 +135,53 @@ export function EndpointDetail({ id }: { id: string }) {
         </span>
       </WatchHeader>
 
-      {actionError && (
-        <Alert variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setActionError(undefined)}>
-          <AlertTitle>{actionError.title}</AlertTitle>
-          <AlertDescription className="break-words">{actionError.reason}</AlertDescription>
-        </Alert>
-      )}
+      <div className={cn("mx-auto flex w-full flex-col gap-6 pt-6", COLUMN)}>
+        {actionError && (
+          <Alert variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setActionError(undefined)}>
+            <AlertTitle>{actionError.title}</AlertTitle>
+            <AlertDescription className="break-words">{actionError.reason}</AlertDescription>
+          </Alert>
+        )}
 
-      {state.incidentId && (
-        <Alert variant="destructive">
-          <AlertTitle>An incident is open for this endpoint</AlertTitle>
-          <AlertDescription>It stays open until its checks come back healthy.</AlertDescription>
-          <AlertAction>
-            <Button variant="outline" size="xs" asChild>
-              <Link href={`/incidents/${state.incidentId}`}>View incident</Link>
-            </Button>
-          </AlertAction>
-        </Alert>
-      )}
+        {state.incidentId && (
+          <Alert variant="destructive">
+            <AlertTitle>An incident is open for this endpoint</AlertTitle>
+            <AlertDescription>It stays open until its checks come back healthy.</AlertDescription>
+            <AlertAction>
+              <Button variant="outline" size="xs" asChild>
+                <Link href={`/incidents/${state.incidentId}`}>View incident</Link>
+              </Button>
+            </AlertAction>
+          </Alert>
+        )}
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[minmax(0,1fr)_17rem] md:gap-8">
-        <div className="flex min-w-0 flex-col gap-6">
-          <Section title="Response time">
-            {points.length < 2 ? (
-              <p className="text-muted-foreground text-sm">
-                {status === "paused" ? "Paused, so nothing is being checked." : "The chart appears after the second check."}
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2 rounded-lg border p-4">
-                <MetricChart series={points} label="Response time" unit="ms" threshold={check.slowMs} />
-              </div>
-            )}
-          </Section>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 md:grid-cols-[minmax(0,1fr)_17rem] md:gap-8">
+          <div className="flex min-w-0 flex-col gap-6">
+            <Section title="Response time">
+              {points.length < 2 ? (
+                <p className="text-muted-foreground text-sm">
+                  {status === "paused" ? "Paused, so nothing is being checked." : "The chart appears after the second check."}
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2 rounded-lg border p-4">
+                  <MetricChart series={points} label="Response time" unit="ms" threshold={check.slowMs} />
+                </div>
+              )}
+            </Section>
 
-          <Section title={`Last ${plural(Math.min(samples.length, 50), "result", "results")}`}>
-            {samples.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No results yet.</p>
-            ) : (
-              <ResultTable samples={samples} />
-            )}
-          </Section>
+            <Section title={`Last ${plural(Math.min(samples.length, 50), "result", "results")}`}>
+              {samples.length === 0 ? (
+                <p className="text-muted-foreground text-sm">No results yet.</p>
+              ) : (
+                <ResultTable samples={samples} />
+              )}
+            </Section>
+          </div>
+
+          <Configuration check={check} />
         </div>
-
-        <Configuration check={check} />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -215,25 +230,29 @@ function ResultTable({ samples }: { samples: UptimeSample[] }) {
 
 function Configuration({ check }: { check: UptimeCheck }) {
   const { min, max } = check.expectedStatus;
+  // The aside runs the column's full height, for its border; what's in it
+  // sticks below the header's bar while the results scroll by.
   return (
-    <aside aria-label="Configuration" className="flex flex-col gap-3 md:border-l md:pl-8">
-      <h2 className="font-medium text-sm">Configuration</h2>
-      <p className="text-muted-foreground text-sm">{describeCheck(check)}.</p>
-      <dl className="flex flex-col gap-3 text-sm">
-        <Fact label="URL">
-          <span className="break-all font-mono text-xs">{check.url}</span>
-        </Fact>
-        <Fact label="Expected status">{min === max ? min : `${min}–${max}`}</Fact>
-        <Fact label="Slow opens an incident after">
-          {plural(check.slowChecksToOpen, "check", "checks")} slower than {duration(check.slowMs)} in a row
-          <span className="text-muted-foreground"> (SEV3)</span>
-        </Fact>
-        <Fact label="Down opens an incident after">
-          {plural(check.downMinutesToOpen, "minute", "minutes")} with no good answer
-          <span className="text-muted-foreground"> (SEV2)</span>
-        </Fact>
-        <Fact label="Recovered after">{plural(check.healthyChecksToRecover, "healthy check", "healthy checks")} in a row</Fact>
-      </dl>
+    <aside aria-label="Configuration" className="md:border-l md:pl-8">
+      <div className="flex flex-col gap-3 md:sticky md:top-18">
+        <h2 className="font-medium text-sm">Configuration</h2>
+        <p className="text-muted-foreground text-sm">{describeCheck(check)}.</p>
+        <dl className="flex flex-col gap-3 text-sm">
+          <Fact label="URL">
+            <span className="break-all font-mono text-xs">{check.url}</span>
+          </Fact>
+          <Fact label="Expected status">{min === max ? min : `${min}–${max}`}</Fact>
+          <Fact label="Slow opens an incident after">
+            {plural(check.slowChecksToOpen, "check", "checks")} slower than {duration(check.slowMs)} in a row
+            <span className="text-muted-foreground"> (SEV3)</span>
+          </Fact>
+          <Fact label="Down opens an incident after">
+            {plural(check.downMinutesToOpen, "minute", "minutes")} with no good answer
+            <span className="text-muted-foreground"> (SEV2)</span>
+          </Fact>
+          <Fact label="Recovered after">{plural(check.healthyChecksToRecover, "healthy check", "healthy checks")} in a row</Fact>
+        </dl>
+      </div>
     </aside>
   );
 }
@@ -287,7 +306,7 @@ function DeleteEndpoint({ name, onConfirm }: { name: string; onConfirm: () => vo
 
 export function EndpointSkeleton() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className={cn("mx-auto flex w-full flex-col gap-6", COLUMN)}>
       <div className="flex flex-col gap-2 border-b pb-6">
         <Skeleton className="h-5 w-40" />
         <Skeleton className="h-8 w-64" />
