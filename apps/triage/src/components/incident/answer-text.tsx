@@ -150,7 +150,7 @@ function Marks({ text }: { text: string }) {
 }
 
 // A thin bar that blinks at the end of the text while it streams.
-function Caret() {
+export function Caret() {
   return (
     <span
       aria-hidden

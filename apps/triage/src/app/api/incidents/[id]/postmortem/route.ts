@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { nextPostmortem, postmortemRefusal } from "@/lib/investigation/postmortem/rules";
 import { writePostmortem } from "@/lib/investigation/postmortem/writer";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
-import { stageModel, stageProblem } from "@/lib/models/settings";
+import { readTemplate, stageModel, stageProblem } from "@/lib/models/settings";
 
 class Refused extends Error {}
 
@@ -16,13 +16,18 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const problem = stageProblem(stage);
   if (problem) return Response.json({ error: problem }, { status: 409 });
 
+  // The template as it stands now: it shapes what is asked and is kept on
+  // the record, so the page lays the draft out in its sections from the
+  // start, and the postmortem renders as it was written.
+  const template = await readTemplate();
+
   try {
     // Checked and saved under the incident's lock, so two quick POSTs can't
     // both start one.
     await patchIncident(id, (i) => {
       const refusal = postmortemRefusal(i);
       if (refusal) throw new Refused(refusal);
-      return { ...i, postmortem: nextPostmortem(stage) };
+      return { ...i, postmortem: { ...nextPostmortem(stage), template } };
     });
   } catch (err) {
     if (err instanceof Refused) return Response.json({ error: err.message }, { status: 409 });

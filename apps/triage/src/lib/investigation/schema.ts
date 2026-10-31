@@ -379,11 +379,50 @@ export const postmortemActionItemSchema = z.object({
 });
 export type PostmortemActionItem = z.infer<typeof postmortemActionItemSchema>;
 
+// A claim as the model writes it: the text so far, and the evidence IDs it
+// has finished citing.
+const draftClaimSchema = z.object({ text: z.string(), evidenceIds: z.array(evidenceId) });
+
+// The postmortem while the model writes it (postmortem/draft.ts): its
+// submission so far, every field possibly cut short. `writing` is the
+// template section whose field is still open, absent once the submission
+// is whole; `attempt` counts submissions, from 1, and `problems` is why the
+// last one was rejected.
+// `thinking` is the end of the model's latest paragraph of reasoning.
+export const postmortemDraftSchema = z.object({
+  attempt: z.number().int(),
+  writing: z.string().optional(),
+  thinking: z.string().optional(),
+  problems: z.array(z.string()).optional(),
+  content: z.object({
+    summary: z.string().optional(),
+    impact: draftClaimSchema.optional(),
+    contributingFactors: z.array(draftClaimSchema).optional(),
+    wentWell: z.array(draftClaimSchema).optional(),
+    wentBadly: z.array(draftClaimSchema).optional(),
+    lucky: z.array(z.string()).optional(),
+    actionItems: z
+      .array(
+        z.object({
+          title: z.string(),
+          kind: postmortemActionItemSchema.shape.kind.optional(),
+          priority: postmortemActionItemSchema.shape.priority.optional(),
+          evidenceIds: z.array(evidenceId).optional(),
+        }),
+      )
+      .optional(),
+    custom: z.array(z.object({ id: z.string(), text: z.string(), evidenceIds: z.array(evidenceId) })).optional(),
+  }),
+});
+export type PostmortemDraft = z.infer<typeof postmortemDraftSchema>;
+export type DraftContent = PostmortemDraft["content"];
+
 // The blameless postmortem's judgment, written by one model call over the
 // recorded evidence (postmortem/writer.ts). Everything else in the
 // document (impact numbers, timeline, fix, evidence appendix) is rendered
 // from the incident itself. One record; writing again replaces it. The
-// content fields are absent while it is being written or after a failure.
+// content fields are absent while it is being written or after a failure:
+// `draft` holds what is written so far, and where a failed write stopped.
 export const postmortemSchema = z.object({
   status: z.enum(["writing", "ready", "failed"]),
   startedAt: timestamp,
@@ -405,6 +444,7 @@ export const postmortemSchema = z.object({
   // The template this was written with, kept so it renders in the same shape
   // later. Absent on records from before templates: they are the default.
   template: templateSchema.optional(),
+  draft: postmortemDraftSchema.optional(),
   citedIds: z.array(z.string()).optional(),
   unknownIds: z.array(z.string()).optional(),
 });

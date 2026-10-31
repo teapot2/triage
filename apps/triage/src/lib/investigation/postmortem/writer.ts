@@ -1,12 +1,15 @@
-import { type ModelMessage, tool, ToolLoopAgent } from "ai";
+import { type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import { languageModel, modelOptions } from "../../models/client";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
+import { knownEvidenceIds } from "../ask/rules";
 import { cite, incidentBlock } from "../context";
 import { dataChangeOf } from "../fix/data-change";
-import { evidenceId, type Incident, type Postmortem, postmortemSchema } from "../schema";
+import { evidenceId, type Incident, type Postmortem, type PostmortemDraft, postmortemSchema } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { forModel } from "../tools";
+import { draftContent, nextAttempt, writingSection } from "./draft";
+import { endDraft, publishDraft } from "./live";
 import { citedEvidenceIds, MAX_FACTORS, MIN_FACTORS, type PostmortemSubmission, postmortemProblems } from "./rules";
 import { type BuiltInSection, customSections, keptBuiltIns, type Template } from "./template";
 
@@ -14,7 +17,9 @@ import { type BuiltInSection, customSections, keptBuiltIns, type Template } from
 // contributing factors, what went well and badly, luck, action items),
 // written by one model over the incident's record. No tools but the one it
 // submits with, which checks the submission like submit_report does and
-// hands the problems back. Runs after the route's response.
+// hands the problems back. Runs after the route's response. The submission
+// streams: the page follows it as a draft (draft.ts), live through
+// live.ts and saved on the record about once a second.
 
 const MAX_STEPS = 3;
 // Times a run that stops with plain text, without an accepted submission,
@@ -56,7 +61,11 @@ export function instructionsFor(template: Template): string {
       ...custom.map((c) => `- ${c.id} (${c.name}): ${c.instructions}`),
     );
   }
-  lines.push("", "- Under 400 words in all.", "- Submit with submit_postmortem. If it is rejected, fix the listed problems and submit again.");
+  lines.push(
+    "",
+    "- Under 400 words in all.",
+    "- Write submit_postmortem's fields in the order the tool lists them: the document's order.",
+    "- Submit with submit_postmortem. If it is rejected, fix the listed problems and submit again.");
   return lines.join("\n");
 }
 
@@ -71,17 +80,23 @@ const sectionFields: Partial<Record<BuiltInSection, (keyof Postmortem)[]>> = {
 };
 
 // The tool's input: the judgment of the sections the template keeps, every
-// field required, plus the custom sections' texts when it has any.
+// field required, plus the custom sections' texts when it has any. Its
+// fields in the template's order, where the custom list stands in for the
+// first custom section: models write them as listed, so the document fills
+// in from the top.
 export function submissionSchemaFor(template: Template) {
-  const mask = Object.fromEntries(keptBuiltIns(template).flatMap((key) => sectionFields[key] ?? []).map((f) => [f, true as const]));
+  const fields = template.sections.flatMap((s) => (s.kind === "builtin" ? (sectionFields[s.key] ?? []) : ["custom" as const]));
+  const order = [...new Set(fields)];
+  const mask = Object.fromEntries(order.filter((f) => f !== "custom").map((f) => [f, true as const]));
   // pick() wants a literal mask; this one is built from the template.
   const base = (postmortemSchema.pick(mask as never) as unknown as typeof postmortemSchema).required();
   const custom = customSections(template);
-  if (!custom.length) return base as unknown as z.ZodType<PostmortemSubmission>;
   const ids = custom.map((c) => c.id) as [string, ...string[]];
-  return base.extend({
-    custom: z.array(z.object({ id: z.enum(ids), text: z.string(), evidenceIds: z.array(evidenceId) })),
-  }) as unknown as z.ZodType<PostmortemSubmission>;
+  const shape: Record<string, z.ZodType> = {
+    ...(base.shape as Record<string, z.ZodType>),
+    ...(custom.length ? { custom: z.array(z.object({ id: z.enum(ids), text: z.string(), evidenceIds: z.array(evidenceId) })) } : {}),
+  };
+  return z.object(Object.fromEntries(order.map((f) => [f, shape[f]]))) as unknown as z.ZodType<PostmortemSubmission>;
 }
 
 // The incident's times in order, as a timeline the model can quote.
@@ -216,27 +231,156 @@ function namedCustom(custom: NonNullable<PostmortemSubmission["custom"]>, templa
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 500);
 
+// Saves the draft on the record at most this often while it streams: a
+// reload, or a tab on another server, reads along from there.
+const SAVE_EVERY_MS = 1000;
+// The end of the model's latest paragraph of reasoning the draft keeps.
+const THOUGHT_CHARS = 240;
+
+// The submission as it streams: parsed as each piece arrives, published to
+// the page and saved now and then. A second submit_postmortem call (after a
+// rejection) starts the next attempt from empty.
+class DraftStream {
+  draft: PostmortemDraft = nextAttempt(undefined);
+  private callId: string | undefined;
+  private raw = "";
+  private thoughts = "";
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private lastSave = 0;
+  private saving: Promise<unknown> = Promise.resolve();
+
+  constructor(
+    private readonly incidentId: string,
+    private readonly startedAt: string,
+    private readonly known: Set<string>,
+    private readonly template: Template,
+  ) {}
+
+  // Tells the page the write is under way, before anything is written.
+  announce() {
+    publishDraft(this.incidentId, { startedAt: this.startedAt, draft: this.draft });
+  }
+
+  begin(callId: string) {
+    if (this.callId !== undefined) this.draft = nextAttempt(this.draft, this.draft.problems);
+    this.callId = callId;
+    this.raw = "";
+    this.changed();
+  }
+
+  async append(callId: string, delta: string) {
+    if (callId !== this.callId) return;
+    this.raw += delta;
+    await this.parse();
+  }
+
+  // The whole input, for a provider that doesn't stream it.
+  async whole(callId: string, input: unknown) {
+    if (callId === this.callId && this.raw) return;
+    if (callId !== this.callId) this.begin(callId);
+    this.raw = JSON.stringify(input);
+    await this.parse();
+  }
+
+  // The model's reasoning as it streams: the end of its latest paragraph,
+  // from a word's start, for the page to show while nothing is written yet.
+  // Each summary part (reasoning-start) is a paragraph of its own.
+  think(delta: string, part = false) {
+    this.thoughts += part ? "\n\n" : delta;
+    const paragraph = this.thoughts
+      .split(/\n\s*\n/)
+      .findLast((p) => p.trim())
+      ?.trim()
+      .replace(/\s+/g, " ");
+    if (!paragraph) return;
+    const latest = paragraph.length > THOUGHT_CHARS ? `…${paragraph.slice(-THOUGHT_CHARS).replace(/^\S*\s/, "")}` : paragraph;
+    if (latest === this.draft.thinking) return;
+    this.draft = { ...this.draft, thinking: latest };
+    this.changed();
+  }
+
+  reject(problems: string[]) {
+    this.draft = { ...this.draft, problems };
+    this.changed();
+  }
+
+  // Stops saving, once the last save is in. The record's finish follows.
+  async close() {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    await this.saving;
+  }
+
+  private async parse() {
+    const { value, state } = await parsePartialJson(this.raw);
+    this.draft = {
+      ...this.draft,
+      // None open once the JSON is whole.
+      writing: state === "successful-parse" ? undefined : (writingSection(value) ?? this.draft.writing),
+      content: draftContent(value, this.known, this.template),
+    };
+    this.changed();
+  }
+
+  private changed() {
+    publishDraft(this.incidentId, { startedAt: this.startedAt, draft: this.draft });
+    if (this.timer) return;
+    this.timer = setTimeout(() => this.save(), Math.max(0, this.lastSave + SAVE_EVERY_MS - Date.now()));
+  }
+
+  private save() {
+    this.timer = undefined;
+    this.lastSave = Date.now();
+    const draft = this.draft;
+    this.saving = this.saving
+      .then(() =>
+        patchIncident(this.incidentId, (i) =>
+          i.postmortem?.status === "writing" && i.postmortem.startedAt === this.startedAt
+            ? { ...i, postmortem: { ...i.postmortem, draft } }
+            : i,
+        ),
+      )
+      .catch((err) => console.error("[triage] saving the postmortem draft failed", this.incidentId, err));
+  }
+}
+
 // Writes the postmortem of an incident whose record is status writing (the
-// route saves it so). Never throws: failures land on the record.
+// route saves it so). Never throws: failures land on the record, with the
+// draft as far as it got.
 export async function writePostmortem(incidentId: string): Promise<void> {
-  const finish = (patch: Partial<Postmortem>) =>
+  const finish = (startedAt: string, patch: Partial<Postmortem>) =>
     patchIncident(incidentId, (i) =>
-      i.postmortem?.status === "writing"
+      i.postmortem?.status === "writing" && i.postmortem.startedAt === startedAt
         ? { ...i, postmortem: { ...i.postmortem, ...patch, finishedAt: new Date().toISOString() } }
         : i,
     );
 
   let inputTokens = 0;
   let outputTokens = 0;
+  let startedAt: string | undefined;
+  let stream: DraftStream | undefined;
+  // What a failure keeps: the draft, when anything was written.
+  const partial = () => {
+    const draft = stream?.draft;
+    return draft && Object.keys(draft.content).length ? draft : undefined;
+  };
   try {
     const incident = await getIncident(incidentId);
     if (incident?.postmortem?.status !== "writing") return;
+    const started = (startedAt = incident.postmortem.startedAt);
+    // The template the route saved on the record (the one in settings for a
+    // record from before it did).
+    const template = incident.postmortem.template ?? (await readTemplate());
+    const live = (stream = new DraftStream(incidentId, started, knownEvidenceIds(incident), template));
+    live.announce();
+    await patchIncident(incidentId, (i) =>
+      i.postmortem?.status === "writing" && i.postmortem.startedAt === started
+        ? { ...i, postmortem: { ...i.postmortem, template, draft: live.draft } }
+        : i,
+    );
     const stage = await stageModel("postmortem");
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
-    // The template as it stands now: it shapes what is asked and is kept on
-    // the record, so the postmortem renders as it was written.
-    const template = await readTemplate();
     const submissionSchema = submissionSchemaFor(template);
 
     let accepted: PostmortemSubmission | undefined;
@@ -253,7 +397,10 @@ export async function writePostmortem(incidentId: string): Promise<void> {
           execute: async (input) => {
             const submission = submissionSchema.parse(input);
             lastProblems = postmortemProblems(submission, incident, template);
-            if (lastProblems.length > 0) return `Rejected:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
+            if (lastProblems.length > 0) {
+              live.reject(lastProblems);
+              return `Rejected:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
+            }
             accepted = submission;
             return "Accepted.";
           },
@@ -269,17 +416,46 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident) }];
     for (let pass = 0; pass <= MAX_NUDGES && !accepted && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.generate({ messages });
-      messages.push(...result.responseMessages);
-      inputTokens += result.usage.inputTokens ?? 0;
-      outputTokens += result.usage.outputTokens ?? 0;
+      const result = await agent.stream({ messages });
+      for await (const part of result.fullStream) {
+        switch (part.type) {
+          case "reasoning-start":
+            live.think("", true);
+            break;
+          case "reasoning-delta":
+            live.think(part.text);
+            break;
+          case "tool-input-start":
+            if (part.toolName === "submit_postmortem") live.begin(part.id);
+            break;
+          case "tool-input-delta":
+            await live.append(part.id, part.delta);
+            break;
+          case "tool-call":
+            if (part.toolName === "submit_postmortem") await live.whole(part.toolCallId, part.input);
+            break;
+          case "tool-error":
+            // A submission whose fields aren't in the tool's shape never
+            // reaches its checks; the model is told and submits again.
+            if (part.toolName === "submit_postmortem") live.reject(["a field wasn't in the shape the form asks for"]);
+            break;
+          case "error":
+            throw part.error;
+        }
+      }
+      messages.push(...(await result.responseMessages));
+      const usage = await result.totalUsage;
+      inputTokens += usage.inputTokens ?? 0;
+      outputTokens += usage.outputTokens ?? 0;
     }
 
+    await live.close();
     if (accepted) {
-      await finish({
+      await finish(started, {
         ...accepted,
         custom: accepted.custom && customSections(template).length ? namedCustom(accepted.custom, template) : undefined,
         template,
+        draft: undefined,
         status: "ready",
         error: undefined,
         citedIds: citedEvidenceIds(accepted),
@@ -291,12 +467,17 @@ export async function writePostmortem(incidentId: string): Promise<void> {
       const error = lastProblems.length
         ? `Rejected: ${lastProblems.join("; ")}`
         : `No postmortem submitted after ${stepsUsed} model steps`;
-      await finish({ status: "failed", error: error.slice(0, 1000), inputTokens, outputTokens });
+      await finish(started, { status: "failed", error: error.slice(0, 1000), draft: partial(), inputTokens, outputTokens });
     }
   } catch (err) {
     console.error("[triage] postmortem failed", incidentId, err);
-    await finish({ status: "failed", error: errorText(err), inputTokens, outputTokens }).catch((saveErr) =>
-      console.error("[triage] saving the failed postmortem failed", incidentId, saveErr),
-    );
+    await stream?.close();
+    if (startedAt) {
+      await finish(startedAt, { status: "failed", error: errorText(err), draft: partial(), inputTokens, outputTokens }).catch(
+        (saveErr) => console.error("[triage] saving the failed postmortem failed", incidentId, saveErr),
+      );
+    }
+  } finally {
+    if (startedAt) endDraft(incidentId, startedAt);
   }
 }

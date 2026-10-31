@@ -3,7 +3,7 @@
 import { type ReactNode, useMemo } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { type Block, splitBlocks } from "./answer-text";
+import { type Block, Caret, splitBlocks } from "./answer-text";
 import { Citations, useEvidence } from "./evidence";
 
 // A Markdown document (the postmortem export) as the page's prose. What an
@@ -11,7 +11,8 @@ import { Citations, useEvidence } from "./evidence";
 // the export writes: headings, pipe tables, links, ~~strikethrough~~, and
 // evidence footnotes [3] shown as the report's numbered chips. The numbers
 // are the page's own, so a footnote maps back to its evidence; a number with
-// no evidence stays plain text.
+// no evidence stays plain text. With `caret`, a blinking caret ends the
+// last block, where text is being written.
 
 type DocBlock =
   | Block
@@ -76,11 +77,15 @@ const headingStyles = {
   3: "mt-2 text-sm font-semibold",
 } as const;
 
-export function MarkdownDoc({ text, className }: { text: string; className?: string }) {
+export function MarkdownDoc({ text, className, caret = false }: { text: string; className?: string; caret?: boolean }) {
   const blocks = useMemo(() => docBlocks(text), [text]);
+  // A heading or rule can't hold the caret: it goes on a line of its own.
+  const lastKind = blocks.at(-1)?.kind;
+  const caretAlone = caret && (lastKind === undefined || lastKind === "heading" || lastKind === "rule");
   return (
     <div className={cn("flex min-w-0 flex-col gap-3 text-sm leading-relaxed", className)}>
       {blocks.map((block, i) => {
+        const end = caret && i === blocks.length - 1 ? <Caret /> : null;
         switch (block.kind) {
           case "heading": {
             const Tag = headingTags[block.level];
@@ -95,6 +100,8 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
             // readable; short ones stay on a line. Past that, the table
             // scrolls sideways.
             const wraps = block.header.map((_, j) => block.rows.some((row) => (row[j]?.length ?? 0) > 32));
+            // The caret in the last row's last cell with text.
+            const caretCell = end ? (block.rows.at(-1) ?? []).findLastIndex((c) => c !== "") : -1;
             return (
               <Table key={i} className="text-xs">
                 <TableHeader>
@@ -112,6 +119,7 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
                       {block.header.map((_, j) => (
                         <TableCell key={j} className={cn("align-top", wraps[j] && "min-w-48 whitespace-normal")}>
                           <Inline text={row[j] ?? ""} />
+                          {r === block.rows.length - 1 && j === caretCell && end}
                         </TableCell>
                       ))}
                     </TableRow>
@@ -132,6 +140,7 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
                 {block.items.map((item, j) => (
                   <li key={j} className="min-w-0 break-words pl-0.5">
                     <Inline text={item} />
+                    {j === block.items.length - 1 && end}
                   </li>
                 ))}
               </List>
@@ -141,10 +150,16 @@ export function MarkdownDoc({ text, className }: { text: string; className?: str
             return (
               <p key={i} className="min-w-0 break-words">
                 <Inline text={block.text} />
+                {end}
               </p>
             );
         }
       })}
+      {caretAlone && (
+        <p>
+          <Caret />
+        </p>
+      )}
     </div>
   );
 }

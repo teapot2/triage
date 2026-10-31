@@ -26,8 +26,8 @@ export async function failInterruptedRuns(): Promise<number> {
 
 // The incident with every stage that claims to be running marked as cut
 // off, or undefined if none was. A bundled example can take questions, a
-// mitigation and a verification (and so be cut off in one); its other
-// stages pose as they are.
+// mitigation, a verification and a postmortem (and so be cut off in one);
+// its other stages pose as they are.
 export function recovered(incident: Incident, now: string, example = false): Incident | undefined {
   let next: Incident | undefined;
   const edit = (patch: Partial<Incident>) => (next = { ...(next ?? incident), ...patch });
@@ -46,6 +46,10 @@ export function recovered(incident: Incident, now: string, example = false): Inc
   }
   const answers = withAnswersCutOff(next ?? incident, now);
   if (answers) edit({ questions: answers.questions });
+  const postmortem = incident.postmortem;
+  if (postmortem?.status === "writing") {
+    edit({ postmortem: { ...postmortem, status: "failed", finishedAt: now, error: `${RESTARTED} while the postmortem was being written` } });
+  }
   if (example) return next;
 
   if (incident.status === "investigating") {

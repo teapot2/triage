@@ -8,15 +8,18 @@ import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
 import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
 import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
-import type { Incident } from "@/lib/investigation/schema";
+import type { DraftContent, Incident } from "@/lib/investigation/schema";
 import { modelLabel } from "@/lib/models/labels";
 import { MarkdownDoc } from "./markdown-doc";
+import { clock, contentOf, DraftDocument, DraftStatus, templateOf, usePostmortemDraft, useReveal } from "./postmortem-draft";
 
 // The Postmortem section: Triage writes a blameless postmortem from the
-// incident's record on request, and shows it as the document it exports,
-// to copy as Markdown or download. The record is the model's judgment; the
+// incident's record on request, writing it into the page as it goes
+// (postmortem-draft.tsx), and shows it as the document it exports, to copy
+// as Markdown or download. The record is the model's judgment; the
 // document around it is rendered here from the incident, so Copy and
 // Download always match what's on screen.
 
@@ -66,7 +69,7 @@ export function requestPostmortemWrite() {
 
 // Starts a write. The route answers 202 and saves the record a beat later,
 // so after it's accepted the page refreshes every second until the record
-// changes; useRefreshWhile follows it from there.
+// changes; the draft's live stream and useRefreshWhile follow it from there.
 function useWritePostmortem(incident: Incident) {
   const router = useRouter();
   const startedAt = incident.postmortem?.startedAt;
@@ -117,22 +120,57 @@ function useWritePostmortem(incident: Incident) {
   return { write, sending: sentFrom !== null, accepted };
 }
 
+const NOTHING: DraftContent = {};
+const WHOLE = { open: undefined, complete: true };
+
 export function PostmortemPanel({ incident }: { incident: Incident }) {
   const pm = incident.postmortem;
   const { write, sending, accepted } = useWritePostmortem(incident);
   const refusal = writeRefusal(incident);
   const markdown = useMemo(() => (pm?.status === "ready" ? postmortemMarkdown(incident) : ""), [pm?.status, incident]);
+  const draft = usePostmortemDraft(incident);
+  const template = templateOf(incident);
 
-  // Accepted but not saved yet reads as writing already.
-  if (pm?.status === "writing" || accepted) {
+  // The write this panel watched, and its attempt: once it's ready, the
+  // rest of it is revealed before the document takes the draft's place.
+  const [watched, setWatched] = useState<{ startedAt: string; attempt: number }>();
+  if (pm?.status === "writing" && (watched?.startedAt !== pm.startedAt || (draft && draft.attempt !== watched.attempt))) {
+    setWatched({ startedAt: pm.startedAt, attempt: draft?.attempt ?? 1 });
+  }
+  const finishing = pm?.status === "ready" && watched?.startedAt === pm.startedAt;
+  const target = useMemo(
+    () => (pm?.status === "writing" ? (draft?.content ?? NOTHING) : finishing ? contentOf(pm) : NOTHING),
+    [pm, draft, finishing],
+  );
+  const progress = pm?.status === "writing" && draft ? progressOf(draft) : WHOLE;
+  const attempt = (pm?.status === "writing" ? draft?.attempt : undefined) ?? watched?.attempt ?? 1;
+  const reveal = useReveal(target, template, progress, `${pm?.startedAt}:${attempt}`);
+  if (finishing && reveal.caughtUp) setWatched(undefined);
+
+  // Writing, or accepted and not saved yet, which reads as writing already.
+  const writing = pm?.status === "writing" || finishing;
+  if (writing || accepted) {
+    const at = reveal.at;
+    const keys = template.sections.map(sectionKey);
     return (
-      <p className="flex items-center gap-2 text-muted-foreground text-sm" aria-live="polite">
-        <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
-        <span>
-          Writing the postmortem from the incident&apos;s record
-          {pm?.status === "writing" && <> · {modelLabel(pm.model, pm.provider)}</>}
-        </span>
-      </p>
+      <div className="flex flex-col gap-4">
+        <DraftStatus
+          startedAt={writing ? pm.startedAt : undefined}
+          attempt={draft?.attempt ?? 1}
+          problems={pm?.status === "writing" ? draft?.problems : undefined}
+          model={writing ? pm.model : undefined}
+          written={!writing ? 0 : at === undefined ? keys.length : Math.max(0, keys.indexOf(at))}
+          sections={keys.length}
+        />
+        <DraftDocument
+          incident={incident}
+          content={writing ? reveal.content : NOTHING}
+          template={template}
+          at={writing ? at : undefined}
+          mode="writing"
+          thinking={pm?.status === "writing" ? draft?.thinking : undefined}
+        />
+      </div>
     );
   }
 
@@ -156,16 +194,25 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
   }
 
   if (pm.status === "failed") {
+    // What was written before it stopped, under the error.
+    const partial = pm.draft && Object.keys(pm.draft.content).length > 0 ? pm.draft : undefined;
     return (
-      <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
-        <AlertTitle>The postmortem wasn&apos;t written</AlertTitle>
-        {pm.error && <AlertDescription className="line-clamp-3 break-words">{pm.error}</AlertDescription>}
-        <AlertAction>
-          <WriteButton refusal={refusal} sending={sending} onClick={write} size="xs" variant="outline">
-            Try again
-          </WriteButton>
-        </AlertAction>
-      </Alert>
+      <div className="flex flex-col gap-4">
+        <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
+          <AlertTitle>{partial ? "The postmortem stopped part-way" : "The postmortem wasn’t written"}</AlertTitle>
+          {pm.error && <AlertDescription className="line-clamp-3 break-words">{pm.error}</AlertDescription>}
+          <AlertAction>
+            <WriteButton refusal={refusal} sending={sending} onClick={write} size="xs" variant="outline">
+              Try again
+            </WriteButton>
+          </AlertAction>
+        </Alert>
+        {partial && (
+          <div className="opacity-70">
+            <DraftDocument incident={incident} content={partial.content} template={template} at={partial.writing} mode="stopped" />
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -178,6 +225,7 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <p className="min-w-0 text-muted-foreground text-xs">
           Written <Timestamp date={written} /> · {modelLabel(pm.model, pm.provider)}
+          {pm.finishedAt && <> · took {clock(Date.parse(pm.finishedAt) - Date.parse(pm.startedAt))}</>}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}

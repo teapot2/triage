@@ -64,6 +64,15 @@ describe("recovered", () => {
     assert.equal(next?.mitigation?.recovery?.status, "not_recovered");
   });
 
+  it("fails a postmortem still being written, keeping its draft", () => {
+    const draft = { attempt: 1, writing: "summary", content: { summary: "The pool ran" } };
+    const writing = { ...incident({ ...recovery, status: "recovered" }), postmortem: { status: "writing" as const, startedAt: now, model: "m", draft } };
+    const next = recovered(writing, now, true);
+    assert.equal(next?.postmortem?.status, "failed");
+    assert.equal(next?.postmortem?.error, "Triage restarted while the postmortem was being written");
+    assert.deepEqual(next?.postmortem?.draft, draft);
+  });
+
   it("leaves finished ones alone", () => {
     const done = incident({ ...recovery, status: "recovered" }, { ...verification, status: "resolved", finishedAt: now });
     assert.equal(recovered(done, now), undefined);

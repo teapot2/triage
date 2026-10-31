@@ -1,6 +1,7 @@
 import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder } from "../citations";
 import type { Claim, Evidence, Incident, PostmortemActionItem } from "../schema";
+import { sectionKey } from "./draft";
 import { type BuiltInSection, defaultTemplate, type TemplateSection } from "./template";
 import { breaches, durations, firstBreach, postmortemTimeline, withUnit } from "./timeline";
 
@@ -114,8 +115,12 @@ function header(incident: Incident): string {
   return `# Postmortem: ${incident.title}\n\n${facts.join(" · ")}`;
 }
 
-function summary(incident: Incident): string {
-  return `## Summary\n\n${incident.postmortem?.summary?.trim() || "Not written yet."}`;
+// While the postmortem is written (`drafting`), what isn't written yet is
+// left out rather than marked missing: it is still coming.
+const placeholder = (text: string, drafting: boolean) => (drafting ? "" : text);
+
+function summary(incident: Incident, drafting: boolean): string {
+  return `## Summary\n\n${incident.postmortem?.summary?.trim() || placeholder("Not written yet.", drafting)}`;
 }
 
 // How long the alert's metric stayed past the threshold: from the first
@@ -174,7 +179,7 @@ function timeline(incident: Incident): string {
   ].join("\n\n");
 }
 
-function factors(incident: Incident, notes: Footnotes): string {
+function factors(incident: Incident, notes: Footnotes, drafting: boolean): string {
   const { report } = incident;
   const parts = ["## Contributing factors"];
   const verdict = report?.verdict;
@@ -194,23 +199,21 @@ function factors(incident: Incident, notes: Footnotes): string {
     );
   }
   const items = incident.postmortem?.contributingFactors ?? [];
-  parts.push(items.length ? items.map((c, i) => `${i + 1}. ${notes.claim(c)}`).join("\n") : "_None recorded._");
+  parts.push(items.length ? items.map((c, i) => `${i + 1}. ${notes.claim(c)}`).join("\n") : placeholder("_None recorded._", drafting));
   return parts.join("\n\n");
 }
 
-function lessons(incident: Incident, notes: Footnotes): string {
+function lessons(incident: Incident, notes: Footnotes, drafting: boolean): string {
   const pm = incident.postmortem;
-  return [
-    "## Lessons",
-    "### What went well",
-    list((pm?.wentWell ?? []).map((c) => notes.claim(c))),
-    "### What didn't",
-    list((pm?.wentBadly ?? []).map((c) => notes.claim(c))),
-  ].join("\n\n");
+  // While drafting, a list the model hasn't started has no heading yet.
+  const part = (title: string, claims: Claim[] | undefined) =>
+    drafting && !claims ? [] : [title, list((claims ?? []).map((c) => notes.claim(c)), placeholder("_None recorded._", drafting))];
+  return ["## Lessons", ...part("### What went well", pm?.wentWell), ...part("### What didn't", pm?.wentBadly)].join("\n\n");
 }
 
-function lucky(incident: Incident): string {
-  return `## Where we got lucky\n\n${list((incident.postmortem?.lucky ?? []).map((s) => s.trim()))}`;
+function lucky(incident: Incident, drafting: boolean): string {
+  const items = (incident.postmortem?.lucky ?? []).map((s) => s.trim());
+  return `## Where we got lucky\n\n${list(items, placeholder("_None recorded._", drafting))}`;
 }
 
 const kindInWords: Record<PostmortemActionItem["kind"], string> = {
@@ -220,7 +223,7 @@ const kindInWords: Record<PostmortemActionItem["kind"], string> = {
   mitigate_faster: "Mitigate faster",
 };
 
-function actions(incident: Incident, notes: Footnotes): string {
+function actions(incident: Incident, notes: Footnotes, drafting: boolean): string {
   const rows: [string, string, string][] = [];
   const { fix, approval } = incident;
   if (fix) {
@@ -233,9 +236,10 @@ function actions(incident: Incident, notes: Footnotes): string {
   }
   for (const item of incident.postmortem?.actionItems ?? []) {
     const markers = notes.markers(item.evidenceIds);
-    rows.push([`${item.title.trim()}${markers ? ` ${markers}` : ""}`, kindInWords[item.kind], item.priority]);
+    // A draft's item may not have its kind or priority yet.
+    rows.push([`${item.title.trim()}${markers ? ` ${markers}` : ""}`, kindInWords[item.kind] ?? "", item.priority ?? ""]);
   }
-  if (!rows.length) return "## Action items\n\n_None recorded._";
+  if (!rows.length) return `## Action items\n\n${placeholder("_None recorded._", drafting)}`;
   return [
     "## Action items",
     [
@@ -280,27 +284,47 @@ function evidence(incident: Incident, notes: Footnotes): string {
 }
 
 // A section the template's author named: the model's text for it.
-function customSection(incident: Incident, section: Extract<TemplateSection, { kind: "custom" }>, notes: Footnotes): string {
+function customSection(
+  incident: Incident,
+  section: Extract<TemplateSection, { kind: "custom" }>,
+  notes: Footnotes,
+  drafting: boolean,
+): string {
   const written = incident.postmortem?.custom?.find((c) => c.id === section.id);
   const text = written?.text.trim();
   const markers = text ? notes.markers(written?.evidenceIds) : "";
-  return `## ${section.name}\n\n${text ? (markers ? `${text} ${markers}` : text) : "_Not written yet._"}`;
+  return `## ${section.name}\n\n${text ? (markers ? `${text} ${markers}` : text) : placeholder("_Not written yet._", drafting)}`;
 }
 
-export function postmortemMarkdown(incident: Incident): string {
+// The document in parts: the header, each of the template's sections in
+// order, by key (draft.ts's sectionKey), then the end: the Evidence appendix
+// and the footer. The page shows them one at a time while the postmortem is
+// written (`drafting`); postmortemMarkdown joins them.
+export function postmortemParts(
+  incident: Incident,
+  { drafting = false } = {},
+): { header: string; sections: { key: string; markdown: string }[]; end: string } {
   const notes = new Footnotes(footnoteNumbers(incident));
   const template = incident.postmortem?.template ?? defaultTemplate;
   const builtIn: Record<BuiltInSection, () => string> = {
-    summary: () => summary(incident),
+    summary: () => summary(incident, drafting),
     impact: () => impact(incident, notes),
     timeline: () => timeline(incident),
-    factors: () => factors(incident, notes),
-    lessons: () => lessons(incident, notes),
-    lucky: () => lucky(incident),
-    actions: () => actions(incident, notes),
+    factors: () => factors(incident, notes, drafting),
+    lessons: () => lessons(incident, notes, drafting),
+    lucky: () => lucky(incident, drafting),
+    actions: () => actions(incident, notes, drafting),
   };
   // The sections first, so the appendix knows which footnotes they used.
-  const sections = template.sections.map((s) => (s.kind === "builtin" ? builtIn[s.key]() : customSection(incident, s, notes)));
-  const body = [header(incident), ...sections, evidence(incident, notes)].join("\n\n");
-  return `${body}\n\n---\n\nWritten by Triage from incident \`${incident.id}\`. A draft until the team has read it.\n`;
+  const sections = template.sections.map((s) => ({
+    key: sectionKey(s),
+    markdown: s.kind === "builtin" ? builtIn[s.key]() : customSection(incident, s, notes, drafting),
+  }));
+  const end = `${evidence(incident, notes)}\n\n---\n\nWritten by Triage from incident \`${incident.id}\`. A draft until the team has read it.\n`;
+  return { header: header(incident), sections, end };
+}
+
+export function postmortemMarkdown(incident: Incident): string {
+  const { header, sections, end } = postmortemParts(incident);
+  return [header, ...sections.map((s) => s.markdown), end].join("\n\n");
 }
