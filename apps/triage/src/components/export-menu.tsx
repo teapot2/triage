@@ -11,6 +11,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Dataset, ExportFormat, ExportSubject } from "@/lib/export/dataset";
@@ -43,17 +46,9 @@ function exportOf(source: ExportSource, format: ExportFormat) {
   };
 }
 
-export function ExportMenu({
-  exports,
-  iconOnly = false,
-  size = "sm",
-}: {
-  exports: ExportSource[];
-  // For tight spots: the icon alone, its label for screen readers.
-  iconOnly?: boolean;
-  size?: "sm" | "xs" | "default";
-}) {
-  // One menu's commands per key; two menus on a page don't replace each other's.
+// The palette's "Export <dataset> as <format>" commands for a set of sources.
+// One menu's commands per key; two menus on a page don't replace each other's.
+export function useExportCommands(exports: ExportSource[]) {
   const key = `export-${useId()}`;
   useRegisterCommands(
     key,
@@ -71,8 +66,70 @@ export function ExportMenu({
       }),
     ),
   );
-  if (exports.length === 0) return null;
+}
+
+// useExportCommands for a spot that can't call hooks (after an early return).
+export function ExportCommands({ exports }: { exports: ExportSource[] }) {
+  useExportCommands(exports);
+  return null;
+}
+
+// The items of an export menu, for a dropdown that's already open: the
+// button's own menu, or a submenu of a larger one.
+export function ExportMenuItems({ exports }: { exports: ExportSource[] }) {
   const grouped = exports.length > 1;
+  return exports.map((source, i) => (
+    <Fragment key={source.dataset.id}>
+      {grouped && i > 0 && <DropdownMenuSeparator />}
+      {grouped && <DropdownMenuLabel>{source.dataset.name}</DropdownMenuLabel>}
+      {source.dataset.formats.map((format) => {
+        const target = exportOf(source, format);
+        const label = grouped ? formatInfo[format].label : `${source.dataset.name} · ${formatInfo[format].label}`;
+        return target.href ? (
+          <DropdownMenuItem key={format} asChild>
+            <a href={target.href} download>
+              {label}
+            </a>
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem key={format} onSelect={target.run}>
+            {label}
+          </DropdownMenuItem>
+        );
+      })}
+    </Fragment>
+  ));
+}
+
+// An "Export" entry for a menu that has other actions too, opening the
+// formats beside it. Registers no palette commands: call useExportCommands.
+export function ExportSubmenu({ exports }: { exports: ExportSource[] }) {
+  if (exports.length === 0) return null;
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <DownloadIcon />
+        Export
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="min-w-44">
+        <ExportMenuItems exports={exports} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+export function ExportMenu({
+  exports,
+  iconOnly = false,
+  size = "sm",
+}: {
+  exports: ExportSource[];
+  // For tight spots: the icon alone, its label for screen readers.
+  iconOnly?: boolean;
+  size?: "sm" | "xs" | "default";
+}) {
+  useExportCommands(exports);
+  if (exports.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -82,27 +139,7 @@ export function ExportMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        {exports.map((source, i) => (
-          <Fragment key={source.dataset.id}>
-            {grouped && i > 0 && <DropdownMenuSeparator />}
-            {grouped && <DropdownMenuLabel>{source.dataset.name}</DropdownMenuLabel>}
-            {source.dataset.formats.map((format) => {
-              const target = exportOf(source, format);
-              const label = grouped ? formatInfo[format].label : `${source.dataset.name} · ${formatInfo[format].label}`;
-              return target.href ? (
-                <DropdownMenuItem key={format} asChild>
-                  <a href={target.href} download>
-                    {label}
-                  </a>
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem key={format} onSelect={target.run}>
-                  {label}
-                </DropdownMenuItem>
-              );
-            })}
-          </Fragment>
-        ))}
+        <ExportMenuItems exports={exports} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

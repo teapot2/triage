@@ -4,7 +4,7 @@ import { CheckCheckIcon, CheckIcon, EllipsisIcon, LoaderCircleIcon, RotateCcwIco
 import Link from "next/link";
 import { useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
-import { ExportMenu } from "@/components/export-menu";
+import { type ExportSource, ExportSubmenu, useExportCommands } from "@/components/export-menu";
 import { StickyHeader } from "@/components/sticky-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -96,15 +97,24 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
       ? [{ id: "verify", group: THIS_INCIDENT, label: "Verify again", icon: ShieldCheckIcon, keywords: "check fix worked", run: () => void resolution.act("verify") }]
       : []),
   ]);
-  const menu = (options.resolve || options.reopen || options.verify) && (
-    <ResolutionMenu
-      options={options}
-      pending={resolution.pending !== undefined}
-      onResolve={() => void resolution.act("resolve")}
-      onReopen={() => setReopeningOpen(true)}
-      onVerify={() => void resolution.act("verify")}
-    />
-  );
+  const exports = incidentExports(incident);
+  // The palette's export commands, whether or not the menu shows them.
+  useExportCommands(exports);
+  const hasOptions = options.resolve || options.reopen || options.verify;
+  const menuFor = (withExports: boolean) =>
+    (hasOptions || (withExports && exports.length > 0)) && (
+      <ResolutionMenu
+        options={options}
+        exports={withExports ? exports : []}
+        pending={resolution.pending !== undefined}
+        onResolve={() => void resolution.act("resolve")}
+        onReopen={() => setReopeningOpen(true)}
+        onVerify={() => void resolution.act("verify")}
+      />
+    );
+  // Export stays out of the sticky bar's menu: it's for checking the
+  // record, not an action to keep in reach.
+  const menu = menuFor(false);
   const approvalActions = fix && decision && (
     <ApprovalActions
       incidentId={incident.id}
@@ -120,6 +130,13 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
     <div className="flex items-center gap-2">
       {approvalActions}
       {menu}
+    </div>
+  );
+  const headerMenu = menuFor(true);
+  const headerActions = (approvalActions || headerMenu) && (
+    <div className="flex items-center gap-2">
+      {approvalActions}
+      {headerMenu}
     </div>
   );
 
@@ -142,12 +159,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
           </nav>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <h1 className="font-heading font-semibold text-2xl tracking-tight">{incident.title}</h1>
-            {/* Export stays out of the sticky bar: it's for checking the
-                record, not an action to keep in reach. */}
-            <div className="flex items-center gap-2">
-              {actions}
-              <ExportMenu exports={incidentExports(incident)} />
-            </div>
+            {headerActions}
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-muted-foreground text-sm">
             {/* The badges first (state, severity, value against its limit),
@@ -264,12 +276,14 @@ function ProgressBadge({
 // reopen it, or check the fix again. Only what the server would take.
 function ResolutionMenu({
   options,
+  exports,
   pending,
   onResolve,
   onReopen,
   onVerify,
 }: {
   options: ReturnType<typeof resolutionOptions>;
+  exports: ExportSource[];
   pending: boolean;
   onResolve: () => void;
   onReopen: () => void;
@@ -301,6 +315,8 @@ function ResolutionMenu({
             Verify again
           </DropdownMenuItem>
         )}
+        {exports.length > 0 && (options.resolve || options.reopen || options.verify) && <DropdownMenuSeparator />}
+        <ExportSubmenu exports={exports} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

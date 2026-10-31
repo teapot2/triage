@@ -13,11 +13,17 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ExportMenu } from "@/components/export-menu";
+import { ExportCommands, ExportMenuItems, type ExportSource } from "@/components/export-menu";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { postmortemActions } from "@/lib/export/datasets/postmortem";
 import { downloadText } from "@/lib/export/download";
@@ -253,6 +259,9 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
   // The judgment predates the resolution; the document around it doesn't.
   const written = pm.finishedAt ?? pm.startedAt;
   const stale = incident.resolvedAt !== undefined && Date.parse(incident.resolvedAt) > Date.parse(written);
+  const actionExports: ExportSource[] = pm.actionItems?.length
+    ? [{ dataset: postmortemActions, params: { id: incident.id } }]
+    : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -292,10 +301,16 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
                 <FileCodeIcon />
                 Markdown (.md)
               </DropdownMenuItem>
+              {/* The action items alone, to file as tickets. */}
+              {actionExports.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <ExportMenuItems exports={actionExports} />
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
-          {/* The action items alone, to file as tickets. */}
-          {pm.actionItems?.length ? <ExportMenu exports={[{ dataset: postmortemActions, params: { id: incident.id } }]} /> : null}
+          <ExportCommands exports={actionExports} />
         </div>
       </div>
       {/* What Download's PDF prints. */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { type ComponentProps, createContext, type ReactNode, useContext, useMemo } from "react";
-import { ExportMenu, type ExportSource } from "@/components/export-menu";
+import type { ExportSource } from "@/components/export-menu";
 import {
   askAnswers,
   dbRows,
@@ -47,18 +47,10 @@ export function incidentExports(incident: Incident): ExportSource[] {
     [evidenceMetrics, metricRows(incident).length > 0],
     [evidenceDb, dbRows(incident).length > 0],
     [investigationTrace, traceRows(incident).length > 0],
+    // The Ask thread, once something in it is answered.
+    [askAnswers, incident.questions?.some((q) => q.status === "answered") ?? false],
   ];
   return offered.flatMap(([dataset, any]) => (any ? [{ dataset, params }] : []));
-}
-
-// The Ask thread as Markdown or JSON, once something in it is answered.
-export function AskExport({ incident, className }: { incident: Incident; className?: string }) {
-  if (!incident.questions?.some((q) => q.status === "answered")) return null;
-  return (
-    <div className={className}>
-      <ExportMenu exports={[{ dataset: askAnswers, params: { id: incident.id } }]} />
-    </div>
-  );
 }
 
 // A chart in the evidence panel, its data downloadable as the incident's.
