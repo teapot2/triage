@@ -1,4 +1,5 @@
 import type { StageModel } from "../../models/settings";
+import { recordedEffort } from "../../models/stages";
 import { knownEvidenceIds } from "../ask/rules";
 import type { Claim, Incident, Postmortem } from "../schema";
 import { customSections, keptBuiltIns, type Template } from "./template";
@@ -38,8 +39,14 @@ export function postmortemRefusal(incident: Incident): string | undefined {
 }
 
 // The record while the model writes it.
-export function nextPostmortem(stage: Pick<StageModel, "provider" | "model">, now = new Date()): Postmortem {
-  return { status: "writing", startedAt: now.toISOString(), provider: stage.provider, model: stage.model };
+export function nextPostmortem(stage: Pick<StageModel, "provider" | "model" | "effort">, now = new Date()): Postmortem {
+  return {
+    status: "writing",
+    startedAt: now.toISOString(),
+    provider: stage.provider,
+    model: stage.model,
+    reasoningEffort: recordedEffort(stage),
+  };
 }
 
 // Placeholders the tools write where a commit has no known author.

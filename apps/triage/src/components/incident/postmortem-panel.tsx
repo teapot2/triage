@@ -258,7 +258,7 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <p className="min-w-0 text-muted-foreground text-xs">
-          Written <Timestamp date={written} /> · {modelLabel(pm.model, pm.provider)}
+          Written <Timestamp date={written} /> · {modelLabel(pm.model, pm.provider, pm.reasoningEffort)}
           {pm.finishedAt && <> · took {clock(Date.parse(pm.finishedAt) - Date.parse(pm.startedAt))}</>}
         </p>
         <div className="flex flex-wrap items-center gap-2">

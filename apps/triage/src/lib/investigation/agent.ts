@@ -2,6 +2,7 @@ import { type ModelMessage, ToolLoopAgent } from "ai";
 import { languageModel, modelOptions, reasoningKind, wakeProvider } from "../models/client";
 import { providers } from "../models/providers";
 import { stageModel, stageProblem } from "../models/settings";
+import { recordedEffort } from "../models/stages";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
@@ -213,7 +214,13 @@ export async function saveNewIncident(
     },
     steps: [],
     evidence: [],
-    run: { source: source.describe().id, provider: stage.provider, model: stage.model, startedAt: new Date().toISOString() },
+    run: {
+      source: source.describe().id,
+      provider: stage.provider,
+      model: stage.model,
+      reasoningEffort: recordedEffort(stage),
+      startedAt: new Date().toISOString(),
+    },
     uptime: a.uptime,
   };
   await saveIncident(incident);
@@ -257,7 +264,9 @@ export async function runInvestigation(
   // The investigate stage's model as configured in Settings now, recorded
   // on the run. A stage that can't run (no key, no URL) fails the run.
   const stage = await stageModel("investigate");
-  recorder.update({ run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model } });
+  recorder.update({
+    run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) },
+  });
   const problem = stageProblem(stage);
   if (problem) {
     recorder.update({ status: "failed", run: { ...recorder.incident.run!, finishedAt: new Date().toISOString(), error: problem } });

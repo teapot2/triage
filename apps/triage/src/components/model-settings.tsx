@@ -12,12 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { PublicModelSettings } from "@/lib/models/settings";
-import { stageIds, stageLabels } from "@/lib/models/stages";
+import { type StageId, stageIds, stageLabels } from "@/lib/models/stages";
 
 export type Provider = PublicModelSettings["providers"][number];
 export type StageModel = PublicModelSettings["stages"][keyof PublicModelSettings["stages"]];
+// A stage saved without an effort (a preset) goes back to its default.
 export type ModelUpdate = {
-  stages?: Partial<PublicModelSettings["stages"]>;
+  stages?: Partial<Record<StageId, Omit<StageModel, "effort"> & Partial<Pick<StageModel, "effort">>>>;
   endpoints?: Partial<Record<Provider["id"], { baseUrl?: string; apiKey?: string }>>;
 };
 // Saves an update and resolves to an error message, or nothing on success.
@@ -117,7 +118,7 @@ export function ModelSettings() {
             <ListGroup label="Stages" />
             {stageIds.map((stage) => (
               <StageRow
-                key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}`}
+                key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}|${settings.stages[stage].effort}`}
                 stage={stage}
                 saved={settings.stages[stage]}
                 providers={settings.providers}
@@ -161,7 +162,8 @@ export function ModelSettings() {
 // Applies one model to every stage: Muse Spark on Meta's API, Spark Open on
 // a host that serves it (Baseten, OpenRouter), or Glimmer on any provider
 // that has it (Modal, Fireworks, a local server...). Switching hosts for the
-// same open weights is one pick. The selection is an action, not a value,
+// same open weights is one pick. Each stage's effort goes back to its
+// default. The selection is an action, not a value,
 // so the select stays empty.
 function PresetRow({ providers, onSave }: { providers: Provider[]; onSave: SaveModelSettings }) {
   const [saving, setSaving] = useState(false);

@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProviderId } from "@/lib/models/providers";
-import { type StageId, stageLabels } from "@/lib/models/stages";
+import { defaultEffort, effortLabels, effortsFor, type ReasoningEffort, type StageId, stageLabels } from "@/lib/models/stages";
 
 type Check = { ok: true; text: string; ms: number } | { ok: false; error: string };
 
@@ -57,8 +57,9 @@ export function useModelList(provider: Provider | undefined) {
   };
 }
 
-// One stage's provider and model: a row that shows what's saved and whether
-// it can run, opening to an editor with Save and Test model. The parent keys
+// One stage's provider, model and (on Meta's API) reasoning effort: a row
+// that shows what's saved and whether it can run, opening to an editor with
+// Save and Test model. The parent keys
 // the row by its saved value, so a save or preset resets the draft, and owns
 // `open`. Test model calls the draft model once, saved or not, and may incur
 // charges; its result shows in the editor.
@@ -95,7 +96,12 @@ export function StageRow({
   const provider = providers.find((p) => p.id === draft.provider);
   const list = useModelList(provider);
   const model = draft.model.trim();
-  const dirty = draft.provider !== saved.provider || model !== saved.model;
+  // Only Meta's API takes an effort. A level the model doesn't take (Max,
+  // after switching to an older Spark) drops to the highest it does.
+  const meta = draft.provider === "meta";
+  const efforts = effortsFor(model);
+  const effort = efforts.includes(draft.effort) ? draft.effort : efforts[efforts.length - 1];
+  const dirty = draft.provider !== saved.provider || model !== saved.model || (meta && effort !== saved.effort);
   const missingKey = provider?.keyEnv && !provider.hasKey ? provider.keyEnv : undefined;
   const savedLabel = providers.find((p) => p.id === saved.provider)?.label ?? saved.provider;
   // A list to pick from: loaded, and not empty. Without one, any ID goes.
@@ -140,7 +146,7 @@ export function StageRow({
     if (id === saved.provider) next = saved.model;
     else if (from?.glimmer && draft.model === from.glimmer) next = to?.glimmer ?? "";
     else if (from?.spark && draft.model === from.spark) next = to?.spark ?? "";
-    setDraft({ provider: id, model: next });
+    setDraft({ provider: id, model: next, effort: draft.effort });
     setCustom(false);
     setTried(false);
   }
@@ -150,7 +156,7 @@ export function StageRow({
     if (modelError) return;
     setSaving(true);
     setSaveError(undefined);
-    const update: ModelUpdate = { stages: { [stage]: { provider: draft.provider, model } } };
+    const update: ModelUpdate = { stages: { [stage]: { provider: draft.provider, model, effort } } };
     const err = await onSave(update);
     setSaving(false);
     if (err) setSaveError(err);
@@ -173,7 +179,7 @@ export function StageRow({
     setCheck(null);
     const started = performance.now();
     try {
-      const params = new URLSearchParams({ provider: draft.provider, model });
+      const params = new URLSearchParams({ provider: draft.provider, model, ...(meta && { effort }) });
       const res = await fetch(`/api/ping-model?${params}`);
       const data = (await res.json()) as { ok: boolean; text?: string; error?: string };
       setCheck(
@@ -195,6 +201,7 @@ export function StageRow({
       subtitle={
         <>
           <span className="font-mono">{saved.model}</span> via {savedLabel}
+          {saved.provider === "meta" && ` · ${effortLabels[saved.effort].toLowerCase()} effort`}
         </>
       }
       status={status}
@@ -232,6 +239,23 @@ export function StageRow({
             }}
           />
         </FormField>
+        {meta && (
+          <FormField label="Reasoning effort" htmlFor={`${id}-effort`} hint="Higher levels think longer, and cost more.">
+            <Select value={effort} onValueChange={(v) => setDraft({ ...draft, effort: v as ReasoningEffort })}>
+              <SelectTrigger id={`${id}-effort`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {efforts.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {effortLabels[e]}
+                    {e === defaultEffort[stage] && " (default)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormField>
+        )}
       </div>
       {missingKey && (
         <Alert variant="warning">

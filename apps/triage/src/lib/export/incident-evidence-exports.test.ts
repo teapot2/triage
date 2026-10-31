@@ -76,6 +76,7 @@ const answered: Question = {
   mode: "tools",
   provider: "meta",
   model: "muse-spark-1.3",
+  reasoningEffort: "low",
 };
 
 const failed: Question = {
@@ -105,6 +106,7 @@ function full(): Incident {
       source: "scenario:pool-leak",
       provider: "meta",
       model: "muse-spark-1.3",
+      reasoningEffort: "high",
       startedAt: "2026-10-23T02:14:02.000Z",
       finishedAt: "2026-10-23T02:15:02.000Z",
       modelSteps: 4,
@@ -326,6 +328,7 @@ describe("GET /api/export/investigation-trace", () => {
       source: "scenario:pool-leak",
       provider: "meta",
       model: "muse-spark-1.3",
+      reasoning_effort: "high",
       model_steps: 4,
       input_tokens: 18200,
       output_tokens: 940,
@@ -431,6 +434,7 @@ describe("GET /api/export/ask-answers", () => {
       mode: "tools",
       provider: "meta",
       model: "muse-spark-1.3",
+      reasoning_effort: "low",
       answer: answered.answer,
       error: null,
       cited_evidence: [

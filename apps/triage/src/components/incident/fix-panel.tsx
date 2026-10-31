@@ -135,7 +135,7 @@ export function EarlierAttempts({ attempts, className }: { attempts?: FixAttempt
                 </Badge>
                 <span>
                   {attempt.fix.risk} risk · {attempt.fix.files.length} files
-                  {attempt.fixRun.model && ` · written by ${modelLabel(attempt.fixRun.model, attempt.fixRun.provider)}`}
+                  {attempt.fixRun.model && ` · written by ${modelLabel(attempt.fixRun.model, attempt.fixRun.provider, attempt.fixRun.reasoningEffort)}`}
                 </span>
               </div>
               <p className="text-sm leading-relaxed">{attempt.fix.summary}</p>
@@ -176,7 +176,7 @@ export function FixView({
           <AttemptBadge attempts={attempts} />
           <span>
             {fix.risk} risk{data.detected && " · changes stored data"} · {fix.files.length} files
-            {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider)}`}
+            {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider, fixRun.reasoningEffort)}`}
           </span>
         </span>
         <p className="text-sm leading-relaxed">{fix.summary}</p>

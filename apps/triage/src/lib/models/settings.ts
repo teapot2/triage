@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
 import { type NotificationEvent, notificationEvents, slackWebhookPattern } from "../notifications/types";
 import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
-import { type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
+import { defaultEffort, reasoningEffortSchema, type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
 export { type StageId, stageIdSchema, stageIds } from "./stages";
 
@@ -16,7 +16,13 @@ export { type StageId, stageIdSchema, stageIds } from "./stages";
 // template, and the notifications (a Slack webhook URL, a secret like the
 // keys, and which events send a message).
 
-const stageModelSchema = z.object({ provider: providerIdSchema, model: z.string().trim().min(1).max(200) });
+// effort: Meta's reasoning effort for the stage. Missing on settings saved
+// before it existed, and on presets, which leave each stage its default.
+const stageModelSchema = z.object({
+  provider: providerIdSchema,
+  model: z.string().trim().min(1).max(200),
+  effort: reasoningEffortSchema.optional(),
+});
 export type StageModel = z.infer<typeof stageModelSchema>;
 
 const endpointSchema = z.object({
@@ -74,16 +80,21 @@ export async function endpointFor(id: ProviderId): Promise<Endpoint> {
 }
 
 // The stage's saved model, else the first saved one down its fallback chain
-// (Postmortem uses Ask's, then Investigate's), else the env's.
-function chosenModel(settings: Settings, stage: StageId): StageModel {
+// (Postmortem uses Ask's, then Investigate's), else the env's. The effort is
+// always the stage's own, saved or default, never one down the chain.
+export function chosenModel(settings: Pick<Settings, "stages">, stage: StageId): Required<StageModel> {
+  let chosen = defaultStage();
   for (let s: StageId | undefined = stage; s; s = stageFallback[s]) {
     const saved = settings.stages[s];
-    if (saved) return saved;
+    if (saved) {
+      chosen = saved;
+      break;
+    }
   }
-  return defaultStage();
+  return { provider: chosen.provider, model: chosen.model, effort: settings.stages[stage]?.effort ?? defaultEffort[stage] };
 }
 
-export async function stageModel(stage: StageId): Promise<StageModel & Endpoint> {
+export async function stageModel(stage: StageId): Promise<Required<StageModel> & Endpoint> {
   const settings = await read();
   const chosen = chosenModel(settings, stage);
   return { ...chosen, ...endpointOf(settings, chosen.provider) };
@@ -108,7 +119,7 @@ export async function publicModelSettings() {
   const settings = await read();
   const stages = Object.fromEntries(stageIds.map((id) => [id, chosenModel(settings, id)])) as Record<
     StageId,
-    StageModel
+    Required<StageModel>
   >;
   return {
     stages,

@@ -48,6 +48,7 @@ import { askRefusal, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { providerLabels } from "@/lib/models/labels";
+import { effortLabels, type ReasoningEffort } from "@/lib/models/stages";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
@@ -341,6 +342,7 @@ interface QuestionView {
   mode?: Question["mode"];
   model?: string;
   provider?: string;
+  reasoningEffort?: ReasoningEffort;
   answeredAt?: string;
 }
 
@@ -364,6 +366,7 @@ function savedView(q: Question, key: string): QuestionView {
     mode: q.mode,
     model: q.model,
     provider: q.provider,
+    reasoningEffort: q.reasoningEffort,
     answeredAt: q.answeredAt,
   };
 }
@@ -890,6 +893,7 @@ function ReplyDetails({ view }: { view: QuestionView }) {
   const rows: [string, ReactNode][] = [];
   if (view.model) rows.push(["Model", view.model]);
   if (view.provider) rows.push(["Provider", providerLabels[view.provider] ?? view.provider]);
+  if (view.reasoningEffort) rows.push(["Effort", effortLabels[view.reasoningEffort]]);
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
   return (

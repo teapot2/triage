@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reasoningEffortSchema } from "../models/stages";
 import { templateSchema } from "./postmortem/template";
 
 // Contract between the Triage agent and the UI. The agent emits a `report`
@@ -287,9 +288,10 @@ export const fixRunSchema = z.object({
   status: z.enum(["writing", "testing", "proven", "failed", "declined"]),
   declinedBecause: z.string().optional(),
   attempt: z.number().int().describe("Submissions so far, counting the one being tested"),
-  // The fix stage's provider and model.
+  // The fix stage's provider, model and effort (Meta's API only).
   provider: z.string().optional(),
   model: z.string().optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
   rejections: z.array(z.string()).optional().describe("Why each rejected submission failed, first line only"),
   startedAt: timestamp,
   // As on the investigation's run: the fix stage's host waking up.
@@ -319,6 +321,9 @@ export const runSchema = z.object({
   // runs from before stages had their own models.
   provider: z.string().optional(),
   model: z.string(),
+  // How hard it reasoned: Meta's API only, and missing on runs from before
+  // efforts were set.
+  reasoningEffort: reasoningEffortSchema.optional(),
   startedAt: timestamp,
   // Set while the model's host wakes from scaled to zero (Modal), before
   // the first model call; cleared once it answers.
@@ -355,6 +360,7 @@ export const questionSchema = z.object({
   mode: z.enum(["tools", "evidence_only"]),
   provider: z.string().optional(),
   model: z.string(),
+  reasoningEffort: reasoningEffortSchema.optional(),
   inputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
 });
@@ -430,6 +436,7 @@ export const postmortemSchema = z.object({
   error: z.string().optional(),
   provider: z.string().optional(),
   model: z.string(),
+  reasoningEffort: reasoningEffortSchema.optional(),
   inputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   summary: z.string().optional().describe("Three sentences, under 80 words: what happened, impact, duration. No evidence IDs."),

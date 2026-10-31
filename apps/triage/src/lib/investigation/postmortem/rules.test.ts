@@ -84,12 +84,14 @@ describe("postmortemRefusal", () => {
 });
 
 describe("nextPostmortem", () => {
-  it("is a writing record with the stage's model", () => {
-    assert.deepEqual(nextPostmortem({ provider: "meta", model: "muse-spark-1.3" }, new Date("2026-10-29T10:00:00Z")), {
+  it("is a writing record with the stage's model and effort", () => {
+    const stage = { provider: "meta" as const, model: "muse-spark-1.3", effort: "medium" as const };
+    assert.deepEqual(nextPostmortem(stage, new Date("2026-10-29T10:00:00Z")), {
       status: "writing",
       startedAt: "2026-10-29T10:00:00.000Z",
       provider: "meta",
       model: "muse-spark-1.3",
+      reasoningEffort: "medium",
     });
   });
 });

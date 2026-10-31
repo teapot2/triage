@@ -5,6 +5,7 @@ import type { Incident, Question } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
 import { stageModel, stageProblem } from "@/lib/models/settings";
+import { recordedEffort } from "@/lib/models/stages";
 
 // The answer runs inside this request (it streams through the response),
 // capped at 10 model steps; this bounds it.
@@ -52,6 +53,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         mode: sourceKind(i) ? "tools" : "evidence_only",
         provider: stage.provider,
         model: stage.model,
+        reasoningEffort: recordedEffort(stage),
       };
       return { ...i, questions: [...(i.questions ?? []), question] };
     });

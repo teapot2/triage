@@ -272,7 +272,7 @@ export function InvestigationTimeline({
         <span className="tabular-nums">
           {took && `${took} · `}
           {callCount} tool {callCount === 1 ? "call" : "calls"}
-          {run && ` · ${modelLabel(run.model, run.provider)}`}
+          {run && ` · ${modelLabel(run.model, run.provider, run.reasoningEffort)}`}
         </span>
         <div className="ml-auto flex items-center gap-2">
           {thoughts.length > 0 && (

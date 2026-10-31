@@ -161,6 +161,7 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
     source: null,
     provider: null,
     model: null,
+    reasoning_effort: null,
     model_steps: null,
     input_tokens: null,
     output_tokens: null,
@@ -177,6 +178,7 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
         source: run.source,
         provider: run.provider ?? null,
         model: run.model,
+        reasoning_effort: run.reasoningEffort ?? null,
         model_steps: run.modelSteps ?? null,
         input_tokens: run.inputTokens ?? null,
         output_tokens: run.outputTokens ?? null,
@@ -267,6 +269,7 @@ const answerColumns: Column<AnswerRow>[] = [
   { key: "mode", value: (r) => r.question.mode },
   { key: "provider", value: (r) => r.question.provider },
   { key: "model", value: (r) => r.question.model },
+  { key: "reasoning_effort", value: (r) => r.question.reasoningEffort },
   { key: "answer", value: (r) => r.question.answer },
   { key: "error", value: (r) => r.question.error },
 ];

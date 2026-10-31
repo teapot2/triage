@@ -8,6 +8,7 @@ import {
 } from "ai";
 import { languageModel, modelOptions, reasoningKind } from "../../models/client";
 import { stageModel, stageProblem } from "../../models/settings";
+import { recordedEffort } from "../../models/stages";
 import { recordThoughts } from "../agent";
 import { incidentBlock } from "../context";
 import { QuestionRecorder } from "../recorder";
@@ -92,7 +93,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
   let stepsUsed = 0;
   try {
     const stage = await stageModel("ask");
-    recorder.update({ provider: stage.provider, model: stage.model });
+    recorder.update({ provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) });
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
 

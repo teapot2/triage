@@ -3,6 +3,7 @@ import { z } from "zod";
 import { languageModel, modelOptions, wakeProvider } from "../../models/client";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
+import { recordedEffort } from "../../models/stages";
 import { notify } from "../../notifications/notify";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
@@ -134,7 +135,14 @@ export async function runFixStage(
   const feedback = opts.feedback ?? [];
   const startedAt = new Date().toISOString();
   const stage = await stageModel("fix");
-  let fixRun: FixRun = { status: "writing", attempt: 0, startedAt, provider: stage.provider, model: stage.model };
+  let fixRun: FixRun = {
+    status: "writing",
+    attempt: 0,
+    startedAt,
+    provider: stage.provider,
+    model: stage.model,
+    reasoningEffort: recordedEffort(stage),
+  };
   const setFixRun = (patch: Partial<FixRun>) => {
     fixRun = { ...fixRun, ...patch };
     recorder.update({ fixRun });

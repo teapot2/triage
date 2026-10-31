@@ -31,7 +31,9 @@ export function languageModel(s: StageModel & Endpoint) {
 //   returns none for some calls (short reasoning); those show only text.
 // - store false, with the encrypted reasoning included: nothing is kept on
 //   Meta's side, and each call's reasoning is passed back with the next.
-export function modelOptions(s: Pick<StageModel, "provider">) {
+// - reasoningEffort: the stage's effort, sent as reasoning.effort. Left out
+//   when none is given, so Meta uses the model's own default.
+export function modelOptions(s: Pick<StageModel, "provider" | "effort">) {
   if (s.provider !== "meta") return undefined;
   return {
     openai: {
@@ -40,6 +42,7 @@ export function modelOptions(s: Pick<StageModel, "provider">) {
       reasoningSummary: "auto",
       store: false,
       include: ["reasoning.encrypted_content"],
+      ...(s.effort && { reasoningEffort: s.effort }),
     },
   };
 }

@@ -30,3 +30,38 @@ export const stageLabels: Record<StageId, { label: string; description: string }
 // Settings: Ask answers with the Investigate stage's model, and the
 // Postmortem with Ask's (so Investigate's, when Ask has none either).
 export const stageFallback: Partial<Record<StageId, StageId>> = { ask: "investigate", postmortem: "ask" };
+
+// How hard Meta's models think before answering (the Responses API's
+// reasoning.effort). Other providers ignore it. "none" is left out: every
+// Meta model answers it with a 400.
+export const reasoningEfforts = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const reasoningEffortSchema = z.enum(reasoningEfforts);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+
+export const effortLabels: Record<ReasoningEffort, string> = {
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+// A stage's effort until changed in Settings. Not inherited down the
+// fallback chain: a Postmortem on Ask's model still thinks at its own level.
+export const defaultEffort: Record<StageId, ReasoningEffort> = {
+  investigate: "high",
+  fix: "high",
+  ask: "low",
+  postmortem: "medium",
+};
+
+// The effort to record on a run: only Meta's API takes one, so a run on
+// another provider records none rather than a setting it ignored.
+export const recordedEffort = (s: { provider: string; effort?: ReasoningEffort }) =>
+  s.provider === "meta" ? s.effort : undefined;
+
+// The levels a model takes. Spark 1.1 and 1.2 answer "max" with a 400
+// (tried October 2026); Spark 1.3 and Wonder take every level.
+export const effortsFor = (model: string): readonly ReasoningEffort[] =>
+  /^muse-spark-1\.[0-2](\D|$)/.test(model) ? reasoningEfforts.filter((e) => e !== "max") : reasoningEfforts;
