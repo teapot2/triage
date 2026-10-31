@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Incident } from "../schema";
+import { dataChangeOf } from "./data-change";
 
 // Stage 5: once a human approves a proven fix, open a pull request with the
 // patch and its regression test. Works in a temporary git worktree on a new
@@ -61,8 +62,26 @@ export function pullRequestText(incident: Incident): { title: string; body: stri
   const runs = (validation ?? [])
     .map((r) => `| ${r.label} | \`${r.command}\` | ${r.exitCode} | ${r.tests.map((t) => `${t.status}`).join(", ") || "–"} |`)
     .join("\n");
-  const body = `${fix.summary}
+  // A data change the sandbox couldn't prove gets a warning and a checklist
+  // at the top, where a reviewer reads first.
+  const data = dataChangeOf(fix);
+  const unproven = data.unproven.map((f) => `\`${f}\``).join(", ");
+  const dataSection = data.detected
+    ? `
+> [!WARNING]
+> **This fix changes stored data.** The sandbox runs tests against the database read-only, so the data change was not proven there${unproven ? ` (${unproven} never ran)` : ""}.
 
+${data.reasons.map((r) => `- ${r}`).join("\n")}
+
+Before marking it ready:
+
+- [ ] Review the SQL: which rows it touches, and that it's safe to run more than once.
+- [ ] Run it against a copy of the production data first and check the result.
+- [ ] It ships with the deploy: merging this runs it against production.
+`
+    : "";
+  const body = `${fix.summary}
+${dataSection}
 ## Why
 
 ${report.summary ?? ""}
@@ -77,7 +96,7 @@ The regression test \`${fix.regressionTest.file}\` ("${fix.regressionTest.name}"
 | --- | --- | --- | --- |
 ${runs}
 
-Risk: ${fix.risk}${fix.touchesData ? " · touches data" : ""}. Approved in Triage (incident \`${incident.id}\`). Opened as a draft: nothing is deployed until it is marked ready and merged.
+Risk: ${fix.risk}${data.detected ? " · changes stored data" : ""}. Approved in Triage (incident \`${incident.id}\`). Opened as a draft: nothing is deployed until it is marked ready and merged.
 
 ---
 Opened by Triage, an AI SRE.

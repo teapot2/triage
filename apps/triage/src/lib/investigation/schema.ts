@@ -171,13 +171,29 @@ export const investigationReportSchema = z.object({
 });
 export type InvestigationReport = z.infer<typeof investigationReportSchema>;
 
+// Whether a fix changes stored data, worked out from its edits when it was
+// proven (fix/data-change.ts). Approving one needs a person to say they
+// reviewed the data change. Fixes saved before it existed lack it; read it
+// through dataChangeOf, which works it out from the patch for them.
+export const dataChangeSchema = z.object({
+  detected: z.boolean(),
+  reasons: z.array(z.string()),
+  // The files whose changes touch data.
+  files: z.array(z.string()),
+  // The SQL and migration files among them: the sandbox never runs them.
+  unproven: z.array(z.string()),
+});
+export type DataChange = z.infer<typeof dataChangeSchema>;
+
 export const fixSchema = z.object({
   summary: z.string(),
   patch: z.string().describe("Unified diff"),
   files: z.array(z.string()),
   regressionTest: z.object({ file: z.string(), name: z.string() }),
   risk: z.enum(["low", "medium", "high"]),
+  // The model's own claim; dataChange is what Triage worked out.
   touchesData: z.boolean(),
+  dataChange: dataChangeSchema.optional(),
 });
 export type Fix = z.infer<typeof fixSchema>;
 
@@ -251,6 +267,9 @@ export const approvalSchema = z.object({
   decidedAt: timestamp.optional(),
   decidedBy: z.string().optional(),
   reason: z.string().optional(),
+  // Set when the fix changes stored data and the approver said they
+  // reviewed that change.
+  dataReviewed: z.boolean().optional(),
   // Stage 5, after an approval: opening the PR, then its URL or why it failed.
   prState: z.enum(["opening", "opened", "failed"]).optional(),
   prError: z.string().optional(),

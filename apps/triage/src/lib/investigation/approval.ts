@@ -1,4 +1,5 @@
 import { notify } from "../notifications/notify";
+import { dataChangeOf } from "./fix/data-change";
 import { openPullRequest } from "./fix/pull-request";
 import type { Approval, Incident } from "./schema";
 import { getIncident, saveIncident, withIncidentLock } from "./store";
@@ -45,6 +46,17 @@ export function archiveDeniedFix(incident: Incident, approval: Approval, now = n
   };
 }
 
+export const DATA_NOT_REVIEWED = "this fix changes stored data; confirm you've reviewed it";
+
+// Why this decision can't be taken without more from the reviewer, if it
+// can't: approving a fix that changes stored data needs them to say they
+// reviewed the data change, since the sandbox never ran it. A deny needs
+// nothing. Pure, for the tests.
+export function approvalBlocked(incident: Incident, decision: Decision, dataReviewed: boolean): string | undefined {
+  if (decision !== "approved" || !incident.fix || dataReviewed) return undefined;
+  return dataChangeOf(incident.fix).detected ? DATA_NOT_REVIEWED : undefined;
+}
+
 // Records a human's decision on the proposed fix. Only a pending approval can
 // be decided, so a second click or a stale tab can't overwrite the first
 // decision. Either way the incident stops awaiting approval and is
@@ -53,7 +65,13 @@ export function archiveDeniedFix(incident: Incident, approval: Approval, now = n
 // Approving a proven fix also marks its PR as opening; openPr does the work.
 // A deny saves the reviewer's feedback as the reason; with feedback on a fix
 // that can be written again, the attempt is archived and a rerun starts.
-export function decideApproval(id: string, decision: Decision, feedback?: string): Promise<DecideResult> {
+// Approving a fix that changes stored data needs dataReviewed (409 without).
+export function decideApproval(
+  id: string,
+  decision: Decision,
+  feedback?: string,
+  dataReviewed = false,
+): Promise<DecideResult> {
   // Under the incident's lock, like every route write: the fix stage or a
   // question may be saving at the same time.
   return withIncidentLock(id, async () => {
@@ -65,6 +83,8 @@ export function decideApproval(id: string, decision: Decision, feedback?: string
     if (incident.approval.state !== "pending") {
       return { ok: false, status: 409, error: `the fix was already ${incident.approval.state}` };
     }
+    const blocked = approvalBlocked(incident, decision, dataReviewed);
+    if (blocked) return { ok: false, status: 409, error: blocked };
 
     const now = new Date().toISOString();
     const opening = decision === "approved" && canOpenPr(incident);
@@ -74,6 +94,7 @@ export function decideApproval(id: string, decision: Decision, feedback?: string
       state: decision,
       decidedAt: now,
       ...(reason ? { reason } : {}),
+      ...(decision === "approved" && dataReviewed && dataChangeOf(incident.fix).detected ? { dataReviewed: true } : {}),
       ...(opening ? { prState: "opening" as const } : {}),
     };
     const rerun = decision === "denied" && reason !== undefined && canRerunFix(incident);

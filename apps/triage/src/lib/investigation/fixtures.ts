@@ -534,5 +534,231 @@ const controlRun: Incident = {
   },
 };
 
+// A fix with a data half: the code stops failing on a product with no list
+// price, and a migration backfills the missing rows. The sandbox proves the
+// code; the migration only ships in the PR, so approving it needs the
+// reviewer to say they read it (see fix/data-change.ts).
+const priceGapPatch = `--- a/src/lib/prices.ts
++++ b/src/lib/prices.ts
+@@ -4,7 +4,11 @@ import { productPrices } from "@/db/schema";
+ export async function getListPrice(productId: number, fallbackCents: number): Promise<number> {
+   const [row] = await db
+     .select({ cents: productPrices.listPriceCents })
+     .from(productPrices)
+     .where(eq(productPrices.productId, productId));
+-  return row.cents;
++  if (!row) {
++    logger.warn("list price missing, using the product price", { "product.id": productId });
++    return fallbackCents;
++  }
++  return row.cents;
+ }
+--- /dev/null
++++ b/drizzle/0004_backfill_product_prices.sql
+@@ -0,0 +1,6 @@
++-- Products added after the price list was seeded have no list price.
++INSERT INTO product_prices (product_id, list_price_cents)
++SELECT p.id, p.price_cents FROM products p
++LEFT JOIN product_prices pp ON pp.product_id = p.id
++WHERE pp.product_id IS NULL
++ON CONFLICT (product_id) DO NOTHING;
+--- /dev/null
++++ b/src/lib/prices.test.ts
+@@ -0,0 +1,8 @@
++import { describe, expect, it } from "vitest";
++import { getListPrice } from "./prices";
++
++describe("getListPrice", () => {
++  it("falls back to the product price when the list price is missing", async () => {
++    await expect(getListPrice(999_999, 1250)).resolves.toBe(1250);
++  });
++});
+`;
+
+const priceGapErrors = [0, 0, 0.1, 0, 0, 0, 0.1, 0, 4.2, 5.1, 4.8, 5.3, 5.0, 4.9, 5.2, 5.1, 4.7, 5.0];
+
+const priceGap: Incident = {
+  id: "inc_price_gap",
+  title: "500s on product pages without a list price",
+  service: "shopfront",
+  severity: "sev3",
+  status: "awaiting_approval",
+  detectedAt: "2026-10-24T15:20:00Z",
+  trigger: {
+    metric: "http.server.error.rate",
+    unit: "%",
+    threshold: 2,
+    observed: 5.0,
+    series: series("2026-10-24T15:03:00Z", priceGapErrors),
+  },
+  steps: [
+    {
+      id: "step_1",
+      tool: "query_logs",
+      input: { service: "shopfront", level: "error", window: "30m", groupBy: "message" },
+      status: "completed",
+      startedAt: "2026-10-24T15:20:03Z",
+      durationMs: 512,
+      summary: "96 TypeErrors reading 'cents' in getListPrice since 15:11",
+      evidenceIds: ["ev_metric_errors", "ev_log_price"],
+    },
+    {
+      id: "step_2",
+      tool: "deploy_history",
+      input: { service: "shopfront", since: "2026-10-24T00:00:00Z" },
+      status: "completed",
+      startedAt: "2026-10-24T15:20:05Z",
+      durationMs: 133,
+      summary: "FF_LIST_PRICES turned on at 15:11",
+      evidenceIds: ["ev_commit_prices_flag"],
+    },
+    {
+      id: "step_3",
+      tool: "read_source",
+      input: { file: "src/lib/prices.ts", startLine: 4, endLine: 10 },
+      status: "completed",
+      startedAt: "2026-10-24T15:20:06Z",
+      durationMs: 28,
+      summary: "getListPrice assumes every product has a product_prices row",
+      evidenceIds: ["ev_source_prices"],
+    },
+  ],
+  evidence: [
+    {
+      id: "ev_metric_errors",
+      kind: "metric",
+      tool: "query_metrics",
+      summary: "5xx rate 0% -> 5% on GET /products/[slug] from 15:11",
+      metric: "http.server.error.rate",
+      unit: "%",
+      baseline: 0,
+      observed: 5.0,
+      series: series("2026-10-24T15:03:00Z", priceGapErrors),
+    },
+    {
+      id: "ev_log_price",
+      kind: "log",
+      tool: "query_logs",
+      summary: "96x \"Cannot read properties of undefined (reading 'cents')\" since 15:11",
+      observedAt: "2026-10-24T15:19:48Z",
+      service: "shopfront",
+      level: "error",
+      message: "TypeError: Cannot read properties of undefined (reading 'cents') at getListPrice",
+      count: 96,
+    },
+    {
+      id: "ev_commit_prices_flag",
+      kind: "commit",
+      tool: "deploy_history",
+      summary: "Config change on shopfront at 15:11: 'ops: FF_LIST_PRICES turned on'",
+      observedAt: "2026-10-24T15:11:00Z",
+      sha: "config:FF_LIST_PRICES",
+      author: "unknown",
+      message: "ops: FF_LIST_PRICES turned on",
+      files: [],
+    },
+    {
+      id: "ev_source_prices",
+      kind: "source",
+      tool: "read_source",
+      summary: "getListPrice reads row.cents without checking the row exists",
+      file: "src/lib/prices.ts",
+      startLine: 4,
+      code: `export async function getListPrice(productId: number, fallbackCents: number): Promise<number> {
+  const [row] = await db
+    .select({ cents: productPrices.listPriceCents })
+    .from(productPrices)
+    .where(eq(productPrices.productId, productId));
+  return row.cents;
+}`,
+    },
+  ],
+  report: {
+    summary:
+      "Since FF_LIST_PRICES went on at 15:11, product pages fail for products added after the price list was seeded: they have no list price, and getListPrice assumes one.",
+    servicesQueried: ["shopfront", "postgres"],
+    hypotheses: [
+      {
+        id: "h_price_gap",
+        title: "Products missing from product_prices crash getListPrice",
+        confidence: 0.9,
+        status: "leading",
+        causalChain: {
+          symptom: {
+            text: "About 5% of product page requests return 500 since 15:11.",
+            evidenceIds: ["ev_metric_errors"],
+          },
+          propagation: {
+            text: "getListPrice throws a TypeError for products with no product_prices row, and the page has no fallback.",
+            evidenceIds: ["ev_log_price", "ev_source_prices"],
+          },
+          rootCause: {
+            text: "Turning on FF_LIST_PRICES put getListPrice on the request path, and the price list was never backfilled for newer products.",
+            evidenceIds: ["ev_commit_prices_flag", "ev_source_prices"],
+          },
+        },
+      },
+    ],
+    verdict: { kind: "root_cause", hypothesisId: "h_price_gap" },
+  },
+  fix: {
+    summary:
+      "Fall back to the product's own price when it has no list price, and backfill product_prices for the products the seed missed so they show their list price again.",
+    patch: priceGapPatch,
+    files: ["src/lib/prices.ts", "drizzle/0004_backfill_product_prices.sql", "src/lib/prices.test.ts"],
+    regressionTest: {
+      file: "src/lib/prices.test.ts",
+      name: "falls back to the product price when the list price is missing",
+    },
+    risk: "medium",
+    touchesData: true,
+  },
+  validation: [
+    {
+      label: "Original code",
+      ref: "original",
+      command: "pnpm vitest run src/lib/prices.test.ts",
+      exitCode: 1,
+      durationMs: 1510,
+      tests: [
+        {
+          name: "falls back to the product price when the list price is missing",
+          status: "failed",
+          durationMs: 38,
+          error: "TypeError: Cannot read properties of undefined (reading 'cents')",
+        },
+      ],
+      output:
+        " FAIL  src/lib/prices.test.ts > getListPrice > falls back to the product price when the list price is missing\nTypeError: Cannot read properties of undefined (reading 'cents')\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n\nexit code 1",
+    },
+    {
+      label: "Patched code",
+      ref: "patched",
+      command: "pnpm vitest run src/lib/prices.test.ts",
+      exitCode: 0,
+      durationMs: 1288,
+      tests: [
+        { name: "falls back to the product price when the list price is missing", status: "passed", durationMs: 21 },
+      ],
+      output:
+        " ✓ src/lib/prices.test.ts > getListPrice > falls back to the product price when the list price is missing 21ms\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\nexit code 0",
+    },
+    {
+      label: "Patched code: typecheck",
+      ref: "patched",
+      command: "pnpm tsc --noEmit",
+      exitCode: 0,
+      durationMs: 6120,
+      tests: [],
+      output: "No type errors.\n\nexit code 0",
+    },
+  ],
+  approval: {
+    state: "pending",
+    requestedAt: "2026-10-24T15:23:10Z",
+  },
+};
+priceGap.mitigation = proposeMitigation(priceGap.report!, priceGap.evidence, priceGap.service, "2026-10-24T15:21:30Z");
+
 // Hand-written examples shown alongside real runs.
-export const exampleIncidents = [poolLeak, controlRun].map((i) => incidentSchema.parse(i));
+export const exampleIncidents = [poolLeak, controlRun, priceGap].map((i) => incidentSchema.parse(i));

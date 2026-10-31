@@ -52,7 +52,16 @@ describe("slackMessage", () => {
     assert.ok(body(slackMessage("fix_ready", i, base)).includes("<https://github.com/acme/shop/pull/7|Draft PR>"));
   });
 
-  it("links the draft PR when it is opened", () => {
+  it("says when the fix changes stored data", () => {
+    assert.ok(!body(slackMessage("fix_ready", example(), base)).includes("stored data"));
+    const gap = structuredClone(exampleIncidents.find((i) => i.id === "inc_price_gap")!);
+    const m = slackMessage("fix_ready", gap, base);
+    assert.match(m.text, /^Fix ready for review \(changes stored data\)/);
+    assert.ok(body(m).includes("*changes stored data*"));
+    assert.ok(body(m).includes("|Review the data change and approve it in Triage>"));
+  });
+
+    it("links the draft PR when it is opened", () => {
     const i = example();
     i.approval = { ...i.approval!, state: "approved", prState: "opened", prUrl: "https://github.com/acme/shop/pull/7" };
     const m = slackMessage("pr_opened", i, base);

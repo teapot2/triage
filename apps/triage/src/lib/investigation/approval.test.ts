@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { archiveDeniedFix, canRerunFix } from "./approval";
+import { approvalBlocked, archiveDeniedFix, canRerunFix, DATA_NOT_REVIEWED, decideApproval } from "./approval";
 import { exampleIncidents } from "./fixtures";
 import type { Approval, FixRun, Incident } from "./schema";
 
@@ -75,5 +75,34 @@ describe("archiveDeniedFix", () => {
     const copy = structuredClone(before);
     archiveDeniedFix(before, denied);
     assert.deepEqual(before, copy);
+  });
+});
+
+describe("approving a fix that changes stored data", () => {
+  const gap = () => structuredClone(exampleIncidents.find((i) => i.id === "inc_price_gap")!);
+
+  it("needs the reviewer to say they reviewed the data change", () => {
+    assert.equal(approvalBlocked(gap(), "approved", false), DATA_NOT_REVIEWED);
+    assert.equal(approvalBlocked(gap(), "approved", true), undefined);
+  });
+
+  it("needs nothing to deny it", () => {
+    assert.equal(approvalBlocked(gap(), "denied", false), undefined);
+  });
+
+  it("needs nothing for a code-only fix", () => {
+    assert.equal(approvalBlocked(incident("live:shopfront"), "approved", false), undefined);
+  });
+
+  it("gates a fix saved before Triage worked out data changes, from its patch", () => {
+    const saved = gap();
+    assert.equal(saved.fix?.dataChange, undefined);
+    saved.fix = { ...saved.fix!, touchesData: false };
+    assert.equal(approvalBlocked(saved, "approved", false), DATA_NOT_REVIEWED);
+  });
+
+  it("is refused with a 409 without the acknowledgment, saving nothing", async () => {
+    const result = await decideApproval("inc_price_gap", "approved");
+    assert.deepEqual(result, { ok: false, status: 409, error: DATA_NOT_REVIEWED });
   });
 });

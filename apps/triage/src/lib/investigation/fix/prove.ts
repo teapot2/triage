@@ -1,4 +1,5 @@
 import type { SandboxRun } from "../schema";
+import { isNewMigrationPath } from "./data-change";
 import {
   createSandbox,
   readSandboxFile,
@@ -13,6 +14,8 @@ import {
 // approve it. The regression test has to fail on the code as it is (so it
 // reproduces the bug), then pass with the edits applied, and the patched
 // app has to typecheck. Anything else is a problem the model gets back.
+// A migration in the fix is copied in but never run: the tests only read
+// the database, so the data half of a fix stays unproven (data-change.ts).
 
 export type Edit = { file: string; find: string; replace: string };
 export type RegressionTest = { file: string; name: string; content: string };
@@ -50,6 +53,9 @@ export function applyEdits(
   const problems: string[] = [];
   edits.forEach((e, i) => {
     const text = files.get(e.file);
+    // A new migration is the one file an edit may create: an empty `find`
+    // and the whole file as `replace`.
+    if (text === undefined && e.find === "" && isNewMigrationPath(e.file)) return void files.set(e.file, e.replace);
     if (text === undefined) return problems.push(`edit ${i + 1}: ${e.file} is not a file you read`);
     const at = text.indexOf(e.find);
     if (e.find === "" || at === -1) return problems.push(`edit ${i + 1}: \`find\` text not found in ${e.file}; copy it exactly from the file`);

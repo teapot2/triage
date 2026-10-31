@@ -14,6 +14,7 @@ import {
 import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { ChartPoint, Incident } from "@/lib/investigation/schema";
 import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
@@ -163,7 +164,7 @@ export function IncidentReport({
           <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-150 fill-mode-backwards"])}>
             <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
               <WrenchIcon className="size-3.5" />
-              Proposed fix · {fix.risk} risk
+              Proposed fix · {fix.risk} risk{dataChangeOf(fix).detected && " · changes stored data"}
               <AttemptBadge attempts={fixAttempts} />
             </span>
             <p className="text-sm leading-relaxed">{fix.summary}</p>

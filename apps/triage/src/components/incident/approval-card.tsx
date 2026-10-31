@@ -20,8 +20,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import type { Decision } from "@/lib/investigation/approval";
+import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Approval, Fix } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
+import { DataChangeReview } from "./data-change-review";
 
 // The decision on the proposed fix, saved on the server. A click shows
 // right away; the server then saves it and the page refreshes, so the status
@@ -30,13 +32,14 @@ import { cn } from "@/lib/utils";
 // and the refresh brings in whatever was actually saved. A deny can carry
 // feedback; on a fix that can be written again the server then starts a new
 // attempt (rerun in its response), and the refresh shows the fix stage
-// writing.
+// writing. Approving a fix that changes stored data sends dataReviewed once
+// the approver has ticked that they read it; the server refuses it without.
 export function useApprovalDecision(incidentId: string, saved: Approval["state"] | undefined, opensPr: boolean) {
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<Decision>();
   const [error, setError] = useState<string | null>(null);
 
-  async function decide(decision: Decision, feedback?: string) {
+  async function decide(decision: Decision, feedback?: string, dataReviewed = false) {
     const reason = feedback?.trim() || undefined;
     setOptimistic(decision);
     setError(null);
@@ -44,7 +47,7 @@ export function useApprovalDecision(incidentId: string, saved: Approval["state"]
       const res = await fetch(`/api/incidents/${incidentId}/approval`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision, ...(reason ? { feedback: reason } : {}) }),
+        body: JSON.stringify({ decision, ...(reason ? { feedback: reason } : {}), ...(dataReviewed ? { dataReviewed } : {}) }),
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string; rerun?: boolean };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -208,7 +211,9 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
 }
 
 // The write gate's confirmation: approving is the one action that changes
-// something outside Triage, so it says what will happen and asks once.
+// something outside Triage, so it says what will happen and asks once. A
+// fix that changes stored data also shows that change, and Approve waits
+// for the box saying it was reviewed.
 export function ApproveDialog({
   fix,
   opensPr,
@@ -222,12 +227,20 @@ export function ApproveDialog({
   mitigated: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
+  onConfirm: (dataReviewed: boolean) => void;
 }) {
   const files = fix.files.length;
+  const change = dataChangeOf(fix);
+  const [reviewed, setReviewed] = useState(false);
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setReviewed(false);
+        onOpenChange(next);
+      }}
+    >
+      <AlertDialogContent className={cn(change.detected && "data-[size=default]:sm:max-w-lg")}>
         <AlertDialogHeader>
           <AlertDialogTitle>Approve this fix?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -243,9 +256,14 @@ export function ApproveDialog({
             {mitigated && " Service was restored by the mitigation; this PR is the permanent fix."}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {change.detected && (
+          <DataChangeReview fix={fix} change={change} reviewed={reviewed} onReviewedChange={setReviewed} />
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>Approve fix</AlertDialogAction>
+          <AlertDialogAction disabled={change.detected && !reviewed} onClick={() => onConfirm(change.detected && reviewed)}>
+            Approve fix
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

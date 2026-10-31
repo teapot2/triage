@@ -6,6 +6,7 @@ import { DiffViewer } from "@/components/diff-viewer";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Fix, FixAttempt, FixRun, SandboxRun } from "@/lib/investigation/schema";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
@@ -161,18 +162,26 @@ export function FixView({
   fixRun?: FixRun;
   attempts?: FixAttempt[];
 }) {
+  const data = dataChangeOf(fix);
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground text-xs">
           <AttemptBadge attempts={attempts} />
           <span>
-            {fix.risk} risk{fix.touchesData && " · touches data"} · {fix.files.length} files
+            {fix.risk} risk{data.detected && " · changes stored data"} · {fix.files.length} files
             {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider)}`}
           </span>
         </span>
         <p className="text-sm leading-relaxed">{fix.summary}</p>
         <FixProof validation={validation} />
+        {data.unproven.length > 0 && (
+          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground text-xs">
+            <Badge variant="warning">Not proven in the sandbox</Badge>
+            <span className="font-mono">{data.unproven.join(", ")}</span>
+            <span>· the sandbox only reads the database</span>
+          </p>
+        )}
         {fixRun?.rejections && fixRun.rejections.length > 0 && (
           <div className="flex flex-col gap-1 text-muted-foreground text-xs">
             <span>

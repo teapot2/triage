@@ -210,7 +210,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             mitigated={mitigated}
             open={confirming}
             onOpenChange={setConfirming}
-            onConfirm={() => void decide("approved")}
+            onConfirm={(dataReviewed) => void decide("approved", undefined, dataReviewed)}
           />
           <DenyDialog
             noRerun={noRerunReason(incident)}

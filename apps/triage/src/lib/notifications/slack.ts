@@ -1,4 +1,5 @@
 import { metricLabel } from "@/components/incident/metric-labels";
+import { dataChangeOf } from "../investigation/fix/data-change";
 import type { Incident } from "../investigation/schema";
 import { withUnit } from "../investigation/postmortem/timeline";
 import type { MessageKind } from "./types";
@@ -79,15 +80,22 @@ export function slackMessage(
         "It was resolved and has come back, so Triage reopened it.",
       );
     }
-    case "fix_ready":
+    case "fix_ready": {
+      // A fix that changes stored data says so up front, where it shows in
+      // the push notification too.
+      const data = incident.fix !== undefined && dataChangeOf(incident.fix).detected;
       return message(
-        `Fix ready for review on ${sev} incident: ${esc(incident.title)}`,
-        `*Fix ready for review* · ${head}`,
+        `Fix ready for review${data ? " (changes stored data)" : ""} on ${sev} incident: ${esc(incident.title)}`,
+        `*Fix ready for review*${data ? " · changes stored data" : ""} · ${head}`,
         title,
         incident.fix && esc(short(incident.fix.summary, 400)),
-        "Triage proved it in a sandbox. " + link(url, "Review and approve it in Triage"),
+        data
+          ? "Triage proved the code in a sandbox. It also *changes stored data*, which the sandbox can't prove. " +
+              link(url, "Review the data change and approve it in Triage")
+          : "Triage proved it in a sandbox. " + link(url, "Review and approve it in Triage"),
         pr("Draft PR"),
       );
+    }
     case "pr_opened":
       return message(
         `Draft PR opened for ${sev} incident: ${esc(incident.title)}`,

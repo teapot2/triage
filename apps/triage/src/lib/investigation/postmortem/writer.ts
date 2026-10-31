@@ -3,6 +3,7 @@ import { z } from "zod";
 import { languageModel, modelOptions } from "../../models/client";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
 import { cite, incidentBlock } from "../context";
+import { dataChangeOf } from "../fix/data-change";
 import { evidenceId, type Incident, type Postmortem, postmortemSchema } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { forModel } from "../tools";
@@ -151,7 +152,7 @@ function fixBlock(incident: Incident): string {
   if (!fix) return fixRun?.declinedBecause ? `Declined: ${fixRun.declinedBecause}` : fixRun ? `No fix (${fixRun.status}).` : "None written.";
   const lines = [
     fix.summary,
-    `Files: ${fix.files.join(", ")}; risk ${fix.risk}${fix.touchesData ? "; touches data" : ""}`,
+    `Files: ${fix.files.join(", ")}; risk ${fix.risk}${dataChangeOf(fix).detected ? "; touches data" : ""}`,
     `Regression test: ${fix.regressionTest.name} (${fix.regressionTest.file})`,
   ];
   for (const run of validation ?? []) {
