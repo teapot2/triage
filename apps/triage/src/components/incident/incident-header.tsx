@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { incidentUsage } from "@/lib/investigation/cost";
 import type { Incident } from "@/lib/investigation/schema";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { Timestamp } from "@/components/timestamp";
@@ -22,6 +23,7 @@ import { THIS_INCIDENT } from "./incident-commands";
 import { incidentExports } from "./incident-export";
 import { MetricBadges } from "./outcome-badges";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
+import { UsageLine } from "./usage-line";
 import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
 
 // Why a deny with feedback starts no new attempt on this incident, or
@@ -51,6 +53,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
     (verified ? verification.series.at(-1)?.value : undefined) ??
     (recovered ? mitigation.recovery?.series.at(-1)?.value : undefined) ??
     trigger.observed;
+  const usage = incidentUsage(incident);
   // Only a fix Triage proved in its sandbox gets a PR (see canOpenPr).
   const opensPr = incident.fixRun?.status === "proven";
   const { decision, decide, error } = useApprovalDecision(incident.id, approval?.state, opensPr);
@@ -162,6 +165,9 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
             <span>
               {incident.openedBy === "watch" ? "Detected by Triage" : "Detected"} <Timestamp date={incident.detectedAt} />
             </span>
+            {/* An icon rather than a dot: this is the item that wraps on
+                most widths, and a dot would start the new line. */}
+            {usage && <UsageLine usage={usage} />}
           </div>
         </div>
       </StickyHeader>

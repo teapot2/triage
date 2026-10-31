@@ -1,8 +1,9 @@
 import { type ModelMessage, ToolLoopAgent } from "ai";
-import { languageModel, modelOptions, reasoningKind, wakeProvider } from "../models/client";
+import { cacheKey, languageModel, modelOptions, reasoningKind, wakeProvider } from "../models/client";
 import { providers } from "../models/providers";
 import { stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
+import { addUsage, noTokens } from "../models/usage";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
@@ -281,7 +282,7 @@ export async function runInvestigation(
   let stepsUsed = 0;
   const agent = new ToolLoopAgent({
     model: languageModel(stage),
-    providerOptions: modelOptions(stage),
+    providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
     ...recordThoughts(recorder, reasoningKind(stage.provider)),
     instructions,
     tools,
@@ -303,14 +304,12 @@ export async function runInvestigation(
       recorder.update({ run: { ...recorder.incident.run!, wakingSince: undefined } });
     }
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, source) }];
-    let inputTokens = 0;
-    let outputTokens = 0;
+    const tokens = noTokens();
     for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && stepsUsed < MAX_STEPS; attempt++) {
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
       const result = await agent.generate({ messages });
       messages.push(...result.responseMessages);
-      inputTokens += result.usage.inputTokens ?? 0;
-      outputTokens += result.usage.outputTokens ?? 0;
+      addUsage(tokens, result.usage);
     }
 
     const report = recorder.report;
@@ -320,8 +319,7 @@ export async function runInvestigation(
         ...recorder.incident.run!,
         finishedAt: new Date().toISOString(),
         modelSteps: stepsUsed,
-        inputTokens,
-        outputTokens,
+        ...tokens,
         rejectedReports: recorder.rejectedReports,
         error: report ? undefined : `No accepted report after ${stepsUsed} model steps`,
       },

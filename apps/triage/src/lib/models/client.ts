@@ -2,6 +2,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { type ProviderId, providers } from "./providers";
 import type { Endpoint, StageModel } from "./settings";
+import type { StageId } from "./stages";
 
 // A chat model for one provider and model ID, ready for the AI SDK.
 //
@@ -33,7 +34,12 @@ export function languageModel(s: StageModel & Endpoint) {
 //   Meta's side, and each call's reasoning is passed back with the next.
 // - reasoningEffort: the stage's effort, sent as reasoning.effort. Left out
 //   when none is given, so Meta uses the model's own default.
-export function modelOptions(s: Pick<StageModel, "provider" | "effort">) {
+// - promptCacheKey: routes calls that share a prefix to the same cache, so
+//   input Meta has seen bills at its cached rate (88% off). One key per
+//   stage and incident (cacheKey()): each step of a stage's tool loop
+//   resends everything before it, and an incident's questions share the
+//   evidence they're asked over.
+export function modelOptions(s: Pick<StageModel, "provider" | "effort">, cache?: { key: string }) {
   if (s.provider !== "meta") return undefined;
   return {
     openai: {
@@ -43,9 +49,13 @@ export function modelOptions(s: Pick<StageModel, "provider" | "effort">) {
       store: false,
       include: ["reasoning.encrypted_content"],
       ...(s.effort && { reasoningEffort: s.effort }),
+      ...(cache && { promptCacheKey: cache.key }),
     },
   };
 }
+
+// The prompt cache key for a stage's calls on one incident.
+export const cacheKey = (stage: StageId, incidentId: string) => ({ key: `triage:${stage}:${incidentId}` });
 
 // What a model's reasoning is, where it returns one: Meta's API summarizes
 // it; everything else here returns open-weights models' raw thinking.

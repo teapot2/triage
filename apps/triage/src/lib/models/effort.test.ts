@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { modelOptions } from "./client";
+import { cacheKey, modelOptions } from "./client";
 import { modelLabel } from "./labels";
 import { chosenModel } from "./settings";
 import { effortsFor, recordedEffort } from "./stages";
@@ -27,6 +27,11 @@ describe("modelOptions", () => {
   it("leaves the effort out when there is none, and other providers alone", () => {
     assert.equal(modelOptions({ provider: "meta" })?.openai.reasoningEffort, undefined);
     assert.equal(modelOptions({ provider: "openrouter", effort: "high" }), undefined);
+  });
+
+  it("keys the prompt cache by stage and incident", () => {
+    assert.equal(modelOptions({ provider: "meta" }, cacheKey("ask", "inc_1"))?.openai.promptCacheKey, "triage:ask:inc_1");
+    assert.equal(modelOptions({ provider: "meta" })?.openai.promptCacheKey, undefined);
   });
 });
 

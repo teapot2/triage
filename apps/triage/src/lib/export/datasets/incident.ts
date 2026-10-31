@@ -1,4 +1,5 @@
 import type { Evidence, Fix, Incident, InvestigationStep, MetricPoint, Question, Run, Thought } from "@/lib/investigation/schema";
+import { costOf } from "@/lib/models/pricing";
 import { type Cell, type Column, defineDataset, type ExportSubject } from "../dataset";
 
 // An incident's record and the raw evidence behind what the AI claimed, as
@@ -164,7 +165,10 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
     reasoning_effort: null,
     model_steps: null,
     input_tokens: null,
+    cached_input_tokens: null,
     output_tokens: null,
+    reasoning_tokens: null,
+    cost_usd: null,
   };
   switch (row.kind) {
     case "run": {
@@ -181,7 +185,10 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
         reasoning_effort: run.reasoningEffort ?? null,
         model_steps: run.modelSteps ?? null,
         input_tokens: run.inputTokens ?? null,
+        cached_input_tokens: run.cachedInputTokens ?? null,
         output_tokens: run.outputTokens ?? null,
+        reasoning_tokens: run.reasoningTokens ?? null,
+        cost_usd: run.inputTokens === undefined ? null : (costOf(run, run.provider, run.model) ?? null),
       };
     }
     case "thought": {

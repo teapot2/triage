@@ -1,7 +1,8 @@
 import { type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
-import { languageModel, modelOptions } from "../../models/client";
+import { cacheKey, languageModel, modelOptions } from "../../models/client";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
+import { addUsage, noTokens } from "../../models/usage";
 import { knownEvidenceIds } from "../ask/rules";
 import { cite, incidentBlock } from "../context";
 import { dataChangeOf } from "../fix/data-change";
@@ -355,8 +356,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         : i,
     );
 
-  let inputTokens = 0;
-  let outputTokens = 0;
+  const tokens = noTokens();
   let startedAt: string | undefined;
   let stream: DraftStream | undefined;
   // What a failure keeps: the draft, when anything was written.
@@ -388,7 +388,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     let stepsUsed = 0;
     const agent = new ToolLoopAgent({
       model: languageModel(stage),
-      providerOptions: modelOptions(stage),
+      providerOptions: modelOptions(stage, cacheKey("postmortem", incidentId)),
       instructions: instructionsFor(template),
       tools: {
         submit_postmortem: tool({
@@ -445,8 +445,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
       }
       messages.push(...(await result.responseMessages));
       const usage = await result.totalUsage;
-      inputTokens += usage.inputTokens ?? 0;
-      outputTokens += usage.outputTokens ?? 0;
+      addUsage(tokens, usage);
     }
 
     await live.close();
@@ -460,20 +459,19 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         error: undefined,
         citedIds: citedEvidenceIds(accepted),
         unknownIds: [],
-        inputTokens,
-        outputTokens,
+        ...tokens,
       });
     } else {
       const error = lastProblems.length
         ? `Rejected: ${lastProblems.join("; ")}`
         : `No postmortem submitted after ${stepsUsed} model steps`;
-      await finish(started, { status: "failed", error: error.slice(0, 1000), draft: partial(), inputTokens, outputTokens });
+      await finish(started, { status: "failed", error: error.slice(0, 1000), draft: partial(), ...tokens });
     }
   } catch (err) {
     console.error("[triage] postmortem failed", incidentId, err);
     await stream?.close();
     if (startedAt) {
-      await finish(startedAt, { status: "failed", error: errorText(err), draft: partial(), inputTokens, outputTokens }).catch(
+      await finish(startedAt, { status: "failed", error: errorText(err), draft: partial(), ...tokens }).catch(
         (saveErr) => console.error("[triage] saving the failed postmortem failed", incidentId, saveErr),
       );
     }

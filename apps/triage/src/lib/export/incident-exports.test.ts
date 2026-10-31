@@ -64,7 +64,7 @@ describe("GET /api/export/incidents", () => {
     const [header, ...rows] = csvRows(await text(res));
     assert.equal(
       header,
-      "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,fix_state,pr_url,url",
+      "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
     );
     // 15 saved and the 3 bundled examples, as the list shows them.
     assert.equal(rows.length, 18);
@@ -78,7 +78,7 @@ describe("GET /api/export/incidents", () => {
       row,
       "inc_export_resolved,p95 latency and 500s on GET /api/products/:id,shopfront,sev2,resolved,watch,2026-10-23T02:14:00Z," +
         "2026-10-23T02:15:20.000Z,2026-10-23T02:23:00.000Z,1.3,9,Connection leak in getStockLevel exhausts the pg pool,0.86,proven," +
-        "https://github.com/acme/shopfront/pull/42,http://localhost:3021/incidents/inc_export_resolved",
+        "https://github.com/acme/shopfront/pull/42,18420,,1310,,0.0285925,http://localhost:3021/incidents/inc_export_resolved",
     );
   });
 
@@ -103,6 +103,11 @@ describe("GET /api/export/incidents", () => {
       confidence: null,
       fix_state: null,
       pr_url: null,
+      input_tokens: null,
+      cached_input_tokens: null,
+      output_tokens: null,
+      reasoning_tokens: null,
+      cost_usd: null,
       url: "https://triage.example.com/incidents/inc_control",
     });
   });

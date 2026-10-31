@@ -331,7 +331,11 @@ describe("GET /api/export/investigation-trace", () => {
       reasoning_effort: "high",
       model_steps: 4,
       input_tokens: 18200,
+      cached_input_tokens: null,
       output_tokens: 940,
+      reasoning_tokens: null,
+      // 18,200 in at $1.25/M, 940 out at $4.25/M.
+      cost_usd: 0.026745,
     });
   });
 

@@ -299,7 +299,11 @@ export const fixRunSchema = z.object({
   finishedAt: timestamp.optional(),
   modelSteps: z.number().int().optional(),
   inputTokens: z.number().int().optional(),
+  // Of the input, served from Meta's prompt cache; of the output, reasoning.
+  // Missing on records from before they were recorded.
+  cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
+  reasoningTokens: z.number().int().optional(),
   error: z.string().optional(),
 });
 export type FixRun = z.infer<typeof fixRunSchema>;
@@ -331,7 +335,11 @@ export const runSchema = z.object({
   finishedAt: timestamp.optional(),
   modelSteps: z.number().int().optional(),
   inputTokens: z.number().int().optional(),
+  // Of the input, served from Meta's prompt cache; of the output, reasoning.
+  // Missing on records from before they were recorded.
+  cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
+  reasoningTokens: z.number().int().optional(),
   rejectedReports: z.number().int().optional(),
   error: z.string().optional(),
 });
@@ -362,7 +370,11 @@ export const questionSchema = z.object({
   model: z.string(),
   reasoningEffort: reasoningEffortSchema.optional(),
   inputTokens: z.number().int().optional(),
+  // Of the input, served from Meta's prompt cache; of the output, reasoning.
+  // Missing on records from before they were recorded.
+  cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
+  reasoningTokens: z.number().int().optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
 
@@ -438,7 +450,11 @@ export const postmortemSchema = z.object({
   model: z.string(),
   reasoningEffort: reasoningEffortSchema.optional(),
   inputTokens: z.number().int().optional(),
+  // Of the input, served from Meta's prompt cache; of the output, reasoning.
+  // Missing on records from before they were recorded.
+  cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
+  reasoningTokens: z.number().int().optional(),
   summary: z.string().optional().describe("Three sentences, under 80 words: what happened, impact, duration. No evidence IDs."),
   impact: claimSchema.optional().describe("Who was affected and how, cited"),
   contributingFactors: z.array(claimSchema).optional().describe("2 to 5 conditions that each had to hold, cited"),

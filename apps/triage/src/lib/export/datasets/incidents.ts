@@ -1,3 +1,4 @@
+import { incidentUsage } from "@/lib/investigation/cost";
 import type { Incident } from "@/lib/investigation/schema";
 import { rootCauseTitle } from "@/lib/investigation/summary";
 import { defineDataset } from "../dataset";
@@ -29,10 +30,23 @@ export const incidentList = defineDataset<IncidentRow>({
     { key: "confidence", value: ({ incident }) => incident.report?.hypotheses.find((h) => h.status === "leading")?.confidence },
     { key: "fix_state", value: ({ incident }) => incident.fixRun?.status },
     { key: "pr_url", value: ({ incident }) => incident.approval?.prUrl },
+    // Every stage's model calls together, for comparing runs on cost.
+    { key: "input_tokens", value: ({ incident }) => incidentUsage(incident)?.tokens.inputTokens },
+    { key: "cached_input_tokens", value: ({ incident }) => detailed(incident)?.tokens.cachedInputTokens },
+    { key: "output_tokens", value: ({ incident }) => incidentUsage(incident)?.tokens.outputTokens },
+    { key: "reasoning_tokens", value: ({ incident }) => detailed(incident)?.tokens.reasoningTokens },
+    { key: "cost_usd", value: ({ incident }) => incidentUsage(incident)?.cost },
     { key: "url", value: ({ url }) => url },
   ],
   formats: ["csv", "json"],
 });
+
+// Empty, rather than 0, for runs from before cached and reasoning tokens
+// were recorded.
+const detailed = (i: Incident) => {
+  const usage = incidentUsage(i);
+  return usage?.detailed ? usage : undefined;
+};
 
 // Only a mitigation that landed: a proposed or failed one has no time to report.
 const mitigatedAt = (i: Incident) => (i.mitigation?.state === "applied" ? i.mitigation.appliedAt : undefined);

@@ -6,9 +6,10 @@ import {
   type ToolSet,
   type UIMessageStreamWriter,
 } from "ai";
-import { languageModel, modelOptions, reasoningKind } from "../../models/client";
+import { cacheKey, languageModel, modelOptions, reasoningKind } from "../../models/client";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
+import { addUsage, noTokens } from "../../models/usage";
 import { recordThoughts } from "../agent";
 import { incidentBlock } from "../context";
 import { QuestionRecorder } from "../recorder";
@@ -112,7 +113,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     // after tool calls without text is nudged once.
     const agent = new ToolLoopAgent({
       model: languageModel(stage),
-      providerOptions: modelOptions(stage),
+      providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
       instructions: instructions(mode),
       tools,
@@ -124,8 +125,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     });
 
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, recorder.question, source) }];
-    let inputTokens = 0;
-    let outputTokens = 0;
+    const tokens = noTokens();
     let text = "";
     for (let pass = 0; pass <= MAX_NUDGES && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });
@@ -158,8 +158,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
         throw failure;
       }
       const usage = await result.totalUsage;
-      inputTokens += usage.inputTokens ?? 0;
-      outputTokens += usage.outputTokens ?? 0;
+      addUsage(tokens, usage);
       messages.push(...(await result.responseMessages));
       text = (await result.steps).at(-1)?.text.trim() ?? "";
       if (text || !madeToolCalls) break;
@@ -173,8 +172,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       citedIds,
       unknownIds,
       answeredAt: new Date().toISOString(),
-      inputTokens,
-      outputTokens,
+      ...tokens,
     });
     if (!text) writer.write({ type: "error", errorText: recorder.question.error! });
     writer.write({ type: "finish" });

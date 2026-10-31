@@ -1,9 +1,10 @@
 import { type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
-import { languageModel, modelOptions, wakeProvider } from "../../models/client";
+import { cacheKey, languageModel, modelOptions, wakeProvider } from "../../models/client";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
+import { addUsage, noTokens } from "../../models/usage";
 import { notify } from "../../notifications/notify";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
@@ -272,11 +273,10 @@ export async function runFixStage(
   };
 
   let steps = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
+  const tokens = noTokens();
   const agent = new ToolLoopAgent({
     model: languageModel(stage),
-    providerOptions: modelOptions(stage),
+    providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id)),
     instructions,
     tools,
     stopWhen: [
@@ -312,8 +312,7 @@ export async function runFixStage(
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
       const result = await agent.generate({ messages });
       messages.push(...result.responseMessages);
-      inputTokens += result.usage.inputTokens ?? 0;
-      outputTokens += result.usage.outputTokens ?? 0;
+      addUsage(tokens, result.usage);
     }
   } catch (err) {
     console.error("[triage] fix stage failed", recorder.incident.id, err);
@@ -324,8 +323,7 @@ export async function runFixStage(
     finishedAt: new Date().toISOString(),
     wakingSince: undefined,
     modelSteps: steps,
-    inputTokens,
-    outputTokens,
+    ...tokens,
   };
   if (accepted) {
     fixRun = { ...fixRun, ...finished, status: "proven", error: undefined };
