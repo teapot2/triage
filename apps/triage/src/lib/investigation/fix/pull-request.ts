@@ -69,7 +69,7 @@ export function pullRequestText(incident: Incident): { title: string; body: stri
   const dataSection = data.detected
     ? `
 > [!WARNING]
-> **This fix changes stored data.** The sandbox runs tests against the database read-only, so the data change was not proven there${unproven ? ` (${unproven} never ran)` : ""}.
+> **This fix changes stored data.** The sandbox ran the tests against a throwaway copy of the database and never ran the fix's migrations, so the data change was not proven there${unproven ? ` (${unproven} never ran)` : ""}.
 
 ${data.reasons.map((r) => `- ${r}`).join("\n")}
 

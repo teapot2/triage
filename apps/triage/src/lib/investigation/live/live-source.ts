@@ -26,7 +26,7 @@ export const shopfrontDir = path.resolve(
   /* turbopackIgnore: true */ process.env.SHOPFRONT_DIR ??
     path.join(/* turbopackIgnore: true */ process.cwd(), "..", "shopfront"),
 );
-const databaseUrl =
+export const shopfrontDatabaseUrl =
   process.env.SHOPFRONT_DATABASE_URL ?? "postgres://triage:triage@localhost:5433/shopfront";
 
 // The alert the live run starts from: the same one the pool-leak scenario fires.
@@ -510,7 +510,7 @@ const dbQueries: Record<DbCheck, string> = {
 // pool is exhausted.
 async function dbDiagnostics(check: DbCheck): Promise<DbResult> {
   const query = dbQueries[check];
-  const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 3000, application_name: "triage" });
+  const client = new Client({ connectionString: shopfrontDatabaseUrl, connectionTimeoutMillis: 3000, application_name: "triage" });
   try {
     await client.connect();
     const { rows } = await client.query(query);

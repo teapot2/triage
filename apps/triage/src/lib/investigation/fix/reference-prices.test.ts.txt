@@ -1,0 +1,32 @@
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { db, pool } from "@/db/client";
+import { products } from "@/db/schema";
+import { setFlag } from "@/lib/flags";
+import { getListPrice, syncListPrices } from "@/lib/prices";
+
+beforeAll(() => {
+  setFlag("FF_LIST_PRICES", true);
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+it("gives every product a list price after a sync, stocked or not", async () => {
+  // A new product inventory hasn't stocked yet: no stock_levels row. The
+  // sandbox's database is a throwaway copy, so the test needn't remove it.
+  const [added] = await db
+    .insert(products)
+    .values({ name: `Sandbox check ${Date.now()}`, priceCents: 1234 })
+    .returning({ id: products.id, priceCents: products.priceCents });
+
+  await syncListPrices();
+
+  // Every product the copy has, the ones already missing a price included.
+  const all = await db.select({ id: products.id, priceCents: products.priceCents }).from(products);
+  expect(all.length).toBeGreaterThan(1);
+  for (const product of all) {
+    await expect(getListPrice(product.id), `list price of product ${product.id}`).resolves.toBe(product.priceCents);
+  }
+  await expect(getListPrice(added.id)).resolves.toBe(1234);
+});

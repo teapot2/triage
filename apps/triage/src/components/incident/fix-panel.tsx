@@ -179,7 +179,7 @@ export function FixView({
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground text-xs">
             <Badge variant="warning">Not proven in the sandbox</Badge>
             <span className="font-mono">{data.unproven.join(", ")}</span>
-            <span>· the sandbox only reads the database</span>
+            <span>· the sandbox never runs migrations</span>
           </p>
         )}
         {fixRun?.rejections && fixRun.rejections.length > 0 && (

@@ -21,7 +21,7 @@ pnpm start
 pnpm lint
 pnpm typecheck
 pnpm check:blind    # nothing Triage can read gives the planted bug away
-pnpm check:sandbox  # proves a known-good fix in the sandbox, no model calls
+pnpm check:sandbox  # proves known-good fixes for both faults in the sandbox and checks the real database is unchanged, no model calls
 ```
 
 ## Endpoints
@@ -104,7 +104,7 @@ Once an incident has a finished report that isn't healthy, its **Postmortem** se
 
 ## Fix and proof (Stages 3 and 4)
 
-`src/lib/investigation/fix/` runs after a live run's root-cause verdict. The model reads the code and submits exact edits plus a new vitest regression test (`submit_fix`). `prove.ts` checks them in a throwaway copy of Shopfront under the OS temp dir (`fix/sandbox.ts`; node_modules linked, never the app itself). Three checks:
+`src/lib/investigation/fix/` runs after a live run's root-cause verdict. The model reads the code and submits exact edits plus a new vitest regression test (`submit_fix`). `prove.ts` checks them in a throwaway copy of Shopfront under the OS temp dir (`fix/sandbox.ts`; node_modules linked, never the app itself). Each test run gets its own throwaway copy of Shopfront's database (`fix/database.ts`): a new database on the same server, built with the app's own Drizzle migrations and filled with the live rows and sequence positions, then dropped. The sandbox's `DATABASE_URL` points at it, so a test may write without touching the real data; a test that opens its own connection is turned back. The database user needs `CREATEDB` (the compose user is a superuser). Three checks:
 
 1. The test runs against the current code and must fail on an assertion.
 2. The edits are applied and the test must pass.

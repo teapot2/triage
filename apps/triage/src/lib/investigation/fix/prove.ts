@@ -1,5 +1,6 @@
 import type { SandboxRun } from "../schema";
 import { isNewMigrationPath, JOURNAL } from "./data-change";
+import { createSandboxDatabase, type SandboxDatabase } from "./database";
 import { planMigration } from "./migration";
 import {
   createSandbox,
@@ -15,9 +16,12 @@ import {
 // approve it. The regression test has to fail on the code as it is (so it
 // reproduces the bug), then pass with the edits applied, and the patched
 // app has to typecheck. Anything else is a problem the model gets back.
-// A migration in the fix is copied in but never run: the tests only read
-// the database, so the data half of a fix stays unproven (data-change.ts).
-// A new one is numbered and added to Drizzle's journal here (migration.ts).
+// Each test run gets its own throwaway copy of the app's database
+// (database.ts), made before the fix is written into the sandbox, so the
+// test may write and the patched run starts from the same rows as the
+// original. A migration in the fix is copied in but never run, so the data
+// half of a fix stays unproven (data-change.ts). A new one is numbered and
+// added to Drizzle's journal here (migration.ts).
 
 export type Edit = { file: string; find: string; replace: string };
 export type RegressionTest = { file: string; name: string; content: string };
@@ -26,7 +30,15 @@ export type Proof =
   // edits: as applied, with a new migration renamed to its number; journal:
   // set when Triage registered a new migration in Drizzle's journal.
   | { ok: true; runs: SandboxRun[]; patch: string; files: string[]; edits: Edit[]; journal?: string }
-  | { ok: false; runs: SandboxRun[]; problems: string[] };
+  // setup: the sandbox itself couldn't be made ready, which no change to
+  // the fix will mend.
+  | { ok: false; runs: SandboxRun[]; problems: string[]; setup?: true };
+
+// A test that connects on its own (a connection string, its own pg Pool or
+// Client) would bypass the copy the sandbox points the app's client at.
+export function opensOwnConnection(content: string): boolean {
+  return /\bpostgres(?:ql)?:\/\/|\bnew\s+(?:pg\.)?(?:Pool|Client)\s*\(/.test(content);
+}
 
 // The 1-based line each occurrence of `find` starts on.
 function matchLines(text: string, find: string): number[] {
@@ -85,8 +97,14 @@ export async function proveFix(opts: {
   const { appDir, name, test } = opts;
   const problems: string[] = [];
   if (!/^src\/.+\.test\.ts$/.test(test.file)) problems.push(`test.file must be under src/ and end in .test.ts, got ${test.file}`);
+  if (opensOwnConnection(test.content)) {
+    problems.push(
+      "the test opens its own database connection; use the app's own client (@/db/client), which the sandbox points at a copy of the database",
+    );
+  }
 
   const dir = await createSandbox(appDir, name);
+  const databases: SandboxDatabase[] = [];
   try {
     const before = new Map<string, string>();
     for (const file of new Set(opts.edits.map((e) => e.file))) {
@@ -112,6 +130,17 @@ export async function proveFix(opts: {
       applied.files.set(JOURNAL, plan.journal);
     }
 
+    // One copy per run, both made while the sandbox still has only the
+    // app's own migrations.
+    const made = await Promise.allSettled(["original", "patched"].map((ref) => createSandboxDatabase(dir, `${name}-${ref}`)));
+    for (const m of made) if (m.status === "fulfilled") databases.push(m.value);
+    const failed = made.find((m) => m.status === "rejected");
+    if (failed) {
+      const why = failed.reason instanceof Error ? failed.reason.message : String(failed.reason);
+      return { ok: false, runs: [], problems: [`could not make a copy of the database for the sandbox: ${why}`], setup: true };
+    }
+    const [originalDb, patchedDb] = databases;
+
     const runs: SandboxRun[] = [];
     const named = (r: { tests: { name: string; status: string }[] }) => r.tests.find((t) => t.name === test.name);
     const tail = (output: string) => output.split("\n").slice(-25).join("\n");
@@ -119,7 +148,12 @@ export async function proveFix(opts: {
     // 1. The test against the code as it is: it must fail, on its assertion.
     await writeSandboxFile(dir, test.file, test.content);
     opts.onStage?.("original");
-    const { run: original, loadError } = await runTests(dir, test.file, { label: "Original code", ref: "original" });
+    const { run: original, loadError } = await runTests(
+      dir,
+      test.file,
+      { label: "Original code", ref: "original" },
+      originalDb.url,
+    );
     runs.push(original);
     // A test that won't load comes back with the file itself, numbered, so
     // the error's line points at something the model can see.
@@ -146,7 +180,7 @@ export async function proveFix(opts: {
     // 2. With the edits: it must pass.
     for (const [file, text] of applied.files) await writeSandboxFile(dir, file, text);
     opts.onStage?.("patched");
-    const { run: patched } = await runTests(dir, test.file, { label: "Patched code", ref: "patched" });
+    const { run: patched } = await runTests(dir, test.file, { label: "Patched code", ref: "patched" }, patchedDb.url);
     runs.push(patched);
     if (patched.exitCode !== 0 || named(patched)?.status !== "passed") {
       return { ok: false, runs, problems: [`the test still fails with the edits applied:\n${tail(patched.output)}`] };
@@ -167,6 +201,7 @@ export async function proveFix(opts: {
     const journal = plan.journal !== undefined ? JOURNAL : undefined;
     return { ok: true, runs, patch, files: [...touched, ...(journal ? [journal] : []), test.file], edits, journal };
   } finally {
+    await Promise.all(databases.map((d) => d.drop()));
     await removeSandbox(dir);
   }
 }

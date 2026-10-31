@@ -6,8 +6,8 @@ import type { SandboxRun, TestCase } from "../schema";
 
 // A throwaway copy of the app where Triage tries a fix: the source, config
 // and migrations, with node_modules linked rather than copied. Tests run
-// against the same Postgres the app uses, so they must only read from it.
-// Never touches the app itself.
+// against a throwaway copy of the app's database (database.ts), never the
+// one the app serves from. Never touches the app itself.
 
 const root = path.join(/* turbopackIgnore: true */ os.tmpdir(), "triage-sandbox");
 
@@ -55,16 +55,22 @@ export const readSandboxFile = (dir: string, file: string) => readFile(path.join
 
 type Exec = { exitCode: number; output: string; durationMs: number };
 
+// The environment code in the sandbox runs with: the app's database client
+// pointed at the copy, and Triage's own address for the real database left
+// out, so nothing in the sandbox can find its way back to it.
+export function sandboxEnv(databaseUrl?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", CI: "1" };
+  delete env.SHOPFRONT_DATABASE_URL;
+  if (databaseUrl) env.DATABASE_URL = databaseUrl;
+  return env;
+}
+
 // Runs a command, merging stdout and stderr, and kills the whole process
 // tree if it outlives the timeout (vitest forks workers).
-function exec(cmd: string, args: string[], cwd: string): Promise<Exec> {
+export function exec(cmd: string, args: string[], cwd: string, env = sandboxEnv()): Promise<Exec> {
   const started = performance.now();
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      cwd,
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1", CI: "1" },
-      windowsHide: true,
-    });
+    const child = spawn(cmd, args, { cwd, env, windowsHide: true });
     let output = "";
     const append = (chunk: Buffer) => {
       output += chunk.toString();
@@ -92,7 +98,7 @@ function exec(cmd: string, args: string[], cwd: string): Promise<Exec> {
 }
 
 // The end of the output is where test runners put the verdict.
-const trim = (output: string) =>
+export const trim = (output: string) =>
   output.length <= OUTPUT_LIMIT ? output.trimEnd() : `…\n${output.slice(-OUTPUT_LIMIT).trimEnd()}`;
 
 // Vitest's JSON report (Jest-compatible). A file that fails to load has no
@@ -106,11 +112,13 @@ type VitestJson = {
 
 const statusOf = (s: string): TestCase["status"] => (s === "passed" ? "passed" : s === "failed" ? "failed" : "skipped");
 
-// The run, plus why no tests ran when the file failed to load.
+// The run, plus why no tests ran when the file failed to load. The tests
+// use the database at `databaseUrl`, a copy made for this run.
 export async function runTests(
   dir: string,
   testFile: string,
   meta: { label: string; ref: SandboxRun["ref"] },
+  databaseUrl: string,
 ): Promise<{ run: SandboxRun; loadError?: string }> {
   const report = path.join(dir, ".triage-vitest.json");
   await rm(report, { force: true });
@@ -119,6 +127,7 @@ export async function runTests(
     process.execPath,
     [vitest, "run", testFile, "--reporter=default", "--reporter=json", `--outputFile.json=${report}`],
     dir,
+    sandboxEnv(databaseUrl),
   );
   const json = (await readFile(report, "utf8").then(JSON.parse).catch(() => ({}))) as VitestJson;
   const results = json.testResults ?? [];

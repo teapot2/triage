@@ -1,9 +1,10 @@
 import type { DataChange, Fix } from "../schema";
 
 // Whether a fix changes stored data, worked out from what it edits rather
-// than taken from the model's word. The sandbox runs tests against the
-// app's Postgres read-only and never runs migrations, so the data half of a
-// fix can't be proven there: a person has to read it before approving.
+// than taken from the model's word. The sandbox runs tests against a
+// throwaway copy of the app's database, made before the fix's migrations
+// are in, and never runs them, so the data half of a fix can't be proven
+// there: a person has to read it before approving.
 // Pure, and safe to import from client components.
 
 // What one file gains from a fix: an edit's `replace` text, or a patch's
@@ -120,7 +121,7 @@ export function patchFor(patch: string, files: string[]): string {
 
 // The fix's data change: as worked out when it was proven, or, for a fix
 // saved before Triage worked it out, from its patch (the regression test
-// left out: a test may clean up the rows it creates).
+// left out: its SQL only ever ran against the sandbox's copy).
 export function dataChangeOf(fix: Fix): DataChange {
   if (fix.dataChange) return fix.dataChange;
   const changes = patchChanges(fix.patch).filter((c) => c.file !== fix.regressionTest.file);

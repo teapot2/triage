@@ -51,8 +51,8 @@ export function DataChangeReview({
             ))}
           </ul>
           <span>
-            The sandbox only reads the database, so it can&apos;t prove this part. It runs against production when the
-            PR is deployed.
+            The sandbox tested the code against a throwaway copy of the database and never ran this SQL, so it
+            can&apos;t prove this part. It runs against production when the PR is deployed.
           </span>
         </AlertDescription>
       </Alert>

@@ -45,7 +45,7 @@ The fix:
 
 The regression test:
 - Vitest and TypeScript: \`import { describe, it, expect, beforeAll, afterAll } from "vitest"\`. Put it at src/<path>.test.ts next to the code it covers, as a new file. Import app code with the @/ alias for src/.
-- It runs in its own process against the app's real Postgres, using the app's own database client and settings. Only read data, or remove what the test creates.
+- It runs in its own process against a throwaway copy of the app's Postgres: the real rows, copied for this run and dropped after it. Use the app's own database client (@/db/client), which the sandbox points at the copy; never open a connection of your own. The test may write (create the rows it needs, call code that inserts), and nothing it writes reaches the real database. The copy doesn't include your migration.
 - Call the failing code path directly (functions, not HTTP). If that path is behind a feature flag, turn the flag on in the test.
 - Observe what the code does through public state (return values, counts a library exposes) rather than monkey-patching internals, and avoid \`any\`.
 - Fail fast: assert on the state that breaks (counts, return values) instead of waiting for a timeout, and stay well under 10 seconds. Close or release anything the test opens, even when an assertion fails, or the process hangs.
@@ -149,6 +149,8 @@ export async function runFixStage(
   let accepted: Accepted | undefined;
   // Why the model chose not to change code, if it did.
   let declined: string | undefined;
+  // Set when the sandbox itself couldn't be set up: no resubmission helps.
+  let halted = false;
   let lastProblems: string[] = [];
   const reject = (problems: string[]) => {
     lastProblems = problems;
@@ -220,6 +222,11 @@ export async function runFixStage(
         }
         const proof = await proveFix({ appDir, name: recorder.incident.id, edits: input.edits, test: input.test });
         lastRuns = proof.runs;
+        if (!proof.ok && proof.setup) {
+          halted = true;
+          lastProblems = proof.problems;
+          return { accepted: false, problems: proof.problems };
+        }
         if (!proof.ok) return reject(proof.problems);
         accepted = {
           fix: {
@@ -266,7 +273,7 @@ export async function runFixStage(
     tools,
     stopWhen: [
       () => steps >= MAX_STEPS,
-      () => accepted !== undefined || declined !== undefined || fixRun.attempt >= MAX_SUBMISSIONS,
+      () => accepted !== undefined || declined !== undefined || halted || fixRun.attempt >= MAX_SUBMISSIONS,
     ],
     prepareStep: () => {
       steps += 1;
@@ -291,7 +298,7 @@ export async function runFixStage(
     }
     for (
       let attempt = 0;
-      attempt <= MAX_NUDGES && !accepted && !declined && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS;
+      attempt <= MAX_NUDGES && !accepted && !declined && !halted && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS;
       attempt++
     ) {
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
