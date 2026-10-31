@@ -1,15 +1,15 @@
 "use client";
 
-import { ArrowUpRight, CircleAlert, LifeBuoy } from "lucide-react";
+import { ArrowUpRight, CircleAlert, LifeBuoy, Play, Square } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { Switch } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import type { OpsState } from "@/lib/ops";
 import { cn } from "@/lib/utils";
+import { ProfileEditor } from "./profile-editor";
 
 const POLL_MS = 1000;
-const RATE_OPTIONS = [0, 1, 2, 5, 10];
 
 type Verdict = "healthy" | "degraded" | "down";
 
@@ -26,6 +26,8 @@ const verdicts: Record<Verdict, { label: string; className: string }> = {
   degraded: { label: "Degraded", className: "bg-sale/10 text-[color-mix(in_oklab,var(--sale)_80%,black)]" },
   down: { label: "Down", className: "bg-destructive/10 text-[color-mix(in_oklab,var(--destructive)_80%,black)]" },
 };
+
+const percent = (ratio: number | null) => (ratio === null ? "–" : `${Math.round(ratio * 100)}%`);
 
 const seconds = (ms: number) => (ms < 1000 ? "<1 s" : `${Math.round(ms / 1000)} s`);
 
@@ -65,6 +67,23 @@ export function OpsPanel({ initial, triageUrl }: { initial: OpsState; triageUrl:
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Profile edits don't block the other controls, and a failed one shows
+  // like any other.
+  async function sendProfile(profile: object) {
+    try {
+      const res = await fetch("/api/ops", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "profile", profile }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Request failed (${res.status})`);
+      setState(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -127,47 +146,40 @@ export function OpsPanel({ initial, triageUrl }: { initial: OpsState; triageUrl:
 
             <Card
               title="Synthetic traffic"
-              aside={traffic.running ? `${traffic.rps} req/s, ${traffic.inFlight} in flight` : "Off"}
+              aside={
+                traffic.running
+                  ? `${traffic.visits} ${traffic.visits === 1 ? "visitor" : "visitors"}${traffic.rush ? ", rush on" : ""}, ${traffic.inFlight} in flight`
+                  : "Off"
+              }
             >
               <div className="flex flex-wrap items-center gap-3">
-                <span className="text-sm text-muted-foreground" id="rate-label">
-                  Rate
-                </span>
-                <div role="radiogroup" aria-labelledby="rate-label" className="inline-flex rounded-lg border bg-secondary p-0.5">
-                  {RATE_OPTIONS.map((rps) => {
-                    const current = traffic.running ? traffic.rps === rps : rps === 0;
-                    return (
-                      <button
-                        key={rps}
-                        role="radio"
-                        aria-checked={current}
-                        disabled={busy}
-                        onClick={() => act({ action: "traffic", rps })}
-                        className={cn(
-                          "h-7 rounded-md px-3 text-sm tabular-nums transition-colors disabled:opacity-60",
-                          current ? "bg-card font-medium shadow-sm" : "text-muted-foreground hover:text-foreground",
-                        )}
-                      >
-                        {rps === 0 ? "Off" : `${rps}/s`}
-                      </button>
-                    );
-                  })}
-                </div>
+                <Button
+                  size="lg"
+                  variant={traffic.running ? "outline" : "default"}
+                  className={cn("h-9 px-4", traffic.running && "bg-card")}
+                  disabled={busy}
+                  onClick={() => act({ action: "traffic", on: !traffic.running })}
+                >
+                  {traffic.running ? <Square /> : <Play />}
+                  {traffic.running ? "Stop traffic" : "Start traffic"}
+                </Button>
+                <p className="text-sm text-muted-foreground">
+                  About {traffic.profile.rps} req/s on average. Shape it in Traffic profile below.
+                </p>
               </div>
-              <dl className="mt-4 grid grid-cols-3 gap-4 text-sm">
+              <dl className="mt-4 grid grid-cols-2 gap-4 text-sm sm:grid-cols-5">
                 <Stat label="Requests, last 10 s" value={traffic.last10s.requests} />
+                <Stat label="Server errors" value={percent(traffic.last10s.errorRatio)} alert={(traffic.last10s.errorRatio ?? 0) > 0} />
+                <Stat label="4xx" value={percent(traffic.last10s.clientErrorRatio)} />
+                <Stat label="Abandoned" value={percent(traffic.last10s.abortedRatio)} />
                 <Stat
-                  label="Errors"
-                  value={traffic.last10s.errorRatio === null ? "–" : `${Math.round(traffic.last10s.errorRatio * 100)}%`}
-                  alert={(traffic.last10s.errorRatio ?? 0) > 0}
-                />
-                <Stat
-                  label="p95 latency"
+                  label="p95, product API"
                   value={traffic.last10s.p95 === null ? "–" : `${traffic.last10s.p95} ms`}
                   alert={(traffic.last10s.p95 ?? 0) > 500}
                 />
               </dl>
               <Timeline timeline={traffic.timeline} />
+              <RouteTable routes={traffic.routes} />
             </Card>
           </div>
 
@@ -220,7 +232,10 @@ export function OpsPanel({ initial, triageUrl }: { initial: OpsState; triageUrl:
 
             <Card title="Run the demo">
               <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground marker:text-foreground">
-                <li>Start traffic at 2/s and let latency settle.</li>
+                <li>
+                  Start traffic on the Normal day profile (2 req/s) and let latency settle. For cart traffic too, run{" "}
+                  <code className="font-mono text-xs text-foreground">pnpm --filter @triage/shopfront shoppers</code>.
+                </li>
                 <li>
                   Turn on <span className="font-medium text-foreground">Connection pool leak</span>. Each view of the Cast
                   Iron Teapot keeps one connection.
@@ -231,6 +246,11 @@ export function OpsPanel({ initial, triageUrl }: { initial: OpsState; triageUrl:
               </ol>
             </Card>
           </div>
+        </div>
+        <div className="mt-6">
+          <Card title="Traffic profile" aside="Applies to the next visitor, running or not">
+            <ProfileEditor profile={traffic.profile} onChange={sendProfile} />
+          </Card>
         </div>
       </main>
     </div>
@@ -303,10 +323,42 @@ function Timeline({ timeline }: { timeline: OpsState["traffic"]["timeline"] }) {
       </div>
       <figcaption className="mt-1.5 flex justify-between text-xs text-muted-foreground">
         <span>60 s ago</span>
-        <span className="max-sm:hidden">p95 latency per second, red when requests failed</span>
+        <span className="max-sm:hidden">product API p95 per second, red when requests failed</span>
         <span>now</span>
       </figcaption>
     </figure>
+  );
+}
+
+// What the visitors asked for in the last minute, busiest first.
+function RouteTable({ routes }: { routes: OpsState["traffic"]["routes"] }) {
+  if (routes.length === 0) return null;
+  return (
+    <table className="mt-5 w-full text-sm">
+      <caption className="mb-2 text-left text-xs text-muted-foreground">Last minute, by page</caption>
+      <thead className="text-xs text-muted-foreground">
+        <tr className="border-b">
+          <th scope="col" className="py-1.5 text-left font-normal">Page</th>
+          <th scope="col" className="py-1.5 text-right font-normal">Requests</th>
+          <th scope="col" className="py-1.5 text-right font-normal">4xx</th>
+          <th scope="col" className="py-1.5 text-right font-normal">5xx</th>
+          <th scope="col" className="py-1.5 text-right font-normal">Abandoned</th>
+        </tr>
+      </thead>
+      <tbody className="tabular-nums">
+        {routes.map((r) => (
+          <tr key={r.route} className="border-b last:border-0">
+            <th scope="row" className="py-1.5 text-left font-normal">{r.route}</th>
+            <td className="py-1.5 text-right">{r.requests}</td>
+            <td className="py-1.5 text-right text-muted-foreground">{r.clientErrors || "–"}</td>
+            <td className={cn("py-1.5 text-right", r.errors ? "font-medium text-destructive" : "text-muted-foreground")}>
+              {r.errors || "–"}
+            </td>
+            <td className="py-1.5 text-right text-muted-foreground">{r.aborted || "–"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

@@ -5,7 +5,7 @@ import { products } from "@/db/schema";
 import { featureFlags, setFlag, type FeatureFlag } from "@/lib/flags";
 import { logger } from "@/lib/logger";
 import { opsEnabled, opsState } from "@/lib/ops";
-import { RATES, startTraffic, stopTraffic } from "@/lib/traffic";
+import { setProfile, startTraffic, stopTraffic } from "@/lib/traffic";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,8 @@ export function GET() {
 
 type Action =
   | { action: "flag"; name: FeatureFlag; enabled: boolean }
-  | { action: "traffic"; rps: number }
+  | { action: "traffic"; on: boolean }
+  | { action: "profile"; profile: unknown }
   | { action: "release" };
 
 // Every change is logged at warn, so it lands in the same log stream Triage
@@ -43,20 +44,28 @@ export async function POST(req: Request) {
       return Response.json(opsState());
     }
     case "traffic": {
-      if (body.rps === 0) {
+      if (typeof body.on !== "boolean") break;
+      if (!body.on) {
         stopTraffic();
         return Response.json(opsState());
       }
-      if (!RATES.includes(body.rps as (typeof RATES)[number])) break;
-      // Product ids come from the database, so traffic can't start while the
+      // The catalog comes from the database, so traffic can't start while the
       // pool is jammed. Stopping (above) always works.
       try {
-        const rows = await db.select({ id: products.id }).from(products).orderBy(asc(products.id));
+        const rows = await db
+          .select({ id: products.id, name: products.name, category: products.category, reviewCount: products.reviewCount })
+          .from(products)
+          .orderBy(asc(products.id));
         if (rows.length === 0) return Response.json({ error: "No products to visit. Run the seed." }, { status: 409 });
-        startTraffic(body.rps, new URL(req.url).origin, rows.map((r) => r.id));
+        startTraffic(new URL(req.url).origin, rows);
       } catch (err) {
         return Response.json({ error: `Couldn't load products: ${String(err)}` }, { status: 503 });
       }
+      return Response.json(opsState());
+    }
+    case "profile": {
+      // Takes any subset of the profile; the rest stays as it was.
+      setProfile(body.profile);
       return Response.json(opsState());
     }
     case "release": {

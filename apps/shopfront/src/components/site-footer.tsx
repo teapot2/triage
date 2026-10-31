@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { categories } from "@/lib/catalog";
+import { infoSections } from "@/lib/info-pages";
 import { NewsletterForm } from "./newsletter-form";
 
 const columns = [
@@ -10,23 +11,7 @@ const columns = [
       { label: "All products", href: "/#shop" },
     ],
   },
-  {
-    title: "Help",
-    links: [
-      { label: "Shipping", href: "#" },
-      { label: "Returns", href: "#" },
-      { label: "Care guide", href: "#" },
-      { label: "Contact us", href: "#" },
-    ],
-  },
-  {
-    title: "Company",
-    links: [
-      { label: "Our makers", href: "#" },
-      { label: "Journal", href: "#" },
-      { label: "Wholesale", href: "#" },
-    ],
-  },
+  ...infoSections,
 ];
 
 export function SiteFooter() {
@@ -45,7 +30,7 @@ export function SiteFooter() {
             <h2 className="text-sm font-medium">{col.title}</h2>
             <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
               {col.links.map((l) => (
-                <li key={l.label}>
+                <li key={l.href}>
                   <Link href={l.href} className="transition-colors hover:text-foreground">
                     {l.label}
                   </Link>
