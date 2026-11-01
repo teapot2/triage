@@ -62,7 +62,7 @@ const builtInLabels: Record<BuiltInSection, string> = {
   summary: "Summary",
   impact: "Impact",
   timeline: "Timeline",
-  outcome: "Did Triage get it right?",
+  outcome: "How the diagnosis held up",
   factors: "Contributing factors",
   lessons: "Lessons (what went well and what didn't)",
   lucky: "Where we got lucky",

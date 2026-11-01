@@ -181,12 +181,12 @@ function timeline(incident: Incident): string {
   ].join("\n\n");
 }
 
-// Did Triage get it right? The diagnosis with its grade and the outcome the
+// How the diagnosis held up The diagnosis with its grade and the outcome the
 // record shows, each signal on its own line, then the model's sentence on
 // it. Everything above the sentence is the record's, so a postmortem from
 // before the section existed still renders it.
 function outcome(incident: Incident, notes: Footnotes, drafting: boolean): string {
-  const heading = "## Did Triage get it right?";
+  const heading = "## How the diagnosis held up";
   const result = verdictOutcome(incident);
   if (!result) return `${heading}\n\n_No diagnosis to check._`;
   const { hypothesis: h, rollup, signals } = result;

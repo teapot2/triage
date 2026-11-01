@@ -12,7 +12,7 @@ const headings: Record<BuiltInSection | "header" | "evidence", string> = {
   summary: "## Summary",
   impact: "## Impact",
   timeline: "## Timeline",
-  outcome: "## Did Triage get it right?",
+  outcome: "## How the diagnosis held up",
   factors: "## Contributing factors",
   lessons: "## Lessons",
   lucky: "## Where we got lucky",
@@ -256,8 +256,8 @@ describe("postmortemMarkdown", () => {
   });
 });
 
-describe("Did Triage get it right?", () => {
-  const outcome = (incident: Incident) => section(postmortemMarkdown(incident), "## Did Triage get it right?");
+describe("How the diagnosis held up", () => {
+  const outcome = (incident: Incident) => section(postmortemMarkdown(incident), "## How the diagnosis held up");
 
   it("states the diagnosis, its grade and the outcome, each signal with its time, then the review", () => {
     const incident = poolLeak();
@@ -298,7 +298,7 @@ describe("Did Triage get it right?", () => {
 
   it("has no diagnosis to check on a healthy run", () => {
     const control = structuredClone(exampleIncidents.find((i) => i.id === "inc_control")!);
-    assert.equal(outcome(control).trim(), "## Did Triage get it right?\n\n_No diagnosis to check._");
+    assert.equal(outcome(control).trim(), "## How the diagnosis held up\n\n_No diagnosis to check._");
   });
 });
 

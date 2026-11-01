@@ -4,7 +4,7 @@ import { type ConfidenceGrade, gradeHypothesis, laneOf, mitigationRecovered, reg
 import { reopenedBy, withUnit } from "./postmortem/timeline";
 import type { Hypothesis, Incident, Mitigation, Verification } from "./schema";
 
-// Did Triage get it right? Whether the first diagnosis held, read off what
+// How the diagnosis held up Whether the first diagnosis held, read off what
 // happened after it: the mitigation and whether the metric recovered, the
 // fix's regression test, the quiet window, reopenings, a fan-out lane's
 // finding and what people decided. Computed from the record, never asked of
