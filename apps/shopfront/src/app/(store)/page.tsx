@@ -9,6 +9,7 @@ import { db } from "@/db/client";
 import { products, type Product } from "@/db/schema";
 import { catalog, categories, categoryBlurbs, newArrivals, type Category } from "@/lib/catalog";
 import { logger } from "@/lib/logger";
+import { withListingRatings } from "@/lib/ratings";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -31,11 +32,13 @@ async function loadProducts(category: Category | undefined, q: string | undefine
   if (category) where.push(eq(products.category, category));
   if (q) where.push(ilike(products.name, `%${q.replace(/[%_\\]/g, "\\$&")}%`));
   try {
-    const rows = await db
-      .select()
-      .from(products)
-      .where(and(...where))
-      .orderBy(asc(products.id));
+    const rows = await withListingRatings(
+      await db
+        .select()
+        .from(products)
+        .where(and(...where))
+        .orderBy(asc(products.id)),
+    );
     return { rows, error: false as const };
   } catch (err) {
     logger.error("home: failed to load products", { "error.message": String(err) });
@@ -119,6 +122,7 @@ async function NewArrivals() {
     .from(products)
     .where(inArray(products.name, newArrivals))
     .orderBy(asc(products.id))
+    .then(withListingRatings)
     .catch((err) => {
       logger.error("home: failed to load new arrivals", { "error.message": String(err) });
       return [] as Product[];

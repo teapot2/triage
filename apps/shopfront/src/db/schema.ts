@@ -1,4 +1,5 @@
-import { integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 export const products = pgTable("products", {
   id: serial("id").primaryKey(),
@@ -41,6 +42,26 @@ export const productPrices = pgTable("product_prices", {
   amountCents: integer("amount_cents").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Customer reviews, one row per review. The star rating is 1 to 5; listings
+// can average them per product (src/lib/ratings.ts) instead of reading the
+// stored rating_tenths and review_count.
+export const reviews = pgTable(
+  "reviews",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    rating: integer("rating").notNull(),
+    body: text("body").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("reviews_product_id_idx").on(t.productId),
+    check("reviews_rating_range", sql`${t.rating} between 1 and 5`),
+  ],
+);
 
 export type Product = typeof products.$inferSelect;
 export type NewProduct = typeof products.$inferInsert;

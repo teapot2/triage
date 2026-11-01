@@ -26,6 +26,14 @@ const faults: Record<FeatureFlag, { label: string; description: string }> = {
       "inner join on stock_levels. The Cast Iron Teapot and the three new arrivals have no stock row, so no price row, " +
       "and every view of them fails with a 500 (TypeError). Turning it off stops the errors at once.",
   },
+  FF_LIVE_RATINGS: {
+    label: "Live ratings loop",
+    description:
+      "Listings and GET /api/products work out each product's rating with one query per product that fetches every one " +
+      "of its review rows (REVIEWS_PER_PRODUCT in the seed), then average them in JavaScript. GET /api/products goes from " +
+      "about 20 ms to about a second (0.6 to 3.4 s), with no errors and the pool far from full, and the API latency rule opens an " +
+      "incident. Turning it off recovers at once.",
+  },
 };
 
 // Everything /ops shows. In-memory only, no database query: it has to answer

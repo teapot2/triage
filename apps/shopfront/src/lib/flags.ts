@@ -12,6 +12,10 @@ export const featureFlags = {
     label: "List prices",
     description: "Serve prices on the product page, the product API and the cart from the price list instead of the catalog.",
   },
+  FF_LIVE_RATINGS: {
+    label: "Live ratings",
+    description: "Show star ratings on the home page, category and search listings and the product list API averaged from the reviews instead of the stored rating.",
+  },
 } as const;
 
 export type FeatureFlag = keyof typeof featureFlags;
