@@ -290,6 +290,16 @@ export const approvalSchema = z.object({
 });
 export type Approval = z.infer<typeof approvalSchema>;
 
+// One model call's tokens: a record's fullest call, by input, kept as its
+// `context` (models/usage.ts fuller()) and shown against the model's
+// context window. Absent until the record's first call finishes.
+export const contextSchema = z.object({
+  inputTokens: z.number().int(),
+  cachedInputTokens: z.number().int(),
+  outputTokens: z.number().int(),
+  reasoningTokens: z.number().int(),
+});
+
 // Stages 3 and 4 as they run: the model writes a fix and a regression test,
 // the sandbox proves them, and a failed proof goes back to the model.
 export const fixRunSchema = z.object({
@@ -317,6 +327,7 @@ export const fixRunSchema = z.object({
   // Model calls retried after a 429, 5xx, timeout or network error
   // (models/fetch.ts). Absent on records from before they were counted.
   modelRetries: z.number().int().optional(),
+  context: contextSchema.optional(),
   error: z.string().optional(),
 });
 export type FixRun = z.infer<typeof fixRunSchema>;
@@ -344,6 +355,8 @@ export const fanoutSchema = z.object({
   cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
+  // The lead's fullest call, scout or merge.
+  context: contextSchema.optional(),
   hypotheses: z.array(
     z.object({
       id: z.string(),
@@ -354,6 +367,8 @@ export const fanoutSchema = z.object({
       evidenceFor: z.array(evidenceId).default([]),
       evidenceAgainst: z.array(evidenceId).default([]),
       steps: z.number().int().optional(),
+      // Its lane's fullest call, on the run's model.
+      context: contextSchema.optional(),
       error: z.string().optional(),
     }),
   ),
@@ -385,6 +400,9 @@ export const runSchema = z.object({
   rejectedReports: z.number().int().optional(),
   // As on the fix run: model calls retried.
   modelRetries: z.number().int().optional(),
+  // The fullest call of the stage's model: the single agent's, or across a
+  // fan-out's lanes and its fallback.
+  context: contextSchema.optional(),
   error: z.string().optional(),
   // Set on a fan-out investigation (lib/investigation/fanout).
   fanout: fanoutSchema.optional(),
@@ -432,6 +450,7 @@ export const questionSchema = z.object({
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
   modelRetries: z.number().int().optional(),
+  context: contextSchema.optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
 
@@ -514,6 +533,7 @@ export const postmortemSchema = z.object({
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
   modelRetries: z.number().int().optional(),
+  context: contextSchema.optional(),
   summary: z.string().optional().describe("Three sentences, under 80 words: what happened, impact, duration. No evidence IDs."),
   impact: claimSchema.optional().describe("Who was affected and how, cited"),
   contributingFactors: z.array(claimSchema).optional().describe("2 to 5 conditions that each had to hold, cited"),

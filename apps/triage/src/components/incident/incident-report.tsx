@@ -155,7 +155,7 @@ export function IncidentReport({
         {/* A fan-out run's hypotheses, under the verdict they were merged
             into, or being checked while it runs. */}
         {run?.fanout && (
-          <HypothesesChecked fanout={run.fanout} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+          <HypothesesChecked fanout={run.fanout} lanes={run} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
         )}
 
         {mitigation && (

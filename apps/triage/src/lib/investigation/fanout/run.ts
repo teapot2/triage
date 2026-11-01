@@ -3,8 +3,8 @@ import { cacheKey, callSettings, modelErrorText, modelOptions, reasoningKind } f
 import { RunTimeoutError } from "../../models/policy";
 import type { Endpoint, StageModel } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, type TokenCounts } from "../../models/usage";
-import { recordThoughts } from "../agent";
+import { addUsage, fuller, onEachCall, type TokenCounts } from "../../models/usage";
+import { recordRunContext, recordThoughts } from "../agent";
 import type { InvestigationRecorder, ThoughtRecorder } from "../recorder";
 import type { Evidence, Fanout, Incident } from "../schema";
 import type { TelemetrySource } from "../source";
@@ -96,6 +96,7 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       },
       maxSteps: SCOUT_STEPS,
       finish: "propose_hypotheses",
+      onCall: (call) => recordLeadContext(recorder, call),
       done: () => proposal !== undefined,
     });
     const content = scoutPrompt(incident, source);
@@ -131,6 +132,7 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       tools: createInvestigationTools(source, recorder),
       maxSteps: MERGE_STEPS,
       finish: "submit_report",
+      onCall: (call) => recordLeadContext(recorder, call),
       done: () => recorder.report !== undefined,
     });
     const content = mergePrompt(incident, source, recorder.evidence, recorder.incident.run!.fanout!.hypotheses);
@@ -173,6 +175,15 @@ async function runLane(run: FanoutRun, h: Hypothesis, scoutEvidence: Evidence[])
     maxSteps: LANE_STEPS,
     finish: "submit_finding",
     done: () => finding !== undefined,
+    // Each lane is a context of its own, and counts toward the run's too.
+    onCall: (call) => {
+      const fanout = run.recorder.incident.run!.fanout!;
+      setFanout(run.recorder, {
+        ...fanout,
+        hypotheses: fanout.hypotheses.map((x) => (x.id === h.id ? { ...x, context: fuller(x.context, call) } : x)),
+      });
+      recordRunContext(run.recorder, call);
+    },
   });
   try {
     const content = lanePrompt(run.incident, run.source, scoutEvidence, h);
@@ -210,7 +221,14 @@ function boundedAgent<T extends ToolSet>(
   run: FanoutRun,
   s: Stage,
   thoughts: ThoughtRecorder,
-  o: { instructions: string; tools: T; maxSteps: number; finish: keyof T & string; done: () => boolean },
+  o: {
+    instructions: string;
+    tools: T;
+    maxSteps: number;
+    finish: keyof T & string;
+    done: () => boolean;
+    onCall: (call: TokenCounts) => void;
+  },
 ): Bounded {
   let steps = 0;
   const agent = new ToolLoopAgent({
@@ -218,6 +236,7 @@ function boundedAgent<T extends ToolSet>(
     providerOptions: modelOptions(s, cacheKey("investigate", run.incident.id)),
     ...callSettings(),
     ...recordThoughts(thoughts, reasoningKind(s.provider)),
+    ...onEachCall(o.onCall),
     instructions: o.instructions,
     tools: o.tools as ToolSet,
     stopWhen: [() => steps >= o.maxSteps, o.done],
@@ -245,6 +264,12 @@ async function generateUntilDone(
     messages.push(...result.responseMessages);
     addUsage(tokens, result.usage);
   }
+}
+
+// A call of the lead's, scout or merge, as its context if it's the fullest yet.
+function recordLeadContext(recorder: InvestigationRecorder, call: TokenCounts) {
+  const fanout = recorder.incident.run!.fanout!;
+  setFanout(recorder, { ...fanout, context: fuller(fanout.context, call) });
 }
 
 function setFanout(recorder: InvestigationRecorder, fanout: Fanout) {

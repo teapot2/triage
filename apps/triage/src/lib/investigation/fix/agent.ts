@@ -5,7 +5,7 @@ import { runBudget } from "../../models/policy";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, noTokens } from "../../models/usage";
+import { addUsage, fuller, noTokens, onEachCall } from "../../models/usage";
 import { notify } from "../../notifications/notify";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
@@ -285,6 +285,7 @@ export async function runFixStage(
     providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id), { parallel: false }),
     ...callSettings(),
     toolCallConcurrency: 1,
+    ...onEachCall((call) => setFixRun({ context: fuller(fixRun.context, call) })),
     instructions,
     tools,
     stopWhen: [

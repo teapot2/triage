@@ -5,11 +5,19 @@ import { StatusBadge, type StatusTone } from "@/components/ui/badge";
 import type { Fanout } from "@/lib/investigation/schema";
 import { modelLabel } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "./context-meter";
 import { Citations } from "./evidence";
 import { LaneTag } from "./lane-tag";
 import { laneOfHypothesis } from "./lanes";
 
 type Hypothesis = Fanout["hypotheses"][number];
+
+// The lead's calls as a record of their own, on its model.
+export const leadRecord = (fanout: Fanout) => ({
+  context: fanout.context,
+  provider: fanout.leadProvider,
+  model: fanout.leadModel,
+});
 
 // A supported hypothesis is a cause, so its dot is the root cause's red;
 // a refuted one recedes; an unclear one is still possible, as in the
@@ -36,7 +44,18 @@ function FindingBadge({ hypothesis, running }: { hypothesis: Hypothesis; running
 // A fan-out investigation's hypotheses, each checked in its own lane: what
 // its lane found, why in a line, and the evidence for and against it. The
 // lead model that proposed them merged the findings into the report above.
-export function HypothesesChecked({ fanout, running, className }: { fanout: Fanout; running: boolean; className?: string }) {
+// `lanes` is the run's model, which every lane ran on.
+export function HypothesesChecked({
+  fanout,
+  lanes,
+  running,
+  className,
+}: {
+  fanout: Fanout;
+  lanes: { provider?: string; model: string };
+  running: boolean;
+  className?: string;
+}) {
   if (fanout.hypotheses.length === 0) return null;
   return (
     <div className={cn("flex flex-col gap-3 rounded-lg border p-4", className)}>
@@ -45,7 +64,10 @@ export function HypothesesChecked({ fanout, running, className }: { fanout: Fano
           <SplitIcon className="size-3.5" />
           Hypotheses checked
         </span>
-        <span>Merged by {modelLabel(fanout.leadModel, fanout.leadProvider)}</span>
+        <span className="flex items-center gap-2">
+          Merged by {modelLabel(fanout.leadModel, fanout.leadProvider)}
+          <ContextMeter records={[leadRecord(fanout)]} />
+        </span>
       </div>
       <ul className="flex flex-col divide-y">
         {fanout.hypotheses.map((h, i) => (
@@ -55,7 +77,10 @@ export function HypothesesChecked({ fanout, running, className }: { fanout: Fano
                 <LaneTag lane={laneOfHypothesis(fanout, i)} />
                 <span className="font-medium text-sm leading-snug">{h.title}</span>
               </span>
-              <FindingBadge hypothesis={h} running={running} />
+              <span className="flex shrink-0 items-center gap-2">
+                <ContextMeter records={[{ ...lanes, context: h.context }]} className="text-muted-foreground text-xs" />
+                <FindingBadge hypothesis={h} running={running} />
+              </span>
             </div>
             {(h.reason ?? h.error) && (
               <p className={cn("text-sm leading-relaxed", h.reason ? "text-muted-foreground" : "text-destructive")}>

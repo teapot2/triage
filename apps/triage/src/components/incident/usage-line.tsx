@@ -4,12 +4,14 @@ import { CoinsIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cachedShare, formatCost, type IncidentUsage, type UsageTotal } from "@/lib/investigation/cost";
 import { stageIds, stageLabels } from "@/lib/models/stages";
+import { formatShare } from "./context-meter";
 import { formatCompact, formatPercent } from "./format";
 
 // What the incident's model calls cost, in one line for the header: "$0.19,
 // 60% cached", or the tokens when a model has no price, and without the
 // share for records from before it was recorded. On hover, each
-// stage's tokens: input with its cached share, output with its reasoning.
+// stage's tokens: input with its cached share, output with its reasoning,
+// and how full its fullest call's context got.
 export function UsageLine({ usage }: { usage: IncidentUsage }) {
   return (
     <Tooltip>
@@ -30,6 +32,7 @@ export function UsageLine({ usage }: { usage: IncidentUsage }) {
               <th className="pr-3 text-right font-normal">Cached</th>
               <th className="pr-3 text-right font-normal">Output</th>
               <th className="pr-3 text-right font-normal">Reasoning</th>
+              <th className="pr-3 text-right font-normal">Peak context</th>
               <th className="text-right font-normal">Cost</th>
             </tr>
           </thead>
@@ -46,7 +49,7 @@ export function UsageLine({ usage }: { usage: IncidentUsage }) {
   );
 }
 
-function StageRow({ label, usage: { tokens, cost, detailed } }: { label: string; usage: UsageTotal }) {
+function StageRow({ label, usage: { tokens, cost, detailed, context } }: { label: string; usage: UsageTotal }) {
   return (
     <tr className={label === "Total" ? "font-medium" : undefined}>
       <td className="pr-3">{label}</td>
@@ -54,6 +57,7 @@ function StageRow({ label, usage: { tokens, cost, detailed } }: { label: string;
       <td className="pr-3 text-right">{detailed ? formatPercent(cachedShare(tokens)) : "–"}</td>
       <td className="pr-3 text-right">{formatCompact(tokens.outputTokens)}</td>
       <td className="pr-3 text-right">{detailed ? formatCompact(tokens.reasoningTokens) : "–"}</td>
+      <td className="pr-3 text-right">{context === undefined ? "–" : formatShare(context)}</td>
       <td className="text-right">{cost === undefined ? "–" : formatCost(cost)}</td>
     </tr>
   );

@@ -58,6 +58,7 @@ import { effortLabels, type ReasoningEffort } from "@/lib/models/stages";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
+import { contextText } from "./context-meter";
 import { formatDuration } from "./format";
 import { StepRow } from "./investigation-timeline";
 
@@ -452,6 +453,7 @@ interface QuestionView {
   model?: string;
   provider?: string;
   reasoningEffort?: ReasoningEffort;
+  context?: Question["context"];
   answeredAt?: string;
 }
 
@@ -481,6 +483,7 @@ function savedView(q: Question, key: string, incidentId: string): QuestionView {
     model: q.model,
     provider: q.provider,
     reasoningEffort: q.reasoningEffort,
+    context: q.context,
     answeredAt: q.answeredAt,
   };
 }
@@ -1053,12 +1056,15 @@ function CopyAnswer({ answer }: { answer: string }) {
 }
 
 // The reply's details behind a "⋯", so the row under it stays quiet: the
-// model that wrote it, where it read from, and when it was asked.
+// model that wrote it, how full its context got, where it read from, and
+// when it was asked.
 function ReplyDetails({ view }: { view: QuestionView }) {
   const rows: [string, ReactNode][] = [];
   if (view.model) rows.push(["Model", view.model]);
   if (view.provider) rows.push(["Provider", providerLabels[view.provider] ?? view.provider]);
   if (view.reasoningEffort) rows.push(["Effort", effortLabels[view.reasoningEffort]]);
+  const context = view.model && contextText({ ...view, model: view.model });
+  if (context) rows.push(["Context", context]);
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
   return (

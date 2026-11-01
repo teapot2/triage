@@ -4,7 +4,7 @@ import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
 import { fanoutLead, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
-import { addUsage, noTokens } from "../models/usage";
+import { addUsage, fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
 import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
@@ -276,6 +276,13 @@ export function recordThoughts(recorder: ThoughtRecorder, kind: Thought["reasoni
   };
 }
 
+// A call of the stage's model, the single agent's or a fan-out lane's, as
+// the run's context if it's the fullest yet.
+export function recordRunContext(recorder: InvestigationRecorder, call: TokenCounts) {
+  const run = recorder.incident.run!;
+  recorder.update({ run: { ...run, context: fuller(run.context, call) } });
+}
+
 // `stage` and `save` are for the benchmark: a model other than Settings'
 // one, and somewhere other than the incident store.
 export async function runInvestigation(
@@ -328,6 +335,7 @@ export async function runInvestigation(
     providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
     ...callSettings(),
     ...recordThoughts(recorder, reasoningKind(stage.provider)),
+    ...onEachCall((call) => recordRunContext(recorder, call)),
     instructions,
     tools,
     stopWhen: [() => count.steps >= MAX_STEPS, () => recorder.report !== undefined],

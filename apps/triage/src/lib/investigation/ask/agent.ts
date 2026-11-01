@@ -20,7 +20,7 @@ import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, noTokens } from "../../models/usage";
+import { addUsage, fuller, noTokens, onEachCall } from "../../models/usage";
 import { recordThoughts } from "../agent";
 import { incidentBlock } from "../context";
 import { QuestionRecorder } from "../recorder";
@@ -158,6 +158,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...callSettings({ stream: true }),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
+      ...onEachCall((call) => recorder.update({ context: fuller(recorder.question.context, call) })),
       instructions: instructions(mode, image !== undefined),
       tools,
       stopWhen: () => stepsUsed >= MAX_STEPS,

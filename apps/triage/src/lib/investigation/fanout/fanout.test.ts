@@ -213,6 +213,9 @@ describe("LaneRecorder", () => {
   });
 });
 
+// One scripted call's tokens, as a record's context keeps it.
+const call = { inputTokens: 100, cachedInputTokens: 0, outputTokens: 10, reasoningTokens: 0 };
+
 describe("runFanout", () => {
   it("runs scout, lanes and merge, with lane evidence IDs apart from the scout's", async () => {
     const { incident, seen } = await investigate({
@@ -248,6 +251,8 @@ describe("runFanout", () => {
       cachedInputTokens: 0,
       outputTokens: 30,
       reasoningTokens: 0,
+      // Its fullest single call, not the sum: every scripted call is 100 in.
+      context: call,
       hypotheses: [
         {
           id: "h1",
@@ -258,6 +263,7 @@ describe("runFanout", () => {
           evidenceFor: ["ev_h1_db_1", "ev_metric_1"],
           evidenceAgainst: [],
           steps: 2,
+          context: call,
         },
         {
           id: "h2",
@@ -268,6 +274,7 @@ describe("runFanout", () => {
           evidenceFor: [],
           evidenceAgainst: ["ev_h2_metric_1"],
           steps: 2,
+          context: call,
         },
       ],
     });
@@ -276,6 +283,8 @@ describe("runFanout", () => {
     assert.equal(incident.run?.modelSteps, 7);
     assert.equal(incident.run?.inputTokens, 400);
     assert.equal(incident.run?.outputTokens, 40);
+    // The run's context is its fullest lane call, as the lanes' each are.
+    assert.deepEqual(incident.run?.context, call);
   });
 
   it("hands a refuted lane's evidence and finding to the merge, which can cite it", async () => {

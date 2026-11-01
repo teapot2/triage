@@ -24,6 +24,8 @@ import { useCountUp } from "@/hooks/use-count-up";
 import { incidentSubject, investigationTrace, traceRows } from "@/lib/export/datasets/incident";
 import type { InvestigationStep, Run, Thought, ToolName } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "./context-meter";
+import { leadRecord } from "./hypotheses-checked";
 import { Citations, evidenceIcons, useEvidence } from "./evidence";
 import { modelLabel } from "@/lib/models/labels";
 import { formatDuration, formatTime } from "./format";
@@ -252,6 +254,9 @@ export function InvestigationTimeline({
           {turnCount !== undefined && ` in ${turnCount} ${turnCount === 1 ? "turn" : "turns"}`}
           {run && ` · ${modelLabel(run.model, run.provider, run.reasoningEffort)}`}
         </span>
+        {/* A fan-out's lanes and its lead are separate contexts: the
+            fullest of them. */}
+        {run && <ContextMeter records={[run, ...(run.fanout ? [leadRecord(run.fanout)] : [])]} />}
         <div className="ml-auto flex items-center gap-2">
           {thoughts.length > 0 && (
             <PillToggle

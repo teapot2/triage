@@ -32,6 +32,7 @@ import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
 import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
 import type { DraftContent, Incident } from "@/lib/investigation/schema";
 import { modelLabel } from "@/lib/models/labels";
+import { ContextMeter } from "./context-meter";
 import { MarkdownDoc } from "./markdown-doc";
 import { clock, contentOf, DraftDocument, DraftStatus, templateOf, usePostmortemDraft, useReveal } from "./postmortem-draft";
 
@@ -269,6 +270,7 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
         <p className="min-w-0 text-muted-foreground text-xs">
           Written <Timestamp date={written} /> · {modelLabel(pm.model, pm.provider, pm.reasoningEffort)}
           {pm.finishedAt && <> · took {clock(Date.parse(pm.finishedAt) - Date.parse(pm.startedAt))}</>}
+          <ContextMeter records={[pm]} className="ml-2 align-bottom" />
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}

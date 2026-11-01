@@ -25,6 +25,9 @@ export function languageModel(s: StageModel & Endpoint, { onRetry }: Pick<RetryO
     apiKey: s.apiKey,
     // OpenRouter shows the app's name on its activity page.
     headers: s.provider === "openrouter" ? { "X-Title": "Triage" } : undefined,
+    // A streamed call (Ask, the postmortem) reports its tokens only when
+    // asked to (stream_options.include_usage).
+    includeUsage: true,
     fetch,
   });
   return client.chatModel(s.model);

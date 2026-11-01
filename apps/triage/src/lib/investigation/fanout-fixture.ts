@@ -126,6 +126,7 @@ const steps: InvestigationStep[] = [
 const fanout = {
   leadProvider: "meta",
   leadModel: "muse-spark-1.3",
+  context: { inputTokens: 14200, cachedInputTokens: 9800, outputTokens: 640, reasoningTokens: 210 },
   hypotheses: [
     {
       id: "h1",
@@ -136,6 +137,7 @@ const fanout = {
       evidenceFor: ["ev_h1_source_1", "ev_h1_db_1", "ev_h1_metric_1", "ev_h1_commit_2"],
       evidenceAgainst: [],
       steps: 5,
+      context: { inputTokens: 9800, cachedInputTokens: 7400, outputTokens: 380, reasoningTokens: 120 },
     },
     {
       id: "h2",
@@ -146,6 +148,7 @@ const fanout = {
       evidenceFor: [],
       evidenceAgainst: ["ev_h2_db_1", "ev_h2_span_1"],
       steps: 2,
+      context: { inputTokens: 7100, cachedInputTokens: 5600, outputTokens: 290, reasoningTokens: 90 },
     },
     {
       id: "h3",
@@ -156,6 +159,7 @@ const fanout = {
       evidenceFor: ["ev_h3_log_1"],
       evidenceAgainst: ["ev_h3_metric_1"],
       steps: 2,
+      context: { inputTokens: 7600, cachedInputTokens: 5900, outputTokens: 310, reasoningTokens: 100 },
     },
   ],
 };
@@ -179,6 +183,7 @@ export const fanoutIncident: Incident = incidentSchema.parse({
     inputTokens: 41800,
     cachedInputTokens: 12600,
     outputTokens: 2900,
+    context: { inputTokens: 9800, cachedInputTokens: 7400, outputTokens: 380, reasoningTokens: 120 },
     fanout,
   },
 });

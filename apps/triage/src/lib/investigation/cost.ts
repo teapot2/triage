@@ -1,3 +1,4 @@
+import { contextShare } from "../models/context";
 import { costOf } from "../models/pricing";
 import { type StageId, stageIds } from "../models/stages";
 import { noTokens, type TokenCounts } from "../models/usage";
@@ -15,11 +16,14 @@ export type UsageTotal = {
   // Whether any record counted its cached input and reasoning: those from
   // before they were recorded leave both at 0, which isn't a 0% share.
   detailed: boolean;
+  // The fullest context of any record, 0 to 1, each against its own
+  // model's window. Undefined when none ran on a model with a known one.
+  context?: number;
 };
 
 export type IncidentUsage = UsageTotal & { stages: Partial<Record<StageId, UsageTotal>> };
 
-type UsageRecord = Partial<TokenCounts> & { provider?: string; model?: string };
+type UsageRecord = Partial<TokenCounts> & { provider?: string; model?: string; context?: TokenCounts };
 
 const counted = (r: UsageRecord) => (r.inputTokens ?? 0) + (r.outputTokens ?? 0) > 0;
 
@@ -31,6 +35,8 @@ function add(total: UsageTotal, r: UsageRecord) {
   total.detailed ||= r.cachedInputTokens !== undefined;
   const cost = r.model ? costOf(r, r.provider, r.model) : undefined;
   total.cost = total.cost === undefined || cost === undefined ? undefined : total.cost + cost;
+  const share = r.model ? contextShare({ ...r, model: r.model }) : undefined;
+  if (share !== undefined) total.context = Math.max(total.context ?? 0, share);
 }
 
 // Undefined when nothing on the incident recorded tokens (a bundled

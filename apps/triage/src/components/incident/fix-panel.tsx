@@ -15,6 +15,7 @@ import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Fix, FixAttempt, FixRun, SandboxRun } from "@/lib/investigation/schema";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
+import { ContextMeter } from "./context-meter";
 import { useIncident } from "./incident-export";
 import { HttpStatusBadge, TestResultBadge } from "./outcome-badges";
 
@@ -137,6 +138,7 @@ export function EarlierAttempts({ attempts, className }: { attempts?: FixAttempt
                   {attempt.fix.risk} risk · {attempt.fix.files.length} files
                   {attempt.fixRun.model && ` · written by ${modelLabel(attempt.fixRun.model, attempt.fixRun.provider, attempt.fixRun.reasoningEffort)}`}
                 </span>
+                {attempt.fixRun.model && <ContextMeter records={[{ ...attempt.fixRun, model: attempt.fixRun.model }]} />}
               </div>
               <p className="text-sm leading-relaxed">{attempt.fix.summary}</p>
               {attempt.approval.reason && (
@@ -178,6 +180,7 @@ export function FixView({
             {fix.risk} risk{data.detected && " · changes stored data"} · {fix.files.length} files
             {fixRun?.model && ` · written by ${modelLabel(fixRun.model, fixRun.provider, fixRun.reasoningEffort)}`}
           </span>
+          {fixRun?.model && <ContextMeter records={[{ ...fixRun, model: fixRun.model }]} className="ml-1" />}
         </span>
         <p className="text-sm leading-relaxed">{fix.summary}</p>
         <FixProof validation={validation} />

@@ -4,7 +4,7 @@ import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions } f
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
-import { addUsage, noTokens } from "../../models/usage";
+import { addUsage, fuller, noTokens, onEachCall, type TokenCounts } from "../../models/usage";
 import { knownEvidenceIds } from "../ask/rules";
 import { gradeHypothesis, gradeLabels } from "../confidence-grade";
 import { cite, incidentBlock } from "../context";
@@ -360,6 +360,8 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     );
 
   const tokens = noTokens();
+  // The fullest call; three at most, so saved with the rest at the end.
+  let context: TokenCounts | undefined;
   let startedAt: string | undefined;
   let provider: ProviderId | undefined;
   let retries = 0;
@@ -399,6 +401,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
       model: languageModel(stage, { onRetry: () => retries++ }),
       providerOptions: modelOptions(stage, cacheKey("postmortem", incidentId)),
       ...callSettings({ stream: true }),
+      ...onEachCall((call) => (context = fuller(context, call))),
       instructions: instructionsFor(template),
       tools: {
         submit_postmortem: tool({
@@ -475,6 +478,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         unknownIds: [],
         modelRetries: retries,
         ...tokens,
+        context,
       });
     } else {
       const error = lastProblems.length
@@ -486,6 +490,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         draft: partial(),
         modelRetries: retries,
         ...tokens,
+        context,
       });
     }
   } catch (err) {
@@ -498,6 +503,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         draft: partial(),
         modelRetries: retries,
         ...tokens,
+        context,
       }).catch(
         (saveErr) => console.error("[triage] saving the failed postmortem failed", incidentId, saveErr),
       );
