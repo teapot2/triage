@@ -20,8 +20,9 @@ export interface DictationControls {
 }
 
 // One dictation at a time for the component that holds it. `onText` gets
-// the whole transcript so far each time it grows. Cancelled on unmount.
-export function useDictation(onText: (text: string) => void): DictationControls {
+// the whole transcript so far each time it grows; `incidentId` tunes it to
+// that incident's names. Cancelled on unmount.
+export function useDictation(onText: (text: string) => void, incidentId?: string): DictationControls {
   const [status, setStatus] = useState<DictationStatus>("idle");
   const [error, setError] = useState<string>();
   const level = useRef(0);
@@ -63,7 +64,7 @@ export function useDictation(onText: (text: string) => void): DictationControls 
         setError(message);
         setStatus("idle");
       },
-    }).then(
+    }, { incidentId }).then(
       (dictation) => {
         if (mine !== generation.current) return dictation.cancel();
         session.current = dictation;
@@ -75,7 +76,7 @@ export function useDictation(onText: (text: string) => void): DictationControls 
         setStatus("idle");
       },
     );
-  }, []);
+  }, [incidentId]);
 
   const finish = useCallback(async () => {
     const dictation = session.current;

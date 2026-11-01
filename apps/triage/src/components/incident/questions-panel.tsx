@@ -614,7 +614,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   // scenario is gone) answers come from the recorded evidence alone
   // (evidence_only), as the route decides.
   const mode: Question["mode"] = sourceKind(incident) ? "tools" : "evidence_only";
-  const composer = <Composer ask={ask} mode={mode} textareaRef={textareaRef} />;
+  const composer = <Composer ask={ask} mode={mode} incidentId={incident.id} textareaRef={textareaRef} />;
   const suggestions = suggestedQuestions(incident);
 
   // Nothing asked yet: the composer first, then questions to start from.
@@ -1214,10 +1214,12 @@ const withDictation = (typed: string, said: string) =>
 function Composer({
   ask,
   mode,
+  incidentId,
   textareaRef,
 }: {
   ask: Ask;
   mode: Question["mode"];
+  incidentId: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const disabled = ask.refusal !== undefined;
@@ -1234,7 +1236,7 @@ function Composer({
   // The draft when dictation started, which the transcript follows.
   const typed = useRef("");
   const { setDraft } = ask;
-  const dictation = useDictation((said) => setDraft(withDictation(typed.current, said)));
+  const dictation = useDictation((said) => setDraft(withDictation(typed.current, said)), incidentId);
   const dictating = dictation.status !== "idle";
   const showMic = preferences.voiceInput && canRecord;
 

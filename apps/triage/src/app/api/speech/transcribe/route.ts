@@ -1,11 +1,15 @@
 import { connection } from "next/server";
+import { getIncident } from "@/lib/investigation/store";
+import { incidentKeywords } from "@/lib/speech/keywords";
 import { endAudio, openSession, sendAudio, type TranscribeEvent } from "@/lib/speech/realtime";
 
 // Voice input for the Ask composer, relayed to Meta's realtime transcription
 // (lib/speech/realtime.ts). The browser names the session (?id=, a UUID it
 // made), opens it with a GET that streams the transcript as server-sent
 // events, then POSTs its audio to the same ?id= in order, and a last POST
-// with ?end=1. Meta bills per minute of audio.
+// with ?end=1. Meta bills per minute of audio. With ?incident=<id>, the
+// incident's service, route and host names bias the transcription
+// (lib/speech/keywords.ts); an unknown incident just goes without.
 
 const idPattern = /^[0-9a-f-]{36}$/i;
 
@@ -19,9 +23,12 @@ export async function GET(req: Request) {
   const id = sessionId(req);
   if (!id) return Response.json({ error: "expected ?id=<uuid>" }, { status: 400 });
 
+  const incidentId = new URL(req.url).searchParams.get("incident");
+  const incident = incidentId ? await getIncident(incidentId).catch(() => undefined) : undefined;
+
   let events: ReadableStream<TranscribeEvent>;
   try {
-    events = await openSession(id, req.signal);
+    events = await openSession(id, req.signal, incident ? incidentKeywords(incident) : []);
   } catch (err) {
     return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 503 });
   }

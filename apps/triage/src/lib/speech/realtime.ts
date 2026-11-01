@@ -45,7 +45,13 @@ function closeReason(code: number, reason: string): string | undefined {
 
 // Opens a session upstream and streams its events until Meta closes it, the
 // session runs too long, or `signal` aborts (the browser went away).
-export async function openSession(id: string, signal: AbortSignal): Promise<ReadableStream<TranscribeEvent>> {
+// `keywords` bias recognition toward those terms for the whole session
+// (Meta takes them only in the handshake); see keywords.ts.
+export async function openSession(
+  id: string,
+  signal: AbortSignal,
+  keywords: string[] = [],
+): Promise<ReadableStream<TranscribeEvent>> {
   const { baseUrl, apiKey } = await endpointFor("meta");
   if (!apiKey) throw new Error("Voice input needs MODEL_API_KEY. Add it to apps/triage/.env.local and restart.");
   if (sessions.has(id)) throw new Error("That transcription session is already open.");
@@ -85,6 +91,7 @@ export async function openSession(id: string, signal: AbortSignal): Promise<Read
             model: TRANSCRIBE_MODEL,
             mode: "PUSH_TO_TALK",
             emitAudioProgress: false,
+            ...(keywords.length > 0 && { keywords }),
           }),
         );
       };

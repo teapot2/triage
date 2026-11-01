@@ -25,6 +25,12 @@ export interface DictationCallbacks {
   onError(message: string): void;
 }
 
+export interface DictationOptions {
+  // The incident being asked about: its service, route and host names bias
+  // the transcription (lib/speech/keywords.ts).
+  incidentId?: string;
+}
+
 // How long the final transcript may take after the audio ends.
 const FINAL_TIMEOUT_MS = 10_000;
 const ENDPOINT = "/api/speech/transcribe";
@@ -75,7 +81,10 @@ const messageOf = (error: unknown) => (error instanceof Error && error.message ?
 // session. Resolves once recording has started; audio recorded before Meta
 // is ready is held, then sent. A failure to open the session comes through
 // onError.
-export async function startDictation({ onText, onLevel, onError }: DictationCallbacks): Promise<Dictation> {
+export async function startDictation(
+  { onText, onLevel, onError }: DictationCallbacks,
+  { incidentId }: DictationOptions = {},
+): Promise<Dictation> {
   if (!dictationSupported()) throw new Error("This browser can't record audio here");
 
   let mic: MediaStream;
@@ -193,7 +202,8 @@ export async function startDictation({ onText, onLevel, onError }: DictationCall
   // server closes the stream.
   void (async () => {
     try {
-      const res = await fetch(`${ENDPOINT}?id=${id}`, { signal: aborter.signal, cache: "no-store" });
+      const incident = incidentId ? `&incident=${encodeURIComponent(incidentId)}` : "";
+      const res = await fetch(`${ENDPOINT}?id=${id}${incident}`, { signal: aborter.signal, cache: "no-store" });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         return fail(data.error ?? `HTTP ${res.status}`);

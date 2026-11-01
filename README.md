@@ -1,6 +1,6 @@
 # Triage
 
-AI SRE for teams with no SRE. Built for the Meta Global AI Developer Hackathon on the Meta Model API (Muse Spark).
+AI SRE for teams with no SRE. Built for the Meta Global AI Developer Hackathon on the Meta Model API (Muse Spark, and Muse Voice Transcribe for voice input).
 
 ## Layout
 
@@ -37,6 +37,8 @@ A recovery says the metric came back; the verification checks that it stayed bac
 ## Ask Triage
 
 After the report, a person can ask Triage follow-up questions on the incident page, with a pasted screenshot if they have one (a dashboard panel, an error page), and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
+
+Questions can also be spoken. With **Voice input** on in **Settings → Speech**, the composer's mic streams speech to Meta's **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`, realtime, about $0.18 per hour of audio) through Triage's server, so `MODEL_API_KEY` never reaches the browser. Each session is biased toward the incident's service, route and host names, so "shopfront" stops coming out "shop front". Answers can be read aloud with the browser's own voices.
 
 ## Postmortem
 
