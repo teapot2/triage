@@ -181,7 +181,7 @@ function timeline(incident: Incident): string {
   ].join("\n\n");
 }
 
-// How the diagnosis held up The diagnosis with its grade and the outcome the
+// How the diagnosis held up: the diagnosis with its grade and the outcome the
 // record shows, each signal on its own line, then the model's sentence on
 // it. Everything above the sentence is the record's, so a postmortem from
 // before the section existed still renders it.
