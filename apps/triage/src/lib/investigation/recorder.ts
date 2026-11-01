@@ -37,6 +37,9 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
   private writes: Promise<void> = Promise.resolve();
   // The model call whose tool calls run now: the last thought started.
   private currentCall: string | undefined;
+  // The fan-out lane its own model calls belong to ("scout", "merge"),
+  // tagged on their steps and thoughts. Unset on single-agent runs.
+  lane: string | undefined;
 
   constructor(
     public incident: Incident,
@@ -56,21 +59,40 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
   }
 
   startStep(id: string, tool: ToolName, input: Record<string, unknown>) {
-    this.incident.steps.push(runningStep(id, tool, input, this.currentCall));
+    this.addStep(runningStep(id, tool, input, this.currentCall, this.lane));
+  }
+
+  // A step a fan-out lane's recorder started, with its own turn and lane.
+  addStep(step: Step) {
+    this.incident.steps.push(step);
     this.persist();
   }
 
   completeStep(id: string, tool: ToolName, summary: string, drafts: EvidenceDraft[]): Evidence[] {
     const evidence = drafts.map((d) => assignId(this.counters, "ev_", d, tool));
-    this.incident.evidence.push(...evidence);
+    this.addEvidence(evidence);
     this.updateStep(id, (step) => completedStep(step, summary, evidence));
     return evidence;
+  }
+
+  // Evidence a fan-out lane gathered, under its own IDs, goes on the
+  // incident as it comes in: the timeline shows it, and the merge's report
+  // can cite it past the same check as any other.
+  addEvidence(evidence: Evidence[]) {
+    this.incident.evidence.push(...evidence);
+    this.persist();
   }
 
   // A model call began: shown as "Thinking…" until it ends.
   startThought(id: string) {
     this.currentCall = id;
-    this.incident.thoughts = startedThought(this.incident.thoughts, id);
+    this.addThought(id, this.lane);
+  }
+
+  // A fan-out lane's model call began. Its tool calls carry their own turn,
+  // so this recorder's current call stays as it was.
+  addThought(id: string, lane?: string) {
+    this.incident.thoughts = startedThought(this.incident.thoughts, id, lane);
     this.persist();
   }
 
@@ -104,7 +126,7 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
     return this.writes;
   }
 
-  private updateStep(id: string, fn: (step: Step) => Step) {
+  updateStep(id: string, fn: (step: Step) => Step) {
     this.incident.steps = this.incident.steps.map((s) => (s.id === id ? fn(s) : s));
     this.persist();
   }
@@ -253,17 +275,32 @@ async function saveQuestion(incidentId: string, question: Question): Promise<voi
   });
 }
 
-function assignId(counters: Map<EvidenceKind, number>, prefix: string, draft: EvidenceDraft, tool: ToolName): Evidence {
+export function assignId(counters: Map<EvidenceKind, number>, prefix: string, draft: EvidenceDraft, tool: ToolName): Evidence {
   const n = (counters.get(draft.kind) ?? 0) + 1;
   counters.set(draft.kind, n);
   return { ...draft, id: `${prefix}${draft.kind}_${n}`, tool } as Evidence;
 }
 
-function runningStep(id: string, tool: ToolName, input: Record<string, unknown>, turn?: string): Step {
-  return { id, tool, input, status: "running", startedAt: new Date().toISOString(), evidenceIds: [], ...(turn && { turn }) };
+export function runningStep(
+  id: string,
+  tool: ToolName,
+  input: Record<string, unknown>,
+  turn?: string,
+  lane?: string,
+): Step {
+  return {
+    id,
+    tool,
+    input,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    evidenceIds: [],
+    ...(turn && { turn }),
+    ...(lane && { lane }),
+  };
 }
 
-function completedStep(step: Step, summary: string, evidence: Evidence[]): Step {
+export function completedStep(step: Step, summary: string, evidence: Evidence[]): Step {
   return {
     ...step,
     status: "completed",
@@ -273,12 +310,12 @@ function completedStep(step: Step, summary: string, evidence: Evidence[]): Step 
   };
 }
 
-function failedStep(step: Step, error: string): Step {
+export function failedStep(step: Step, error: string): Step {
   return { ...step, status: "error", error, durationMs: Date.now() - Date.parse(step.startedAt) };
 }
 
-function startedThought(thoughts: Thought[] | undefined, id: string): Thought[] {
-  return [...(thoughts ?? []), { id, startedAt: new Date().toISOString() }];
+function startedThought(thoughts: Thought[] | undefined, id: string, lane?: string): Thought[] {
+  return [...(thoughts ?? []), { id, startedAt: new Date().toISOString(), ...(lane && { lane }) }];
 }
 
 function endedThought(

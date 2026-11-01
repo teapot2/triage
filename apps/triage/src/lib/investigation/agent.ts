@@ -1,10 +1,11 @@
-import { type ModelMessage, ToolLoopAgent } from "ai";
+import { type LanguageModel, type ModelMessage, ToolLoopAgent } from "ai";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, reasoningKind, wakeProvider } from "../models/client";
 import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
-import { type Endpoint, type StageModel, stageModel, stageProblem } from "../models/settings";
+import { stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
 import { addUsage, noTokens } from "../models/usage";
+import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { liveService } from "../live/types";
@@ -28,18 +29,18 @@ const MAX_NUDGES = 2;
 const NUDGE =
   "You have not submitted an accepted report yet. Keep investigating if needed, then call submit_report.";
 
-const instructions = `You are Triage, an SRE investigating a production alert for a small team with no SRE.
-
-Method:
+// The method and the report's rules are shared with the fan-out's scout
+// and merge (fanout/prompts.ts).
+export const investigationMethod = `Method:
 1. Establish the symptom: query the alerting metric and related metrics (latency, error ratio, request rate, saturation).
 2. Go broad before deep: check logs (errors first, then warnings and unusual info), traces of failing and slow requests, and the database.
 3. Correlate in time: what changed right before the symptom? Check deploy_history and git_log, then read the source the changes touched.
 4. Cover the whole dependency path, including services that look quiet. Ask what stopped emitting, not only what is loud.
 5. Form competing hypotheses and test each against evidence. Reject the ones the evidence contradicts.
 
-Make independent queries in the same turn: metrics, logs and traces for several services at once, then read the results together.
+Make independent queries in the same turn: metrics, logs and traces for several services at once, then read the results together.`;
 
-Rules:
+export const reportRules = `Rules:
 - Every claim must cite evidence IDs exactly as tools returned them (ev_metric_1, ev_log_2, ...). Never invent an ID.
 - For a root_cause verdict give at least 3 hypotheses: one leading, the others plausible or rejected, each rejection with rejectedBecause citing evidence.
 - Confidence is a calibrated probability between 0 and 1; the hypotheses' confidences should roughly sum to 1.
@@ -49,7 +50,14 @@ Rules:
 - The report's summary is for a human skimming the alert, not for you: plain English, under 40 words, no metric or tool names. Claims carry the specifics.
 - Finish by calling submit_report. If it is rejected, fix the listed problems and submit again.`;
 
-function prompt(incident: Incident, source: TelemetrySource): string {
+const instructions = `You are Triage, an SRE investigating a production alert for a small team with no SRE.
+
+${investigationMethod}
+
+${reportRules}`;
+
+// The alert as every investigating agent reads it, then its `task`.
+export function prompt(incident: Incident, source: TelemetrySource, task = "Investigate and submit your report."): string {
   const d = source.describe();
   const services = d.services
     .map((s) => `${s.name}${s.dependsOn.length ? ` -> ${s.dependsOn.join(", ")}` : ""}`)
@@ -62,7 +70,7 @@ Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incid
 Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
 Dependency path: ${services}
 ${note ? `\n${note}\n` : ""}
-Investigate and submit your report.`;
+${task}`;
 }
 
 function focusLine(focus: Incident["trigger"]["focus"]): string {
@@ -275,43 +283,54 @@ export async function runInvestigation(
   source: TelemetrySource,
   opts: {
     appDir?: string;
-    stage?: Required<StageModel> & Endpoint;
+    stage?: Stage;
     save?: (incident: Incident) => Promise<void>;
+    // A fan-out investigation (fanout/run.ts): `lead` surveys and merges,
+    // the stage's model checks each hypothesis. Without it, one agent.
+    fanout?: { lead: Stage };
+    // Tests: a scripted model in place of each provider's.
+    languageModel?: (s: Stage) => LanguageModel;
   } = {},
 ): Promise<Incident> {
   const recorder = new InvestigationRecorder(incident, opts.save ?? saveIncident);
   const tools = createInvestigationTools(source, recorder);
 
   // The investigate stage's model as configured in Settings now, recorded
-  // on the run. A stage that can't run (no key, no URL) fails the run.
+  // on the run. A stage that can't run (no key, no URL) fails the run, and
+  // so does a fan-out's lead.
   const stage = opts.stage ?? (await stageModel("investigate"));
+  const lead = opts.fanout?.lead;
   recorder.update({
     run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) },
   });
-  const problem = stageProblem(stage);
+  const problem = stageProblem(stage) ?? (lead && stageProblem(lead));
   if (problem) {
     recorder.update({ status: "failed", run: { ...recorder.incident.run!, finishedAt: new Date().toISOString(), error: problem } });
     await recorder.flush();
     return recorder.incident;
   }
 
+  let retries = 0;
+  const model = (s: Stage) => opts.languageModel?.(s) ?? languageModel(s, { onRetry: () => retries++ });
+  // Model steps across every agent of the run: a fan-out's scout, lanes and
+  // merge, and the single agent, which a failed scout hands over to.
+  const count = { steps: 0 };
+
   // Meta's API only supports tool_choice "auto" (other providers vary), so
   // the agent can't be forced to call tools. Instead: near the step cap only submit_report
   // stays available, and a run that ends in plain text without an accepted
   // report is nudged to continue.
-  let stepsUsed = 0;
-  let retries = 0;
   const agent = new ToolLoopAgent({
-    model: languageModel(stage, { onRetry: () => retries++ }),
+    model: model(stage),
     providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
     ...callSettings(),
     ...recordThoughts(recorder, reasoningKind(stage.provider)),
     instructions,
     tools,
-    stopWhen: [() => stepsUsed >= MAX_STEPS, () => recorder.report !== undefined],
+    stopWhen: [() => count.steps >= MAX_STEPS, () => recorder.report !== undefined],
     prepareStep: () => {
-      stepsUsed += 1;
-      return stepsUsed > MAX_STEPS - SUBMIT_RESERVE && !recorder.report
+      count.steps += 1;
+      return count.steps > MAX_STEPS - SUBMIT_RESERVE && !recorder.report
         ? { activeTools: ["submit_report" as const] }
         : {};
     },
@@ -320,21 +339,26 @@ export async function runInvestigation(
   try {
     // A host that scales to zero gets its GPU started before the first
     // model call, which would otherwise outwait its request timeout.
-    if (providers[stage.provider].coldStart) {
+    const cold = [stage, ...(lead ? [lead] : [])].filter((s) => providers[s.provider].coldStart);
+    if (cold.length) {
       recorder.update({ run: { ...recorder.incident.run!, wakingSince: new Date().toISOString() } });
-      await wakeProvider(stage);
+      await Promise.all(cold.map(wakeProvider));
       recorder.update({ run: { ...recorder.incident.run!, wakingSince: undefined } });
     }
     // The run's time limit starts once the host is awake.
     const budget = runBudget("investigate");
-    const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, source) }];
     const tokens = noTokens();
-    for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && stepsUsed < MAX_STEPS; attempt++) {
-      if (attempt > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.generate({ messages, abortSignal: budget });
-      messages.push(...result.responseMessages);
-      addUsage(tokens, result.usage);
-    }
+    // The single agent, until a report is accepted or its steps run out.
+    const alone = async (messages: ModelMessage[]) => {
+      for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && count.steps < MAX_STEPS; attempt++) {
+        if (attempt > 0) messages.push({ role: "user", content: NUDGE });
+        const result = await agent.generate({ messages, abortSignal: budget });
+        messages.push(...result.responseMessages);
+        addUsage(tokens, result.usage);
+      }
+    };
+    if (lead) await runFanout({ incident, source, recorder, budget, tokens, count, lane: stage, lead, model, alone });
+    else await alone([{ role: "user", content: prompt(incident, source) }]);
 
     const report = recorder.report;
     recorder.update({
@@ -342,11 +366,11 @@ export async function runInvestigation(
       run: {
         ...recorder.incident.run!,
         finishedAt: new Date().toISOString(),
-        modelSteps: stepsUsed,
+        modelSteps: count.steps,
         ...tokens,
         rejectedReports: recorder.rejectedReports,
         modelRetries: retries,
-        error: report ? undefined : `No accepted report after ${stepsUsed} model steps`,
+        error: report ? undefined : `No accepted report after ${count.steps} model steps`,
       },
     });
     if (report?.verdict.kind === "root_cause") {
