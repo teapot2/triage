@@ -1,6 +1,8 @@
 import { type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
-import { cacheKey, languageModel, modelOptions } from "../../models/client";
+import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions } from "../../models/client";
+import { runBudget } from "../../models/policy";
+import type { ProviderId } from "../../models/providers";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
 import { addUsage, noTokens } from "../../models/usage";
 import { knownEvidenceIds } from "../ask/rules";
@@ -232,8 +234,6 @@ function namedCustom(custom: NonNullable<PostmortemSubmission["custom"]>, templa
   return custom.map((c) => ({ ...c, name: names.get(c.id) ?? c.id }));
 }
 
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 500);
-
 // Saves the draft on the record at most this often while it streams: a
 // reload, or a tab on another server, reads along from there.
 const SAVE_EVERY_MS = 1000;
@@ -360,6 +360,8 @@ export async function writePostmortem(incidentId: string): Promise<void> {
 
   const tokens = noTokens();
   let startedAt: string | undefined;
+  let provider: ProviderId | undefined;
+  let retries = 0;
   let stream: DraftStream | undefined;
   // What a failure keeps: the draft, when anything was written.
   const partial = () => {
@@ -381,6 +383,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         : i,
     );
     const stage = await stageModel("postmortem");
+    provider = stage.provider;
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
     const submissionSchema = submissionSchemaFor(template);
@@ -389,8 +392,9 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     let lastProblems: string[] = [];
     let stepsUsed = 0;
     const agent = new ToolLoopAgent({
-      model: languageModel(stage),
+      model: languageModel(stage, { onRetry: () => retries++ }),
       providerOptions: modelOptions(stage, cacheKey("postmortem", incidentId)),
+      ...callSettings({ stream: true }),
       instructions: instructionsFor(template),
       tools: {
         submit_postmortem: tool({
@@ -416,9 +420,10 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     });
 
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident) }];
+    const budget = runBudget("postmortem");
     for (let pass = 0; pass <= MAX_NUDGES && !accepted && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.stream({ messages });
+      const result = await agent.stream({ messages, abortSignal: budget });
       for await (const part of result.fullStream) {
         switch (part.type) {
           case "reasoning-start":
@@ -443,6 +448,9 @@ export async function writePostmortem(incidentId: string): Promise<void> {
             break;
           case "error":
             throw part.error;
+          // Cut off by the budget or the stall limit: fails like an error.
+          case "abort":
+            throw budget.aborted ? budget.reason : new Error(part.reason ?? "The postmortem was cut off.");
         }
       }
       messages.push(...(await result.responseMessages));
@@ -461,19 +469,32 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         error: undefined,
         citedIds: citedEvidenceIds(accepted),
         unknownIds: [],
+        modelRetries: retries,
         ...tokens,
       });
     } else {
       const error = lastProblems.length
         ? `Rejected: ${lastProblems.join("; ")}`
         : `No postmortem submitted after ${stepsUsed} model steps`;
-      await finish(started, { status: "failed", error: error.slice(0, 1000), draft: partial(), ...tokens });
+      await finish(started, {
+        status: "failed",
+        error: error.slice(0, 1000),
+        draft: partial(),
+        modelRetries: retries,
+        ...tokens,
+      });
     }
   } catch (err) {
     console.error("[triage] postmortem failed", incidentId, err);
     await stream?.close();
     if (startedAt) {
-      await finish(startedAt, { status: "failed", error: errorText(err), draft: partial(), ...tokens }).catch(
+      await finish(startedAt, {
+        status: "failed",
+        error: modelErrorText(err, provider),
+        draft: partial(),
+        modelRetries: retries,
+        ...tokens,
+      }).catch(
         (saveErr) => console.error("[triage] saving the failed postmortem failed", incidentId, saveErr),
       );
     }

@@ -1,5 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { ModelCallError, type RetryOptions, retryingFetch } from "./fetch";
+import { policyFor, RunTimeoutError, STALL_MS } from "./policy";
 import { type ProviderId, providers } from "./providers";
 import type { Endpoint, StageModel } from "./settings";
 import type { StageId } from "./stages";
@@ -10,16 +12,64 @@ import type { StageId } from "./stages";
 // model's reasoning private, while Responses returns a summary of it
 // (modelOptions asks for one). Every other provider is plain Chat
 // Completions, which returns open-weights models' raw thinking as is.
-export function languageModel(s: StageModel & Endpoint) {
-  if (s.provider === "meta") return createOpenAI({ baseURL: s.baseUrl, apiKey: s.apiKey }).responses(s.model);
+//
+// Every request goes through retryingFetch: a time limit per attempt and
+// jittered retries on 429s, 5xx and network errors (policy.ts). `onRetry`
+// lets a run count them.
+export function languageModel(s: StageModel & Endpoint, { onRetry }: Pick<RetryOptions, "onRetry"> = {}) {
+  const fetch = retryingFetch(policyFor(s.provider), { onRetry });
+  if (s.provider === "meta") return createOpenAI({ baseURL: s.baseUrl, apiKey: s.apiKey, fetch }).responses(s.model);
   const client = createOpenAICompatible({
     name: s.provider,
     baseURL: s.baseUrl,
     apiKey: s.apiKey,
     // OpenRouter shows the app's name on its activity page.
     headers: s.provider === "openrouter" ? { "X-Title": "Triage" } : undefined,
+    fetch,
   });
   return client.chatModel(s.model);
+}
+
+// Request settings for every agent, beside modelOptions(): the SDK's own
+// retries off, since retryingFetch does them (both would make up to 12
+// attempts), and for a streamed stage the stall limit between chunks of
+// the model's output (a stream that stalls before any is retryingFetch's
+// to catch). generateText doesn't support a chunk limit and warns if
+// given one.
+export function callSettings({ stream = false }: { stream?: boolean } = {}) {
+  return { maxRetries: 0, ...(stream && { timeout: { chunkMs: STALL_MS } }) };
+}
+
+// The SDK's stream limits, as it words them when one trips. A stream that
+// one cut off ends in an abort part whose reason reads "TimeoutError: …".
+const STREAM_TIMEOUT = /(First chunk|Chunk) timeout of (\d+)ms exceeded/;
+
+// A failed model call or run as the sentence saved on the incident: the
+// retrying fetch's and the run budget's messages as they are, the SDK's
+// stream limits in words, anything else as its first line.
+export function modelErrorText(err: unknown, provider?: ProviderId): string {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (e instanceof ModelCallError || e instanceof RunTimeoutError) return e.message;
+  }
+  const message = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+  const stream = STREAM_TIMEOUT.exec(message);
+  if (stream) {
+    const who = provider ? providers[provider].label : "The model";
+    const seconds = Math.round(Number(stream[2]) / 1000);
+    return stream[1] === "First chunk"
+      ? `${who} didn't start its answer within ${seconds} s.`
+      : `${who} stopped sending its answer for ${seconds} s.`;
+  }
+  return message.slice(0, 500);
+}
+
+// Whether a failure was the API or the clock rather than the request
+// itself: retries used up, a run past its budget, a stalled stream.
+export function isTransientFailure(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
+    if (e instanceof ModelCallError || e instanceof RunTimeoutError) return true;
+  }
+  return STREAM_TIMEOUT.test(err instanceof Error ? err.message : String(err));
 }
 
 // Provider options to pass with every call to languageModel(s), for Meta's

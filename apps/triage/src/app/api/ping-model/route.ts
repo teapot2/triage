@@ -1,6 +1,6 @@
 import { generateText } from "ai";
 import { connection } from "next/server";
-import { languageModel, modelOptions, wakeProvider } from "@/lib/models/client";
+import { callSettings, languageModel, modelErrorText, modelOptions, wakeProvider } from "@/lib/models/client";
 import { providerIdSchema } from "@/lib/models/providers";
 import { type Endpoint, endpointFor, type StageModel, stageIdSchema, stageModel, stageProblem } from "@/lib/models/settings";
 import { reasoningEffortSchema, recordedEffort } from "@/lib/models/stages";
@@ -28,10 +28,13 @@ export async function GET(req: Request) {
   if (problem) return Response.json({ ok: false, error: problem }, { status: 409 });
   try {
     // The 60 s budget is for the model's answer, not a cold host's start.
+    // Retries happen within it, as on every model call (models/fetch.ts),
+    // so a test fails in a minute rather than an attempt's 90 s times four.
     await wakeProvider(target);
     const { text, usage, request } = await generateText({
       model: languageModel(target),
       providerOptions: modelOptions(target),
+      ...callSettings(),
       prompt: "Reply with the single word: pong",
       abortSignal: AbortSignal.timeout(60_000),
       include: { requestBody: true },
@@ -47,7 +50,6 @@ export async function GET(req: Request) {
       reasoning: body?.reasoning ?? null,
     });
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
-    return Response.json({ ok: false, error }, { status: 502 });
+    return Response.json({ ok: false, error: modelErrorText(err, target.provider) }, { status: 502 });
   }
 }

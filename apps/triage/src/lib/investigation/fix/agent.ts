@@ -1,6 +1,7 @@
 import { type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
-import { cacheKey, languageModel, modelOptions, wakeProvider } from "../../models/client";
+import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, wakeProvider } from "../../models/client";
+import { runBudget } from "../../models/policy";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
@@ -273,14 +274,16 @@ export async function runFixStage(
   };
 
   let steps = 0;
+  let retries = 0;
   const tokens = noTokens();
   // One tool call at a time, unlike the other stages: two submit_fix calls
   // in one turn would both pass the attempt check and prove in the sandbox
   // at once. Meta is asked for one call per response; other providers may
   // still send several, which then run in turn.
   const agent = new ToolLoopAgent({
-    model: languageModel(stage),
+    model: languageModel(stage, { onRetry: () => retries++ }),
     providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id), { parallel: false }),
+    ...callSettings(),
     toolCallConcurrency: 1,
     instructions,
     tools,
@@ -302,6 +305,8 @@ export async function runFixStage(
       await wakeProvider(stage);
       setFixRun({ wakingSince: undefined });
     }
+    // The stage's time limit, sandbox runs included, starts once the host is awake.
+    const budget = runBudget("fix");
     const sourceFiles = [
       ...new Set(recorder.incident.evidence.flatMap((e) => (e.kind === "source" ? [e.file] : []))),
     ];
@@ -315,19 +320,20 @@ export async function runFixStage(
       attempt++
     ) {
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.generate({ messages });
+      const result = await agent.generate({ messages, abortSignal: budget });
       messages.push(...result.responseMessages);
       addUsage(tokens, result.usage);
     }
   } catch (err) {
     console.error("[triage] fix stage failed", recorder.incident.id, err);
-    lastProblems = [err instanceof Error ? err.message : String(err)];
+    lastProblems = [modelErrorText(err, stage.provider)];
   }
 
   const finished = {
     finishedAt: new Date().toISOString(),
     wakingSince: undefined,
     modelSteps: steps,
+    modelRetries: retries,
     ...tokens,
   };
   if (accepted) {

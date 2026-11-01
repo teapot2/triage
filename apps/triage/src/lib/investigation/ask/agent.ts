@@ -7,7 +7,17 @@ import {
   type UIMessageStreamWriter,
   type UserContent,
 } from "ai";
-import { cacheKey, languageModel, modelOptions, reasoningKind } from "../../models/client";
+import {
+  cacheKey,
+  callSettings,
+  isTransientFailure,
+  languageModel,
+  modelErrorText,
+  modelOptions,
+  reasoningKind,
+} from "../../models/client";
+import { runBudget } from "../../models/policy";
+import type { ProviderId } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import { addUsage, noTokens } from "../../models/usage";
@@ -80,8 +90,6 @@ Question: ${question.text}`;
 
 const NO_VISION_HINT = "(This model may not read images: pick a vision model for Ask in Settings.)";
 
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 500);
-
 // The answer as it runs: the route streams it to the asking tab, and
 // consumeStream() resolves once it is answered (or failed) and saved. The
 // answer runs to the end whether or not anyone reads the response.
@@ -111,8 +119,11 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
   // Whether the model was called, so a failure before it isn't blamed on
   // the image.
   let calledModel = false;
+  let provider: ProviderId | undefined;
+  let retries = 0;
   try {
     const stage = await stageModel("ask");
+    provider = stage.provider;
     recorder.update({ provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) });
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
@@ -143,8 +154,9 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     // so the last step has no tools and must answer, and a run that stops
     // after tool calls without text is nudged once.
     const agent = new ToolLoopAgent({
-      model: languageModel(stage),
+      model: languageModel(stage, { onRetry: () => retries++ }),
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
+      ...callSettings({ stream: true }),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
       instructions: instructions(mode, image !== undefined),
       tools,
@@ -159,10 +171,12 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     const tokens = noTokens();
     let text = "";
     calledModel = true;
+    const budget = runBudget("ask");
     for (let pass = 0; pass <= MAX_NUDGES && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.stream({ messages });
+      const result = await agent.stream({ messages, abortSignal: budget });
       let failure: unknown;
+      let aborted: Error | undefined;
       let madeToolCalls = false;
       let stepToolCalls = false;
       const chunks = result.toUIMessageStream({
@@ -170,10 +184,17 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
         sendFinish: false,
         onError: (err) => {
           failure ??= err;
-          return errorText(err);
+          return modelErrorText(err, stage.provider);
         },
       });
       for await (const chunk of chunks) {
+        // A stream the budget or the stall limit cut off ends in an abort,
+        // not an error: it fails the question like one, and the tab hears
+        // why from the catch below.
+        if (chunk.type === "abort") {
+          aborted = new Error(chunk.reason ?? "The answer was cut off.");
+          break;
+        }
         writer.write(chunk);
         if (chunk.type === "text-delta") recorder.appendAnswer(chunk.delta);
         else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
@@ -189,6 +210,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
         streamed = true;
         throw failure;
       }
+      if (aborted) throw budget.aborted ? budget.reason : aborted;
       const usage = await result.totalUsage;
       addUsage(tokens, usage);
       messages.push(...(await result.responseMessages));
@@ -204,6 +226,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       citedIds,
       unknownIds,
       answeredAt: new Date().toISOString(),
+      modelRetries: retries,
       ...tokens,
     });
     if (!text) writer.write({ type: "error", errorText: recorder.question.error! });
@@ -212,9 +235,15 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     console.error("[triage] question failed", incident.id, recorder.question.id, err);
     // A model that can't see refuses the image with its own wording, which
     // Triage can't tell apart from other errors: with an image attached,
-    // the likely cause is said too.
-    const message = recorder.question.image && calledModel ? `${errorText(err)} ${NO_VISION_HINT}` : errorText(err);
-    recorder.update({ status: "failed", error: message, answeredAt: new Date().toISOString() });
+    // the likely cause is said too, unless the API or the clock failed.
+    const text = modelErrorText(err, provider);
+    const message = recorder.question.image && calledModel && !isTransientFailure(err) ? `${text} ${NO_VISION_HINT}` : text;
+    recorder.update({
+      status: "failed",
+      error: message,
+      answeredAt: new Date().toISOString(),
+      modelRetries: retries,
+    });
     if (!streamed) writer.write({ type: "error", errorText: message });
   } finally {
     recorder.dropUnfinishedThoughts();

@@ -331,6 +331,7 @@ describe("GET /api/export/investigation-trace", () => {
       model: "muse-spark-1.3",
       reasoning_effort: "high",
       model_steps: 4,
+      model_retries: null,
       input_tokens: 18200,
       cached_input_tokens: null,
       output_tokens: 940,

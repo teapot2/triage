@@ -1,5 +1,6 @@
 import { type ModelMessage, ToolLoopAgent } from "ai";
-import { cacheKey, languageModel, modelOptions, reasoningKind, wakeProvider } from "../models/client";
+import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, reasoningKind, wakeProvider } from "../models/client";
+import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
 import { stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
@@ -282,9 +283,11 @@ export async function runInvestigation(
   // stays available, and a run that ends in plain text without an accepted
   // report is nudged to continue.
   let stepsUsed = 0;
+  let retries = 0;
   const agent = new ToolLoopAgent({
-    model: languageModel(stage),
+    model: languageModel(stage, { onRetry: () => retries++ }),
     providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
+    ...callSettings(),
     ...recordThoughts(recorder, reasoningKind(stage.provider)),
     instructions,
     tools,
@@ -305,11 +308,13 @@ export async function runInvestigation(
       await wakeProvider(stage);
       recorder.update({ run: { ...recorder.incident.run!, wakingSince: undefined } });
     }
+    // The run's time limit starts once the host is awake.
+    const budget = runBudget("investigate");
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, source) }];
     const tokens = noTokens();
     for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && stepsUsed < MAX_STEPS; attempt++) {
       if (attempt > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.generate({ messages });
+      const result = await agent.generate({ messages, abortSignal: budget });
       messages.push(...result.responseMessages);
       addUsage(tokens, result.usage);
     }
@@ -323,6 +328,7 @@ export async function runInvestigation(
         modelSteps: stepsUsed,
         ...tokens,
         rejectedReports: recorder.rejectedReports,
+        modelRetries: retries,
         error: report ? undefined : `No accepted report after ${stepsUsed} model steps`,
       },
     });
@@ -339,7 +345,8 @@ export async function runInvestigation(
         wakingSince: undefined,
         finishedAt: new Date().toISOString(),
         rejectedReports: recorder.rejectedReports,
-        error: err instanceof Error ? err.message : String(err),
+        modelRetries: retries,
+        error: modelErrorText(err, stage.provider),
       },
     });
   }

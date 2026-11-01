@@ -12,7 +12,12 @@ import type { Run } from "@/lib/investigation/schema";
 function explain(error: string): { title: string; detail?: string } {
   if (/^Triage restarted/.test(error)) return { title: "The run stopped when Triage restarted" };
   if (/no accepted report/i.test(error)) return { title: "The agent ran out of steps before finishing its report" };
-  if (/tool_choice|fetch|network|ECONN|timed? ?out|HTTP \d|api key|unauthor/i.test(error)) {
+  // The retrying fetch's and the run budget's sentences (lib/models).
+  if (/ran past its .* limit|didn't answer within|didn't start its answer|stopped sending/.test(error)) {
+    return { title: "The model didn't answer in time", detail: error };
+  }
+  if (/rate-limiting|answered HTTP 5\d\d/.test(error)) return { title: "The model's API is overloaded", detail: error };
+  if (/tool_choice|fetch|network|ECONN|reach|timed? ?out|HTTP \d|api key|unauthor/i.test(error)) {
     return { title: "Couldn't reach the model", detail: error };
   }
   return { title: "The investigation failed", detail: error };

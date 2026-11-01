@@ -309,6 +309,9 @@ export const fixRunSchema = z.object({
   cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
+  // Model calls retried after a 429, 5xx, timeout or network error
+  // (models/fetch.ts). Absent on records from before they were counted.
+  modelRetries: z.number().int().optional(),
   error: z.string().optional(),
 });
 export type FixRun = z.infer<typeof fixRunSchema>;
@@ -346,6 +349,8 @@ export const runSchema = z.object({
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
   rejectedReports: z.number().int().optional(),
+  // As on the fix run: model calls retried.
+  modelRetries: z.number().int().optional(),
   error: z.string().optional(),
 });
 export type Run = z.infer<typeof runSchema>;
@@ -390,6 +395,7 @@ export const questionSchema = z.object({
   cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
+  modelRetries: z.number().int().optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
 
@@ -470,6 +476,7 @@ export const postmortemSchema = z.object({
   cachedInputTokens: z.number().int().optional(),
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
+  modelRetries: z.number().int().optional(),
   summary: z.string().optional().describe("Three sentences, under 80 words: what happened, impact, duration. No evidence IDs."),
   impact: claimSchema.optional().describe("Who was affected and how, cited"),
   contributingFactors: z.array(claimSchema).optional().describe("2 to 5 conditions that each had to hold, cited"),

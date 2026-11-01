@@ -124,6 +124,17 @@ Most of what Triage shows can be downloaded, so its claims can be checked in oth
 
 **Scenarios and grading.** `scenarios/` holds three recorded runs: `pool-leak`, `price-gap` and `healthy`. `price-gap` is the price list gap: 500s on `GET /api/products/[id]` after `FF_LIST_PRICES` went on, raised by the Server errors rule and replayed from a real run's telemetry, database diagnostics and Shopfront files. Each scenario carries its ground truth as `expected`, which never shows in the scenario's description, the tool descriptions or any query result (`scenarios.test.ts` checks). `grade(report, mitigation, expected, evidence)` in `scenarios/grade.ts` scores a finished run. A root cause hits when the summary or the leading hypothesis (its title and causal chain) names or cites a root-cause file, uses a word from every `mustMention` group, and the proposed mitigation matches. For `price-gap` that is `src/lib/prices.ts`; `product_prices`; stock or join; that the row is missing; and turning off `FF_LIST_PRICES`. A healthy scenario hits on any verdict but `root_cause`.
 
+## Model-call timeouts and retries
+
+Every model call, in all four stages and the Test connection ping, goes through `retryingFetch` (`src/lib/models/fetch.ts`), given to the provider clients in `languageModel()`. Limits are in `src/lib/models/policy.ts`:
+
+- **Attempt:** 90 s per request (5 min for a local server), up to the whole answer, or for a stream the next bytes. The slowest of 105 recorded Spark 1.3 calls took 28 s.
+- **Retries:** 408, 429, 500, 502, 503, 504, network errors and timed-out attempts, 4 attempts in all, waiting a random 0–1 s, 0–2 s, then 0–4 s (a 429's `retry-after` instead, up to 30 s). The AI SDK's own retries are off (`maxRetries: 0`) so the two don't multiply.
+- **Stall:** a streamed answer (Ask, the postmortem) fails after 60 s without output once it has started.
+- **Run budget:** investigate 10 min, fix 15 min (sandbox included), Ask 5 min, postmortem 5 min, from after a cold host wakes.
+
+A retry that works shows nothing; each run counts them as `modelRetries` (the trace export's `model_retries`). A failure saves a sentence such as "Meta Model API answered HTTP 503 (4 tries)." or "The investigation ran past its 10-minute limit." (`modelErrorText`), which the Overview titles "The model didn't answer in time", "The model's API is overloaded" or "Couldn't reach the model".
+
 ## Fix and proof (Stages 3 and 4)
 
 `src/lib/investigation/fix/` runs after a live run's root-cause verdict. The model reads the code and submits exact edits plus a new vitest regression test (`submit_fix`). `prove.ts` checks them in a throwaway copy of Shopfront under the OS temp dir (`fix/sandbox.ts`; node_modules linked, never the app itself). Each test run gets its own throwaway copy of Shopfront's database (`fix/database.ts`): a new database on the same server, built with the app's own Drizzle migrations and filled with the live rows and sequence positions, then dropped. The sandbox's `DATABASE_URL` points at it, so a test may write without touching the real data; a test that opens its own connection is turned back. The database user needs `CREATEDB` (the compose user is a superuser). Three checks:
