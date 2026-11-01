@@ -23,6 +23,18 @@ const SUCCESS_MS = 6_000;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+// One call to the model, timed. Outside the component because the React
+// compiler's purity rule treats a clock read inside one as a render-time
+// call, even in an event handler.
+async function pingModel(params: URLSearchParams): Promise<Check> {
+  const started = performance.now();
+  const res = await fetch(`/api/ping-model?${params}`);
+  const data = (await res.json()) as { ok: boolean; text?: string; error?: string };
+  return data.ok
+    ? { ok: true, text: data.text ?? "", ms: performance.now() - started }
+    : { ok: false, error: data.error ?? `HTTP ${res.status}` };
+}
+
 // The provider's model IDs, for the input's suggestions and the provider's
 // status. Refetched when its endpoint changes. A failure comes back as
 // `error`, with `unreachable` when nothing answered; the input still takes a
@@ -184,16 +196,8 @@ export function StageRow({
     if (!model) return;
     setChecking(true);
     setCheck(null);
-    const started = performance.now();
     try {
-      const params = new URLSearchParams({ provider: draft.provider, model, ...(meta && { effort }) });
-      const res = await fetch(`/api/ping-model?${params}`);
-      const data = (await res.json()) as { ok: boolean; text?: string; error?: string };
-      setCheck(
-        data.ok
-          ? { ok: true, text: data.text ?? "", ms: performance.now() - started }
-          : { ok: false, error: data.error ?? `HTTP ${res.status}` },
-      );
+      setCheck(await pingModel(new URLSearchParams({ provider: draft.provider, model, ...(meta && { effort }) })));
     } catch (err) {
       setCheck({ ok: false, error: message(err) });
     } finally {
