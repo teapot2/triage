@@ -2,8 +2,10 @@ import { z } from "zod";
 
 // A postmortem template: the sections between the header and the Evidence
 // appendix, in order. A built-in section is one the renderer knows; a custom
-// one is a heading and the instructions the model fills it from.
-export const builtInSections = ["summary", "impact", "timeline", "factors", "lessons", "lucky", "actions"] as const;
+// one is a heading and the instructions the model fills it from. Outcome
+// ("Did Triage get it right?") came later: a saved template from before it
+// lacks it, and Settings offers it back as a removed section.
+export const builtInSections = ["summary", "impact", "timeline", "outcome", "factors", "lessons", "lucky", "actions"] as const;
 export type BuiltInSection = (typeof builtInSections)[number];
 
 export const templateSectionSchema = z.discriminatedUnion("kind", [

@@ -8,11 +8,15 @@ import {
   CrosshairIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { StatusBadge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCountUp } from "@/hooks/use-count-up";
 import { otherHypotheses } from "@/lib/investigation/citations";
-import type { Claim, Evidence, Hypothesis, InvestigationReport } from "@/lib/investigation/schema";
+import { gradeHypothesis, gradeLabels, gradeTone } from "@/lib/investigation/confidence-grade";
+import { rollupLabels, rollupTone, type VerdictOutcome, verdictOutcome } from "@/lib/investigation/outcome";
+import type { Claim, Evidence, Hypothesis, Incident, InvestigationReport } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent } from "./format";
@@ -44,12 +48,16 @@ export function citedDeploys(report: InvestigationReport, evidence: Evidence[]):
 // The answer, as one card: the verdict and how sure the agent is on top,
 // its plain-English summary below, and the argument behind it folded into
 // the footer. Reports from before the summary existed fall back to the
-// verdict's own claim.
+// verdict's own claim. Beside the model's own confidence, the grade the
+// record gives the hypothesis, and once something checked the diagnosis,
+// whether it held.
 export function VerdictCard({
+  incident,
   report,
   unknownEvidenceIds,
   className,
 }: {
+  incident: Incident;
   report: InvestigationReport;
   unknownEvidenceIds: string[];
   className?: string;
@@ -74,7 +82,12 @@ export function VerdictCard({
       </>
     );
     title = leading.title;
-    aside = <Confidence value={leading.confidence} />;
+    aside = (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:flex-col sm:items-end">
+        <Confidence value={leading.confidence} />
+        <GradeChip hypothesis={leading} incident={incident} />
+      </div>
+    );
     body = report.summary ?? leading.causalChain.rootCause.text;
   } else if (verdict.kind === "healthy") {
     label = "Verdict";
@@ -108,7 +121,10 @@ export function VerdictCard({
       <div className="flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="flex items-center gap-1.5 text-muted-foreground text-xs">{label}</span>
+            <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+              {label}
+              {leading && <OutcomeChip outcome={verdictOutcome(incident)} />}
+            </span>
             <h2 className="font-heading font-medium text-lg leading-snug">{title}</h2>
           </div>
           <div className="shrink-0 sm:pt-0.5">{aside}</div>
@@ -131,6 +147,7 @@ export function VerdictCard({
           </CollapsibleTrigger>
           <CollapsibleContent>
             <Reasoning
+              incident={incident}
               report={report}
               leading={leading}
               rationale={rationale}
@@ -141,6 +158,41 @@ export function VerdictCard({
         </>
       )}
     </Collapsible>
+  );
+}
+
+// How far the record bears the hypothesis out (confidence-grade.ts), as a
+// small chip with why on hover. Worked out from the evidence and what came
+// after, never from the model's say-so.
+function GradeChip({ hypothesis, incident }: { hypothesis: Hypothesis; incident: Incident }) {
+  const { grade, reason } = gradeHypothesis(hypothesis, incident);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default">
+          <StatusBadge tone={gradeTone[grade]}>{gradeLabels[grade]}</StatusBadge>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// Whether the diagnosis held (outcome.ts), once something checked it: one
+// quiet chip by the verdict's label, with the first signal that settled it
+// on hover. Nothing while it is unverified.
+function OutcomeChip({ outcome }: { outcome: VerdictOutcome | undefined }) {
+  if (!outcome || outcome.rollup === "unverified") return null;
+  const signal = outcome.signals.find((s) => s.status !== "unknown");
+  const chip = <StatusBadge tone={rollupTone[outcome.rollup]}>{rollupLabels[outcome.rollup]}</StatusBadge>;
+  if (!signal) return chip;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default">{chip}</span>
+      </TooltipTrigger>
+      <TooltipContent>{signal.text}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -166,12 +218,14 @@ function Confidence({ value }: { value: number }) {
 // The argument behind the verdict: how the symptom led to the root cause,
 // each step with its citations, then what was ruled out.
 function Reasoning({
+  incident,
   report,
   leading,
   rationale,
   others,
   unknownEvidenceIds,
 }: {
+  incident: Incident;
   report: InvestigationReport;
   leading?: Hypothesis;
   rationale?: Claim;
@@ -192,7 +246,7 @@ function Reasoning({
         ) : (
           <ClaimText claim={rationale} struck={unverified(rationale)} />
         ))}
-      <AlsoConsidered hypotheses={others} unverified={unverified} />
+      <AlsoConsidered incident={incident} hypotheses={others} unverified={unverified} />
     </div>
   );
 }
@@ -207,9 +261,11 @@ const consideredGroups = [
 ];
 
 function AlsoConsidered({
+  incident,
   hypotheses,
   unverified,
 }: {
+  incident: Incident;
   hypotheses: Hypothesis[];
   unverified: (c: Claim) => boolean;
 }) {
@@ -233,7 +289,11 @@ function AlsoConsidered({
                   <li key={h.id} className="grid grid-cols-[1rem_minmax(0,1fr)] gap-x-2">
                     <Icon className={cn("mt-0.5 size-4", iconClass)} />
                     <div className="flex flex-col gap-0.5">
-                      <span className="font-medium text-sm">{h.title}</span>
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="font-medium text-sm">{h.title}</span>
+                        {/* Every ruled-out row grades Contradicted, which its heading already says. */}
+                        {!rejected && <GradeChip hypothesis={h} incident={incident} />}
+                      </span>
                       <ClaimText claim={{ ...reason, text }} struck={unverified(reason)} className="text-muted-foreground" />
                     </div>
                   </li>

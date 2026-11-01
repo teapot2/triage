@@ -6,8 +6,10 @@ import type { ProviderId } from "../../models/providers";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
 import { addUsage, noTokens } from "../../models/usage";
 import { knownEvidenceIds } from "../ask/rules";
+import { gradeHypothesis, gradeLabels } from "../confidence-grade";
 import { cite, incidentBlock } from "../context";
 import { dataChangeOf } from "../fix/data-change";
+import { rollupLabels, type VerdictOutcome, verdictOutcome } from "../outcome";
 import { evidenceId, type Incident, type Postmortem, type PostmortemDraft, postmortemSchema } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { forModel } from "../tools";
@@ -15,6 +17,7 @@ import { draftContent, nextAttempt, writingSection } from "./draft";
 import { endDraft, publishDraft } from "./live";
 import { citedEvidenceIds, MAX_FACTORS, MIN_FACTORS, type PostmortemSubmission, postmortemProblems } from "./rules";
 import { type BuiltInSection, customSections, keptBuiltIns, type Template } from "./template";
+import { postmortemTimeline } from "./timeline";
 
 // Stage "postmortem": the blameless postmortem's judgment (summary, impact,
 // contributing factors, what went well and badly, luck, action items),
@@ -35,6 +38,8 @@ const NUDGE = "You have not submitted an accepted postmortem yet. Fix any proble
 const sectionRules: Partial<Record<BuiltInSection, string>> = {
   summary: "- summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.",
   impact: "- impact: who was affected and how.",
+  outcome:
+    "- verdictReview: one or two sentences on whether the first diagnosis held, judged only from the Outcome block below: name what confirmed or contradicted it, cite the evidence IDs that block gives. If nothing checked it, say it stands unverified. Never call it confirmed because a fix was written or merged; only a recovered mitigation, a proven regression test or a completed verification confirms it.",
   factors: `- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late). When the alert fired on a symptom (latency, errors) and nothing watched the resource that actually ran out (a pool, a queue, a disk), that missing alert is a contributing factor in its own right, cited to the metric evidence that shows the resource saturating.`,
   lessons:
     "- wentWell and wentBadly judge detection, response and tooling, never the symptoms themselves: what caught the problem or missed it (an alert on latency but none on the pool), what made the response faster or slower (a flag made the mitigation quick; no test covered the failing path), what tooling helped or was missing. A symptom belongs in impact or the factors, not here.",
@@ -76,6 +81,7 @@ export function instructionsFor(template: Template): string {
 const sectionFields: Partial<Record<BuiltInSection, (keyof Postmortem)[]>> = {
   summary: ["summary"],
   impact: ["impact"],
+  outcome: ["verdictReview"],
   factors: ["contributingFactors"],
   lessons: ["wentWell", "wentBadly"],
   lucky: ["lucky"],
@@ -102,45 +108,12 @@ export function submissionSchemaFor(template: Template) {
   return z.object(Object.fromEntries(order.map((f) => [f, shape[f]]))) as unknown as z.ZodType<PostmortemSubmission>;
 }
 
-// The incident's times in order, as a timeline the model can quote.
+// The incident's times in order, as a timeline the model can quote: the
+// postmortem's own (timeline.ts), so the verification window and any
+// reopening are in it, as they are in the document.
 function timelineBlock(incident: Incident): string {
-  const events: [string | undefined, string][] = [
-    [incident.detectedAt, `Alert fired, incident opened${incident.openedBy ? ` by ${incident.openedBy === "watch" ? "Triage's watch" : "a person"}` : ""}`],
-    [incident.run?.startedAt, "Investigation started"],
-    [incident.run?.finishedAt, `Investigation finished${incident.run?.error ? ` with an error: ${incident.run.error}` : ""}`],
-  ];
-  const m = incident.mitigation;
-  if (m) {
-    events.push([m.proposedAt, `Mitigation proposed: ${m.title}`]);
-    events.push([m.decidedAt, `Mitigation ${m.state === "denied" ? "denied" : "approved"}`]);
-    events.push([m.appliedAt, `Mitigation ${m.state === "failed" ? "failed" : "applied"}`]);
-    events.push([m.recovery?.recoveredAt, `Alert metric back under ${m.recovery?.threshold} (recovered)`]);
-  }
-  for (const [n, a] of (incident.fixAttempts ?? []).entries()) {
-    events.push([a.fixRun.startedAt, `Fix stage started (fix ${n + 1})`]);
-    events.push([a.fixRun.finishedAt, `Fix stage finished (fix ${n + 1}): ${a.fixRun.status} after ${a.fixRun.attempt} attempts`]);
-    events.push([a.approval.requestedAt, `Approval requested (fix ${n + 1})`]);
-    events.push([a.approval.decidedAt, `Fix ${n + 1} denied${a.approval.reason ? `, feedback: ${a.approval.reason}` : ""}`]);
-  }
-  const f = incident.fixRun;
-  if (f) {
-    const rejections = f.rejections?.length ? `, rejected: ${f.rejections.join("; ")}` : "";
-    events.push([f.startedAt, "Fix stage started"]);
-    events.push([f.finishedAt, `Fix stage finished: ${f.status} after ${f.attempt} attempts${rejections}`]);
-  }
-  const a = incident.approval;
-  if (a) {
-    events.push([a.requestedAt, "Approval of the fix requested"]);
-    events.push([a.decidedAt, `Fix ${a.state}${a.reason ? `, reason: ${a.reason}` : ""}`]);
-  }
-  for (const q of incident.questions ?? []) {
-    events.push([q.askedAt, `Question asked${q.image ? " (with a screenshot)" : ""}: ${q.text}`]);
-  }
-  const lines = events
-    .filter((e): e is [string, string] => e[0] !== undefined)
-    .sort((x, y) => Date.parse(x[0]) - Date.parse(y[0]))
-    .map(([t, what]) => `${t} ${what}`);
-  if (!m?.recovery?.recoveredAt) {
+  const lines = postmortemTimeline(incident).map((e) => `${e.at} ${e.event}`);
+  if (!incident.mitigation?.recovery?.recoveredAt) {
     lines.push(
       incident.status === "resolved"
         ? "The incident is marked resolved, but no recovery time is recorded."
@@ -179,7 +152,10 @@ function fixBlock(incident: Incident): string {
     const failed = run.tests.filter((t) => t.status === "failed").length;
     lines.push(`Sandbox, ${run.label}: exit ${run.exitCode}, ${run.tests.length - failed} passed, ${failed} failed${run.repro ? `; ${run.repro.request} -> ${run.repro.status} in ${run.repro.latencyMs} ms` : ""}`);
   }
-  if (fixRun) lines.push(`Fix stage: ${fixRun.status} after ${fixRun.attempt} attempts`);
+  if (fixRun) {
+    const rejections = fixRun.rejections?.length ? `, rejected: ${fixRun.rejections.join("; ")}` : "";
+    lines.push(`Fix stage: ${fixRun.status} after ${fixRun.attempt} attempts${rejections}`);
+  }
   return lines.join("\n");
 }
 
@@ -191,7 +167,28 @@ function approvalBlock(incident: Incident): string {
   return `${a.state}${a.reason ? `, reason: ${a.reason}` : ""}${pr}`;
 }
 
-function prompt(incident: Incident): string {
+// Whether the diagnosis held, as the record shows it (outcome.ts): the
+// hypothesis with its grade, the roll-up, then each signal with its status
+// and time. The model only puts this in a sentence; it never decides it.
+function outcomeBlock(incident: Incident, outcome: VerdictOutcome | undefined): string {
+  if (!outcome) return "Nothing has checked the diagnosis yet.";
+  const h = outcome.hypothesis;
+  const hypothesis = incident.report?.hypotheses.find((x) => x.id === h.id);
+  const reason = hypothesis ? gradeHypothesis(hypothesis, incident).reason : "";
+  const cited = hypothesis
+    ? [...new Set([hypothesis.causalChain.symptom, hypothesis.causalChain.propagation, hypothesis.causalChain.rootCause].flatMap((c) => c.evidenceIds))]
+    : [];
+  const lines = [
+    `Diagnosis: ${h.id} "${h.title}", confidence ${h.confidence}, ${gradeLabels[h.grade].toLowerCase()}${reason ? ` (${reason})` : ""}`,
+    ...(cited.length ? [`Its evidence: ${cited.join(", ")}`] : []),
+    `Result: ${rollupLabels[outcome.rollup].toLowerCase()}`,
+    ...outcome.signals.map((sig) => `- ${sig.at ?? "(no time recorded)"} ${sig.status} (${sig.kind}): ${sig.text}`),
+  ];
+  if (outcome.signals.length === 0) lines.push("Nothing has checked the diagnosis yet.");
+  return lines.join("\n");
+}
+
+function prompt(incident: Incident, outcome: VerdictOutcome | undefined): string {
   const evidence = [...incident.evidence, ...(incident.questions ?? []).flatMap((q) => q.evidence)]
     .map((e) => JSON.stringify(forModel(e)))
     .join("\n");
@@ -209,6 +206,9 @@ ${fixBlock(incident)}
 Approval:
 ${approvalBlock(incident)}
 
+Outcome:
+${outcomeBlock(incident, outcome)}
+
 Evidence you may cite:
 ${evidence || "(none)"}
 
@@ -220,6 +220,7 @@ export function submitDescription(template: Template): string {
   const kept = new Set(keptBuiltIns(template));
   const checks = [
     ...(kept.has("factors") ? [`${MIN_FACTORS} to ${MAX_FACTORS} contributing factors`] : []),
+    ...(kept.has("outcome") ? ["the verdict review matches the recorded outcome"] : []),
     ...(customSections(template).length ? ["every custom section written once"] : []),
     "every cited evidence ID must exist",
     "nobody named or blamed",
@@ -387,6 +388,9 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
     const submissionSchema = submissionSchemaFor(template);
+    // Worked out once, from the record as it was when the write began: the
+    // prompt shows it and the checks hold the review to it.
+    const outcome = verdictOutcome(incident);
 
     let accepted: PostmortemSubmission | undefined;
     let lastProblems: string[] = [];
@@ -402,7 +406,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
           inputSchema: submissionSchema,
           execute: async (input) => {
             const submission = submissionSchema.parse(input);
-            lastProblems = postmortemProblems(submission, incident, template);
+            lastProblems = postmortemProblems(submission, incident, template, outcome);
             if (lastProblems.length > 0) {
               live.reject(lastProblems);
               return `Rejected:\n${lastProblems.map((p) => `- ${p}`).join("\n")}`;
@@ -419,7 +423,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
       },
     });
 
-    const messages: ModelMessage[] = [{ role: "user", content: prompt(incident) }];
+    const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, outcome) }];
     const budget = runBudget("postmortem");
     for (let pass = 0; pass <= MAX_NUDGES && !accepted && stepsUsed < MAX_STEPS; pass++) {
       if (pass > 0) messages.push({ role: "user", content: NUDGE });

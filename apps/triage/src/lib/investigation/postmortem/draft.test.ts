@@ -49,6 +49,11 @@ describe("draftContent", () => {
     assert.deepEqual(draftContent(partial, known, team).custom, [{ id: "comms", text: "No one", evidenceIds: [] }]);
   });
 
+  it("takes the verdict review as a claim", () => {
+    const content = draftContent({ verdictReview: { text: "It held.", evidenceIds: ["ev_log_1", "ev_lo"] } }, known, defaultTemplate);
+    assert.deepEqual(content.verdictReview, { text: "It held.", evidenceIds: ["ev_log_1"] });
+  });
+
   it("is empty for anything but an object", () => {
     assert.deepEqual(draftContent(undefined, known, defaultTemplate), {});
     assert.deepEqual(draftContent("x", known, defaultTemplate), {});
@@ -60,6 +65,7 @@ describe("writingSection", () => {
     assert.equal(writingSection(await cut(full, 15)), "summary");
     assert.equal(writingSection(await cut(full, full.indexOf("No pool"))), "factors");
     assert.equal(writingSection({ summary: "", wentBadly: [] }), "lessons");
+    assert.equal(writingSection({ summary: "", impact: {}, verdictReview: { text: "It he" } }), "outcome");
     assert.equal(writingSection({ custom: [{ id: "comms" }] }), "custom:comms");
     assert.equal(writingSection({}), undefined);
   });
@@ -71,6 +77,7 @@ describe("sectionStates", () => {
       summary: "done",
       impact: "writing",
       timeline: "pending",
+      outcome: "pending",
       factors: "pending",
       lessons: "pending",
       lucky: "pending",
@@ -110,7 +117,7 @@ describe("revealDraft while the submission streams", () => {
   });
 
   it("reads past a closed section and the timeline to the next one", () => {
-    const content: DraftContent = { ...sorted, summary: "S.", impact: { text: "I.", evidenceIds: [] } };
+    const content: DraftContent = { ...sorted, summary: "S.", impact: { text: "I.", evidenceIds: [] }, verdictReview: { text: "V.", evidenceIds: [] } };
     const { at } = revealDraft(content, defaultTemplate, Infinity, { open: "factors", complete: false });
     assert.equal(at, "factors");
   });
@@ -149,6 +156,19 @@ describe("revealDraft", () => {
     assert.equal(at, undefined);
     assert.equal(used, draftLength(content, defaultTemplate));
     assert.equal(used, 13 + 16 + 12);
+  });
+
+  it("reveals the verdict review after the impact, before the factors", () => {
+    const withReview: DraftContent = { ...content, verdictReview: { text: "It held.", evidenceIds: ["ev_log_1"] } };
+    const { content: shown, at } = revealDraft(withReview, defaultTemplate, 13 + 16 + 4);
+    assert.equal(at, "outcome");
+    assert.deepEqual(shown.verdictReview, { text: "It h", evidenceIds: [] });
+    assert.equal(shown.lucky, undefined);
+  });
+
+  it("waits at the outcome while streaming, until the review is started", () => {
+    const { at } = revealDraft(content, defaultTemplate, Infinity, { open: "lucky", complete: false });
+    assert.equal(at, "outcome");
   });
 
   it("follows a custom section where the template puts it", () => {

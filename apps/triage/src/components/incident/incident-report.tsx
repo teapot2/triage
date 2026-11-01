@@ -119,6 +119,7 @@ export function IncidentReport({
         {reopened && <ReopenedNotice incident={incident} reopening={reopened} />}
         {report ? (
           <VerdictCard
+            incident={incident}
             report={report}
             unknownEvidenceIds={unknownEvidenceIds}
             className={arrive || undefined}

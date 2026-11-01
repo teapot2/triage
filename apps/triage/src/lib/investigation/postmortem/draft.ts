@@ -14,6 +14,7 @@ export const sectionKey = (s: TemplateSection) => (s.kind === "builtin" ? s.key 
 const fieldSections: Record<string, string> = {
   summary: "summary",
   impact: "impact",
+  verdictReview: "outcome",
   contributingFactors: "factors",
   wentWell: "lessons",
   wentBadly: "lessons",
@@ -43,6 +44,8 @@ export function draftContent(partial: unknown, known: Set<string>, template: Tem
   if (typeof partial.summary === "string") out.summary = partial.summary;
   const impact = claim(partial.impact);
   if (impact) out.impact = impact;
+  const verdictReview = claim(partial.verdictReview);
+  if (verdictReview) out.verdictReview = verdictReview;
   for (const field of ["contributingFactors", "wentWell", "wentBadly"] as const) {
     const list = claims(partial[field]);
     if (list) out[field] = list;
@@ -88,13 +91,16 @@ export function writingSection(partial: unknown): string | undefined {
 
 // Whether the model has started a section: its field is there, even if it
 // is an empty list (nothing went lucky). The timeline is the renderer's,
-// never the model's.
+// never the model's; the outcome is the renderer's facts with the model's
+// sentence under them, started once that sentence is.
 export function sectionStarted(content: DraftContent, key: string): boolean {
   switch (key) {
     case "summary":
       return content.summary !== undefined;
     case "impact":
       return content.impact !== undefined;
+    case "outcome":
+      return content.verdictReview !== undefined;
     case "factors":
       return content.contributingFactors !== undefined;
     case "lessons":
@@ -202,6 +208,9 @@ export function revealDraft(
           break;
         case "impact":
           if (content.impact) out.impact = claim(key, content.impact);
+          break;
+        case "outcome":
+          if (content.verdictReview) out.verdictReview = claim(key, content.verdictReview);
           break;
         case "factors":
           out.contributingFactors = claims(key, content.contributingFactors);

@@ -476,6 +476,7 @@ export const postmortemDraftSchema = z.object({
     wentWell: z.array(draftClaimSchema).optional(),
     wentBadly: z.array(draftClaimSchema).optional(),
     lucky: z.array(z.string()).optional(),
+    verdictReview: draftClaimSchema.optional(),
     actionItems: z
       .array(
         z.object({
@@ -520,6 +521,11 @@ export const postmortemSchema = z.object({
   wentBadly: z.array(claimSchema).optional(),
   lucky: z.array(z.string()).optional().describe("What could have made it worse"),
   actionItems: z.array(postmortemActionItemSchema).optional(),
+  // Absent on records from before the outcome section: it renders from the
+  // incident without it.
+  verdictReview: claimSchema
+    .optional()
+    .describe("One or two sentences on whether the first diagnosis held, judged only from the Outcome block, cited"),
   // The template's custom sections as written, named as the template named them.
   custom: z.array(z.object({ id: z.string(), name: z.string(), text: z.string(), evidenceIds: z.array(evidenceId) })).optional(),
   // The template this was written with, kept so it renders in the same shape

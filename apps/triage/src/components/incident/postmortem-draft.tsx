@@ -115,10 +115,11 @@ export function useReveal(content: DraftContent, template: Template, progress: P
 
 // A ready postmortem's content, to reveal the end of it as the draft's.
 export function contentOf(pm: Postmortem): DraftContent {
-  const { summary, impact, contributingFactors, wentWell, wentBadly, lucky, actionItems, custom } = pm;
+  const { summary, impact, verdictReview, contributingFactors, wentWell, wentBadly, lucky, actionItems, custom } = pm;
   const content: DraftContent = {
     summary,
     impact,
+    verdictReview,
     contributingFactors,
     wentWell,
     wentBadly,

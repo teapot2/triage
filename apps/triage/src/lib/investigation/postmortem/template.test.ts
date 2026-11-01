@@ -20,7 +20,7 @@ const custom = (id: string, name = "Customer communication") => ({
 });
 
 describe("defaultTemplate", () => {
-  it("is the seven built-in sections in order, and valid", () => {
+  it("is the eight built-in sections in order, and valid", () => {
     assert.deepEqual(keptBuiltIns(defaultTemplate), [...builtInSections]);
     assert.equal(templateSchema.safeParse(defaultTemplate).success, true);
     assert.deepEqual(templateProblems(defaultTemplate), []);

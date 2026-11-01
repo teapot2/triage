@@ -23,16 +23,22 @@ const team: Template = {
 const fields = (template: Template) => Object.keys((submissionSchemaFor(template) as unknown as { shape: object }).shape).sort();
 
 describe("submissionSchemaFor", () => {
-  it("asks for the seven built-in fields and no custom ones by default", () => {
+  it("asks for the built-in sections' fields and no custom ones by default", () => {
     assert.deepEqual(fields(defaultTemplate), [
       "actionItems",
       "contributingFactors",
       "impact",
       "lucky",
       "summary",
+      "verdictReview",
       "wentBadly",
       "wentWell",
     ]);
+  });
+
+  it("asks for the verdict review where the template puts the outcome: after impact, before the factors", () => {
+    const order = Object.keys((submissionSchemaFor(defaultTemplate) as unknown as { shape: object }).shape);
+    assert.deepEqual(order.slice(0, 4), ["summary", "impact", "verdictReview", "contributingFactors"]);
   });
 
   it("asks only for the kept sections, and for custom when the template has any", () => {
@@ -58,7 +64,7 @@ describe("submissionSchemaFor", () => {
 describe("instructionsFor", () => {
   it("lists the rules of every built-in section by default, and no custom sections", () => {
     const text = instructionsFor(defaultTemplate);
-    for (const field of ["summary:", "impact:", "contributingFactors:", "wentWell and wentBadly", "lucky:", "actionItems:"]) {
+    for (const field of ["summary:", "impact:", "verdictReview:", "contributingFactors:", "wentWell and wentBadly", "lucky:", "actionItems:"]) {
       assert.ok(text.includes(`- ${field}`), field);
     }
     assert.ok(!text.includes("Custom sections your team asks for"));
@@ -69,6 +75,7 @@ describe("instructionsFor", () => {
     assert.ok(!text.includes("- lucky:"));
     assert.ok(!text.includes("- contributingFactors:"));
     assert.ok(!text.includes("- impact:"));
+    assert.ok(!text.includes("- verdictReview:"));
     assert.ok(text.includes("- actionItems:"));
     assert.ok(text.includes("Custom sections your team asks for"));
     assert.ok(text.includes(`- customer-communication (Customer communication): ${comms.instructions}`));
@@ -78,9 +85,10 @@ describe("instructionsFor", () => {
 
 describe("submitDescription", () => {
   it("names only the checks that apply", () => {
-    assert.match(submitDescription(defaultTemplate), /2 to 5 contributing factors.*no action item repeating the fix/);
+    assert.match(submitDescription(defaultTemplate), /2 to 5 contributing factors, the verdict review matches the recorded outcome,.*no action item repeating the fix/);
     const text = submitDescription(team);
     assert.ok(!text.includes("contributing factors"));
+    assert.ok(!text.includes("verdict review"));
     assert.ok(text.includes("every custom section written once"));
   });
 });

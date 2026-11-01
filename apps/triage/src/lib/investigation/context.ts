@@ -1,3 +1,4 @@
+import { gradeHypothesis, gradeLabels } from "./confidence-grade";
 import type { Claim, Incident } from "./schema";
 import type { TelemetrySource } from "./source";
 
@@ -46,7 +47,10 @@ export function incidentBlock(incident: Incident, source: TelemetrySource | unde
     lines.push(`Verdict: inconclusive, missing ${verdict.missing.join("; ")}`);
   }
   for (const h of report?.hypotheses ?? []) {
-    lines.push(`Hypothesis ${h.id} (${h.status}, confidence ${h.confidence}): ${h.title}`);
+    // The grade is worked out from the record (confidence-grade.ts), beside
+    // the model's own number, so a reader can weigh the one against the other.
+    const grade = gradeLabels[gradeHypothesis(h, incident).grade].toLowerCase();
+    lines.push(`Hypothesis ${h.id} (${h.status}, confidence ${h.confidence}, ${grade}): ${h.title}`);
     lines.push(`  symptom: ${cite(h.causalChain.symptom)}`);
     lines.push(`  propagation: ${cite(h.causalChain.propagation)}`);
     lines.push(`  root cause: ${cite(h.causalChain.rootCause)}`);

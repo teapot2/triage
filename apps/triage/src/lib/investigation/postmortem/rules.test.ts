@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "../fixtures";
+import { verdictOutcome } from "../outcome";
 import type { Incident } from "../schema";
 import {
   blamelessProblems,
   citedEvidenceIds,
   nextPostmortem,
+  outcomeProblems,
   type PostmortemSubmission,
   postmortemProblems,
   postmortemRefusal,
@@ -27,6 +29,10 @@ function submission(patch: Partial<PostmortemSubmission> = {}): PostmortemSubmis
       { text: "The flag put that path on every product request.", evidenceIds: ["ev_commit_flag", "ev_log_stock_miss"] },
       { text: "The pool holds only 10 connections, so it ran out in minutes.", evidenceIds: ["ev_metric_pool"] },
     ],
+    verdictReview: {
+      text: "The diagnosis held: the regression test failed on the original code and passes with the fix.",
+      evidenceIds: ["ev_source_stock"],
+    },
     wentWell: [{ text: "The latency alert fired as the pool ran out.", evidenceIds: ["ev_metric_p95"] }],
     wentBadly: [{ text: "Nothing alerted on pool saturation itself.", evidenceIds: ["ev_metric_pool"] }],
     lucky: ["Traffic was flat; a spike would have run the pool out sooner."],
@@ -185,6 +191,65 @@ describe("postmortemProblems", () => {
   it("rejects evidence IDs in the summary", () => {
     const s = submission({ summary: "Pages timed out [ev_metric_p95]." });
     assert.match(postmortemProblems(s, poolLeak(), defaultTemplate)[0], /summary cites evidence IDs/);
+  });
+});
+
+describe("outcomeProblems", () => {
+  // The pool leak with its fix and sandbox runs taken away: nothing has
+  // checked the diagnosis.
+  const unchecked = (): Incident => ({ ...poolLeak(), fix: undefined, validation: undefined, approval: undefined });
+  const review = (text: string) => submission({ verdictReview: { text, evidenceIds: ["ev_source_stock"] } });
+
+  it("accepts a review that agrees with the record", () => {
+    assert.deepEqual(outcomeProblems(review("It held: the regression test proved the fix."), verdictOutcome(poolLeak())), []);
+    assert.deepEqual(outcomeProblems(review("Nothing has checked it yet."), verdictOutcome(unchecked())), []);
+  });
+
+  it("rejects a review saying it held when nothing checked it", () => {
+    const problems = outcomeProblems(review("The diagnosis was confirmed by the fix that was written."), verdictOutcome(unchecked()));
+    assert.deepEqual(problems, [
+      'verdictReview says the diagnosis held ("The diagnosis was confirmed by the fix that was written."), but the record shows it unverified: say what the Outcome block shows.',
+    ]);
+  });
+
+  it("rejects it when the record contradicts it, quoting the first 80 characters", () => {
+    const i = unchecked();
+    i.fixRun = { status: "declined", declinedBecause: "Not a code defect.", attempt: 1, startedAt: "2026-10-23T02:15:00Z" };
+    const long = `The diagnosis was right ${"and the evidence agrees ".repeat(5)}`;
+    const [problem] = outcomeProblems(review(long), verdictOutcome(i));
+    assert.match(problem, /but the record shows it contradicted: say what the Outcome block shows\.$/);
+    assert.ok(problem.includes(`("${long.trim().slice(0, 80)}…")`));
+  });
+
+  it("passes negations and rejects a plain claim, whatever the outcome", () => {
+    const contradicted = unchecked();
+    contradicted.fixRun = { status: "declined", declinedBecause: "Not a code defect.", attempt: 1, startedAt: "2026-10-23T02:15:00Z" };
+    assert.equal(verdictOutcome(contradicted)!.rollup, "contradicted");
+    assert.equal(verdictOutcome(unchecked())!.rollup, "unverified");
+    assert.deepEqual(outcomeProblems(review("Nothing confirmed it; it stands unverified."), verdictOutcome(unchecked())), []);
+    assert.deepEqual(outcomeProblems(review("It was not confirmed."), verdictOutcome(unchecked())), []);
+    assert.deepEqual(outcomeProblems(review("No test has validated the fix, and the mitigation never held."), verdictOutcome(unchecked())), []);
+    assert.deepEqual(outcomeProblems(review("The leak is on the right side of the request path."), verdictOutcome(unchecked())), []);
+    assert.equal(outcomeProblems(review("The diagnosis was confirmed by the mitigation."), verdictOutcome(contradicted)).length, 1);
+    assert.equal(outcomeProblems(review("Triage got it right."), verdictOutcome(unchecked())).length, 1);
+  });
+
+  it("lets a review that names the actual outcome use the words", () => {
+    assert.deepEqual(outcomeProblems(review("Nothing has confirmed it yet: it stands unverified."), verdictOutcome(unchecked())), []);
+  });
+
+  it("runs in postmortemProblems only while the template keeps the outcome", () => {
+    const s = review("The diagnosis held.");
+    assert.equal(postmortemProblems(s, unchecked(), defaultTemplate).length, 1);
+    const noOutcome: Template = { sections: defaultTemplate.sections.filter((x) => !(x.kind === "builtin" && x.key === "outcome")) };
+    assert.deepEqual(postmortemProblems(s, unchecked(), noOutcome), []);
+  });
+
+  it("checks the review for names, blame and unknown IDs like any claim", () => {
+    const s = submission({ verdictReview: { text: "Sebastian failed to test it.", evidenceIds: ["ev_made_up"] } });
+    const problems = postmortemProblems(s, poolLeak(), defaultTemplate);
+    assert.ok(problems.some((p) => p.startsWith("unknown evidence IDs cited: ev_made_up")));
+    assert.equal(problems.filter((p) => p.startsWith("verdictReview ")).length, 2);
   });
 });
 

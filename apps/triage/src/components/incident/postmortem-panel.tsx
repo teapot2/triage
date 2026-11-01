@@ -223,7 +223,7 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
         </span>
         <p className="text-sm leading-relaxed">
           Triage writes a blameless postmortem from this incident&apos;s record: a summary, the impact, a timeline,
-          the contributing factors, lessons and action items, with every claim cited to its evidence. Copy it as
+          whether the diagnosis held, the contributing factors, lessons and action items, with every claim cited to its evidence. Copy it as
           Markdown or download it for your team&apos;s docs.
         </p>
         <WriteButton refusal={refusal} sending={sending} onClick={write}>

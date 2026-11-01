@@ -62,6 +62,7 @@ const builtInLabels: Record<BuiltInSection, string> = {
   summary: "Summary",
   impact: "Impact",
   timeline: "Timeline",
+  outcome: "Did Triage get it right?",
   factors: "Contributing factors",
   lessons: "Lessons (what went well and what didn't)",
   lucky: "Where we got lucky",
@@ -332,7 +333,7 @@ export function PostmortemTemplateSettings() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Restore the default sections?</AlertDialogTitle>
                     <AlertDialogDescription>
-                      The seven built-in sections come back in their usual order, and any custom sections are deleted.
+                      The eight built-in sections come back in their usual order, and any custom sections are deleted.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>

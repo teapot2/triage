@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { citationOrder } from "../citations";
 import type { Evidence, Incident } from "../schema";
-import { footnoteNumbers, postmortemMarkdown, statusInWords } from "./render";
+import { exampleIncidents } from "../fixtures";
+import { footnoteNumbers, postmortemMarkdown, postmortemParts, statusInWords } from "./render";
 import { type BuiltInSection, builtInSections, type Template } from "./template";
 import { mitigated, poolLeak, reopened, resolved } from "./test-incidents";
 
@@ -11,6 +12,7 @@ const headings: Record<BuiltInSection | "header" | "evidence", string> = {
   summary: "## Summary",
   impact: "## Impact",
   timeline: "## Timeline",
+  outcome: "## Did Triage get it right?",
   factors: "## Contributing factors",
   lessons: "## Lessons",
   lucky: "## Where we got lucky",
@@ -251,6 +253,52 @@ describe("postmortemMarkdown", () => {
     const md = postmortemMarkdown({ ...poolLeak(), postmortem: undefined });
     assert.ok(md.includes("## Summary\n\nNot written yet."));
     assert.ok(!md.includes("Written by Triage ("));
+  });
+});
+
+describe("Did Triage get it right?", () => {
+  const outcome = (incident: Incident) => section(postmortemMarkdown(incident), "## Did Triage get it right?");
+
+  it("states the diagnosis, its grade and the outcome, each signal with its time, then the review", () => {
+    const incident = poolLeak();
+    const text = outcome(incident);
+    assert.ok(
+      text.includes(
+        "Diagnosed: Connection leak in getStockLevel exhausts the pg pool, confidence 0.86 (Validated, alternatives ruled out). Outcome: Confirmed.",
+      ),
+    );
+    assert.ok(text.includes('- 2026-10-23 02:16:28 The regression test "releases the client when the stock row is missing" failed on the original code and passes with the fix'));
+    const numbers = footnoteNumbers(incident);
+    const markers = ["ev_db_activity", "ev_source_stock"]
+      .map((id) => numbers.get(id)!)
+      .sort((a, b) => a - b)
+      .map((n) => `[${n}]`)
+      .join("");
+    assert.ok(text.trimEnd().endsWith(`the idle, checked-out connections. ${markers}`));
+  });
+
+  it("lists every signal of a reopened incident and says it held with caveats", () => {
+    const text = outcome(reopened());
+    assert.ok(text.includes("Outcome: Held with caveats."));
+    assert.ok(text.includes("- 2026-10-23 02:18:00 Turning off FF_STOCK_DIRECT_QUERY brought p95 latency back under 500 ms"));
+    assert.ok(text.includes("- 2026-10-23 02:30:00 Reopened by Triage's watch: p95 latency back over 500 ms"));
+  });
+
+  it("renders for a postmortem from before the section, with the review not written yet", () => {
+    const incident = poolLeak();
+    incident.postmortem!.verdictReview = undefined;
+    const text = outcome(incident);
+    assert.ok(text.includes("Outcome: Confirmed."));
+    assert.ok(text.trimEnd().endsWith("_Not written yet._"));
+    // While it is written, what isn't yet is left out.
+    const drafting = postmortemParts(incident, { drafting: true }).sections.find((s) => s.key === "outcome")!.markdown;
+    assert.ok(!drafting.includes("Not written yet"));
+    assert.ok(drafting.includes("Outcome: Confirmed."));
+  });
+
+  it("has no diagnosis to check on a healthy run", () => {
+    const control = structuredClone(exampleIncidents.find((i) => i.id === "inc_control")!);
+    assert.equal(outcome(control).trim(), "## Did Triage get it right?\n\n_No diagnosis to check._");
   });
 });
 

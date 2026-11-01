@@ -1,6 +1,7 @@
 import type { StageModel } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import { knownEvidenceIds } from "../ask/rules";
+import { type OutcomeRollup, rollupLabels, type VerdictOutcome, verdictOutcome } from "../outcome";
 import type { Claim, Incident, Postmortem } from "../schema";
 import { customSections, keptBuiltIns, type Template } from "./template";
 
@@ -12,7 +13,10 @@ import { customSections, keptBuiltIns, type Template } from "./template";
 // the custom sections' texts by id.
 export type PostmortemSubmission = Partial<
   Required<
-    Pick<Postmortem, "summary" | "impact" | "contributingFactors" | "wentWell" | "wentBadly" | "lucky" | "actionItems">
+    Pick<
+      Postmortem,
+      "summary" | "impact" | "verdictReview" | "contributingFactors" | "wentWell" | "wentBadly" | "lucky" | "actionItems"
+    >
   >
 > & { custom?: { id: string; text: string; evidenceIds: string[] }[] };
 
@@ -101,6 +105,7 @@ export function blamelessProblems(text: string, incident: Incident): string[] {
 
 const claimsOf = (s: PostmortemSubmission): Claim[] => [
   ...(s.impact ? [s.impact] : []),
+  ...(s.verdictReview ? [s.verdictReview] : []),
   ...(s.contributingFactors ?? []),
   ...(s.wentWell ?? []),
   ...(s.wentBadly ?? []),
@@ -124,9 +129,38 @@ function repeatsFix(title: string, incident: Incident): boolean {
   return start.length === 5 && t.includes(start.join(" "));
 }
 
+// Words that say the diagnosis held. "Right" only as "got it right" or
+// "was right": "the right side" says nothing about it.
+const saysItHeld = /\b(?:confirmed|correct|held|validated)\b|\b(?:got it|was) right\b/i;
+// A negation and the three words after it: "nothing confirmed it", "was not
+// validated", "hasn't held". Taken out before testing for saysItHeld.
+const negated = /\b(?:not|never|nothing|no|nobody|none|without|\w+n't)\b(?:\W+[\w']+){1,3}/gi;
+const notConfirmed = new Set<OutcomeRollup>(["contradicted", "unverified"]);
+
+// A verdict review that says the diagnosis held when the record says it was
+// contradicted or never checked. Triage doesn't get to grade itself: the
+// outcome is computed from the record (outcome.ts), and the review has to
+// agree with it. A review that names the actual outcome ("it stands
+// unverified") or says it held only under a negation ("nothing confirmed
+// it") says so in its own words.
+export function outcomeProblems(s: PostmortemSubmission, outcome: VerdictOutcome | undefined): string[] {
+  const text = s.verdictReview?.text.trim();
+  if (!text || !outcome || !notConfirmed.has(outcome.rollup)) return [];
+  const actual = rollupLabels[outcome.rollup].toLowerCase();
+  if (!saysItHeld.test(text.replace(negated, " ")) || new RegExp(`\\b${actual}\\b`, "i").test(text)) return [];
+  const quoted = text.length > 80 ? `${text.slice(0, 80)}…` : text;
+  return [`verdictReview says the diagnosis held ("${quoted}"), but the record shows it ${actual}: say what the Outcome block shows.`];
+}
+
 // Rules the tool's schema cannot express; checked on every submission, only
-// for the sections the template keeps.
-export function postmortemProblems(s: PostmortemSubmission, incident: Incident, template: Template): string[] {
+// for the sections the template keeps. The outcome is the record's
+// (verdictOutcome); the writer passes the one its prompt showed.
+export function postmortemProblems(
+  s: PostmortemSubmission,
+  incident: Incident,
+  template: Template,
+  outcome: VerdictOutcome | undefined = verdictOutcome(incident),
+): string[] {
   const problems: string[] = [];
   const kept = new Set(keptBuiltIns(template));
   if (kept.has("factors")) {
@@ -147,6 +181,8 @@ export function postmortemProblems(s: PostmortemSubmission, incident: Incident, 
     if (!wanted.includes(id)) problems.push(`custom section "${id}" is not in the template: write only ${wanted.length ? wanted.join(", ") : "none"}`);
   }
 
+  if (kept.has("outcome")) problems.push(...outcomeProblems(s, outcome));
+
   const known = knownEvidenceIds(incident);
   const unknown = citedEvidenceIds(s).filter((id) => !known.has(id));
   if (unknown.length) problems.push(`unknown evidence IDs cited: ${unknown.join(", ")}. Cite only IDs listed in the prompt`);
@@ -157,6 +193,7 @@ export function postmortemProblems(s: PostmortemSubmission, incident: Incident, 
   const texts: [string, string][] = [
     ...(s.summary !== undefined ? [["summary", s.summary] as [string, string]] : []),
     ...(s.impact ? [["impact", s.impact.text] as [string, string]] : []),
+    ...(s.verdictReview ? [["verdictReview", s.verdictReview.text] as [string, string]] : []),
     ...(s.contributingFactors ?? []).map((c, i): [string, string] => [`contributingFactors[${i}]`, c.text]),
     ...(s.wentWell ?? []).map((c, i): [string, string] => [`wentWell[${i}]`, c.text]),
     ...(s.wentBadly ?? []).map((c, i): [string, string] => [`wentBadly[${i}]`, c.text]),

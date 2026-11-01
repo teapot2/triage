@@ -17,6 +17,10 @@ export const samplePostmortem: Postmortem = {
     text: "Shoppers opening product pages waited about 3 seconds and hundreds got a 500 instead of the page; traffic stayed normal, so this was most of the product-page traffic in the window.",
     evidenceIds: ["ev_metric_p95", "ev_log_timeout", "ev_metric_rps"],
   },
+  verdictReview: {
+    text: "The diagnosis held: the regression test for a product with no stock row failed on the original code and passes once the connection is released on every path, which is the leak the investigation traced from the idle, checked-out connections.",
+    evidenceIds: ["ev_source_stock", "ev_db_activity"],
+  },
   contributingFactors: [
     {
       text: "getStockLevel returns early on a missing stock row without releasing its pooled connection.",

@@ -1,5 +1,7 @@
 import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder } from "../citations";
+import { gradeLabels } from "../confidence-grade";
+import { rollupLabels, verdictOutcome } from "../outcome";
 import type { Claim, Evidence, Incident, PostmortemActionItem } from "../schema";
 import { sectionKey } from "./draft";
 import { type BuiltInSection, defaultTemplate, type TemplateSection } from "./template";
@@ -179,6 +181,26 @@ function timeline(incident: Incident): string {
   ].join("\n\n");
 }
 
+// Did Triage get it right? The diagnosis with its grade and the outcome the
+// record shows, each signal on its own line, then the model's sentence on
+// it. Everything above the sentence is the record's, so a postmortem from
+// before the section existed still renders it.
+function outcome(incident: Incident, notes: Footnotes, drafting: boolean): string {
+  const heading = "## Did Triage get it right?";
+  const result = verdictOutcome(incident);
+  if (!result) return `${heading}\n\n_No diagnosis to check._`;
+  const { hypothesis: h, rollup, signals } = result;
+  const review = incident.postmortem?.verdictReview;
+  return [
+    heading,
+    `Diagnosed: ${h.title.trim()}, confidence ${h.confidence} (${gradeLabels[h.grade]}). Outcome: ${rollupLabels[rollup]}.`,
+    ...(signals.length ? [list(signals.map((sig) => `${sig.at ? `${dateTime(sig.at)} ` : ""}${sig.text}`))] : []),
+    review?.text.trim() ? notes.claim(review) : placeholder("_Not written yet._", drafting),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function factors(incident: Incident, notes: Footnotes, drafting: boolean): string {
   const { report } = incident;
   const parts = ["## Contributing factors"];
@@ -310,6 +332,7 @@ export function postmortemParts(
     summary: () => summary(incident, drafting),
     impact: () => impact(incident, notes),
     timeline: () => timeline(incident),
+    outcome: () => outcome(incident, notes, drafting),
     factors: () => factors(incident, notes, drafting),
     lessons: () => lessons(incident, notes, drafting),
     lucky: () => lucky(incident, drafting),

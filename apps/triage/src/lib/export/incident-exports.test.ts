@@ -64,7 +64,7 @@ describe("GET /api/export/incidents", () => {
     const [header, ...rows] = csvRows(await text(res));
     assert.equal(
       header,
-      "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
+      "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,confidence_grade,verdict_outcome,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
     );
     // 15 saved and the 3 bundled examples, as the list shows them.
     assert.equal(rows.length, 18);
@@ -77,7 +77,7 @@ describe("GET /api/export/incidents", () => {
     assert.equal(
       row,
       "inc_export_resolved,p95 latency and 500s on GET /api/products/:id,shopfront,sev2,resolved,watch,2026-10-23T02:14:00Z," +
-        "2026-10-23T02:15:20.000Z,2026-10-23T02:23:00.000Z,1.3,9,Connection leak in getStockLevel exhausts the pg pool,0.86,proven," +
+        "2026-10-23T02:15:20.000Z,2026-10-23T02:23:00.000Z,1.3,9,Connection leak in getStockLevel exhausts the pg pool,0.86,validated_exclusive,confirmed,proven," +
         "https://github.com/acme/shopfront/pull/42,18420,,1310,,0.0285925,http://localhost:3021/incidents/inc_export_resolved",
     );
   });
@@ -101,6 +101,8 @@ describe("GET /api/export/incidents", () => {
       minutes_to_resolve: null,
       root_cause: null,
       confidence: null,
+      confidence_grade: null,
+      verdict_outcome: null,
       fix_state: null,
       pr_url: null,
       input_tokens: null,

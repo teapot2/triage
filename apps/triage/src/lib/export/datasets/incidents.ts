@@ -1,4 +1,6 @@
+import { gradeHypothesis } from "@/lib/investigation/confidence-grade";
 import { incidentUsage } from "@/lib/investigation/cost";
+import { verdictOutcome } from "@/lib/investigation/outcome";
 import type { Incident } from "@/lib/investigation/schema";
 import { rootCauseTitle } from "@/lib/investigation/summary";
 import { defineDataset } from "../dataset";
@@ -27,7 +29,11 @@ export const incidentList = defineDataset<IncidentRow>({
     { key: "minutes_to_mitigate", value: ({ incident }) => minutesSince(incident.detectedAt, mitigatedAt(incident)) },
     { key: "minutes_to_resolve", value: ({ incident }) => minutesSince(incident.detectedAt, incident.resolvedAt) },
     { key: "root_cause", value: ({ incident }) => rootCauseTitle(incident) },
-    { key: "confidence", value: ({ incident }) => incident.report?.hypotheses.find((h) => h.status === "leading")?.confidence },
+    { key: "confidence", value: ({ incident }) => leading(incident)?.confidence },
+    // Worked out from the record, not the model's say-so: how far the
+    // evidence and what came after bore the diagnosis out.
+    { key: "confidence_grade", value: ({ incident }) => gradeOf(incident) },
+    { key: "verdict_outcome", value: ({ incident }) => verdictOutcome(incident)?.rollup },
     { key: "fix_state", value: ({ incident }) => incident.fixRun?.status },
     { key: "pr_url", value: ({ incident }) => incident.approval?.prUrl },
     // Every stage's model calls together, for comparing runs on cost.
@@ -40,6 +46,13 @@ export const incidentList = defineDataset<IncidentRow>({
   ],
   formats: ["csv", "json"],
 });
+
+const leading = (i: Incident) => i.report?.hypotheses.find((h) => h.status === "leading");
+
+function gradeOf(i: Incident) {
+  const h = leading(i);
+  return h && gradeHypothesis(h, i).grade;
+}
 
 // Empty, rather than 0, for runs from before cached and reasoning tokens
 // were recorded.
