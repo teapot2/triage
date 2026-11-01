@@ -16,7 +16,7 @@ import {
   SearchXIcon,
   WaypointsIcon,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
@@ -29,7 +29,9 @@ import { modelLabel } from "@/lib/models/labels";
 import { formatDuration, formatTime } from "./format";
 import { useIncident } from "./incident-export";
 import { evidenceTitle } from "./metric-labels";
-import { activeFilterCount, emptyFilters, type Filters, filterSteps, matchSnippet } from "./log-filters";
+import { LaneTag } from "./lane-tag";
+import { laneOptions } from "./lanes";
+import { activeFilterCount, emptyFilters, type Filters, filterSteps, filterThoughts, matchSnippet } from "./log-filters";
 import { LogToolbar } from "./log-toolbar";
 import { countTurns, groupTurns, type Turn, turnTiming } from "./turns";
 
@@ -108,7 +110,8 @@ function groupByPhase(steps: InvestigationStep[]): PhaseGroup[] {
 //
 // With the model's thinking recorded, a second view lays the run out step by
 // step instead: each model call's thinking, then the tool calls it made, in
-// order. It's the default while the agent runs, to follow along.
+// order. It's the default while the agent runs, to follow along. On a
+// fan-out run each row there names its lane, and Lane filters by it.
 export function InvestigationTimeline({
   steps,
   thoughts = [],
@@ -153,6 +156,9 @@ export function InvestigationTimeline({
   // A turn's own calls, whatever a search or filter leaves on show, for its
   // caption.
   const callsByTurn = useMemo(() => Map.groupBy(steps, (s) => s.turn), [steps]);
+  // A fan-out run's lanes; none on a single-agent run, which then shows no
+  // labels and no Lane filter.
+  const lanes = useMemo(() => laneOptions(steps, thoughts), [steps, thoughts]);
 
   // "/" opens search and focuses it, as in Sentry and GitHub.
   useEffect(() => {
@@ -214,15 +220,9 @@ export function InvestigationTimeline({
   };
 
   // Step by step: each thought, with the tool calls it led to nested under
-  // it, in the order they happened. Type picks thoughts, tool calls or both;
-  // the other filters are about tool calls, so with one on, thoughts show
-  // only if Type asks for them. A search narrows both.
-  const q = query.trim().toLowerCase();
-  const toolFiltersOn = activeFilterCount({ ...filters, kind: [] }) > 0;
-  const showThoughts = filters.kind.length > 0 ? filters.kind.includes("thought") : !toolFiltersOn;
-  const shownThoughts = showThoughts
-    ? thoughts.filter((t) => !q || `${t.text ?? ""}\n${t.reasoning ?? ""}`.toLowerCase().includes(q))
-    : [];
+  // it, in the order they happened (filterThoughts says which thoughts a
+  // filter leaves).
+  const shownThoughts = filterThoughts(thoughts, query, filters);
   const turns = groupTurns(thoughts, shownThoughts, filtering ? shown : steps);
   const rowCount = shownThoughts.length + (filtering ? shown : steps).length;
   const lastThought = thoughts.at(-1)?.id;
@@ -236,8 +236,11 @@ export function InvestigationTimeline({
   };
   const changeView = (next: TimelineView) => {
     setView(next);
-    // Type is a step-by-step filter; the phases hold only tool calls.
-    if (next === "phases" && filters.kind.length > 0) setFilters({ ...filters, kind: [] });
+    // Type and Lane are step-by-step filters; the phases hold only tool
+    // calls, and stay as on a single-agent run.
+    if (next === "phases" && (filters.kind.length > 0 || filters.lane.length > 0)) {
+      setFilters({ ...filters, kind: [], lane: [] });
+    }
   };
 
   return (
@@ -296,6 +299,7 @@ export function InvestigationTimeline({
             shown={view === "steps" ? rowCount : shown.length}
             total={view === "steps" ? steps.length + thoughts.length : steps.length}
             thoughtCount={view === "steps" ? thoughts.length : 0}
+            lanes={view === "steps" ? lanes : []}
             inputRef={inputRef}
             exportAs={exportAs}
           />
@@ -318,6 +322,7 @@ export function InvestigationTimeline({
                 {turn.thought && (
                   <ThoughtRow
                     thought={turn.thought}
+                    lane={turn.thought.lane && <LaneTag lane={turn.thought.lane} fanout={run?.fanout} />}
                     offsetMs={Date.parse(turn.thought.startedAt) - t0}
                     live={running && turn.thought.id === lastThought}
                     running={running}
@@ -342,6 +347,7 @@ export function InvestigationTimeline({
                         <StepRow
                           key={step.id}
                           step={step}
+                          lane={step.lane && <LaneTag lane={step.lane} fanout={run?.fanout} />}
                           offsetMs={Date.parse(step.startedAt) - t0}
                           query={query}
                           snippet={matchSnippet(step, query, byId)}
@@ -481,6 +487,7 @@ function ParallelCaption({ steps, running }: { steps: InvestigationStep[]; runni
 
 export function StepRow({
   step,
+  lane,
   offsetMs,
   query,
   snippet,
@@ -488,6 +495,9 @@ export function StepRow({
   running,
 }: {
   step: InvestigationStep;
+  // A fan-out run's lane label. Only the step-by-step view passes one: the
+  // phases stay as on a single-agent run.
+  lane?: ReactNode;
   offsetMs: number;
   query: string;
   snippet?: string;
@@ -516,15 +526,18 @@ export function StepRow({
             <Highlight text={step.error ?? step.summary ?? "Running..."} query={query} />
           </span>
           {/* How long the call took, then when it started, to the
-              millisecond. The absolute start time is on hover. */}
+              millisecond. The absolute start time is on hover. A fan-out
+              run's lane leads, so the lanes line up down the list; on a
+              phone it takes the start time's place, which stays on hover. */}
           <span
             className="flex items-baseline gap-2 font-mono text-muted-foreground text-xs tabular-nums"
             title={`Started ${formatTimeMs(step.startedAt)} UTC${step.durationMs !== undefined ? `, took ${formatDuration(step.durationMs)}` : ""}`}
           >
+            {lane}
             <span className="w-14 text-right opacity-70">
               {step.durationMs !== undefined ? formatDuration(step.durationMs) : step.status === "running" ? "…" : ""}
             </span>
-            <span>{formatOffset(offsetMs)}</span>
+            <span className={cn(lane && "max-sm:hidden")}>{formatOffset(offsetMs)}</span>
           </span>
           {snippet && (
             <span className="col-span-2 col-start-3 truncate font-mono text-[11px] text-muted-foreground/80">
@@ -564,11 +577,13 @@ export function StepRow({
 // row, it's theirs.
 function ThoughtRow({
   thought,
+  lane,
   offsetMs,
   live,
   running,
 }: {
   thought: Thought;
+  lane?: ReactNode;
   offsetMs: number;
   live: boolean;
   running: boolean;
@@ -611,8 +626,9 @@ function ThoughtRow({
             {thinking ? "Thinking…" : headline}
           </span>
           <span className="mt-0.5 flex items-baseline gap-2 font-mono text-muted-foreground text-xs tabular-nums">
+            {lane}
             <span className="w-14 text-right opacity-70">{thinking ? "…" : formatDuration(thought.durationMs!)}</span>
-            <span>{formatOffset(offsetMs)}</span>
+            <span className={cn(lane && "max-sm:hidden")}>{formatOffset(offsetMs)}</span>
           </span>
         </CollapsibleTrigger>
         {rest && (

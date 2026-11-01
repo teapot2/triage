@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleDotIcon, FileSearchIcon, type LucideIcon, ServerIcon, ShapesIcon, WrenchIcon } from "lucide-react";
+import { CircleDotIcon, FileSearchIcon, type LucideIcon, ServerIcon, ShapesIcon, SplitIcon, WrenchIcon } from "lucide-react";
 import type { RefObject } from "react";
 import { ExportMenu, type ExportSource } from "@/components/export-menu";
 import { type FilterFacet, FilterChips, FilterMenu } from "@/components/list-controls/filter-menu";
@@ -10,13 +10,14 @@ import { activeFilterCount, emptyFilters, type Facet, type Filters, facetLabels,
 
 const facetIcons: Record<Facet, LucideIcon> = {
   kind: ShapesIcon,
+  lane: SplitIcon,
   status: CircleDotIcon,
   tool: WrenchIcon,
   service: ServerIcon,
   evidence: FileSearchIcon,
 };
 
-const facets: Facet[] = ["kind", "status", "tool", "service", "evidence"];
+const facets: Facet[] = ["kind", "lane", "status", "tool", "service", "evidence"];
 
 // Search box plus a Filter menu (one submenu per facet, values with counts),
 // after Sentry's and Vercel's log search and Browserbase's filter menu.
@@ -31,6 +32,7 @@ export function LogToolbar({
   shown,
   total = steps.length,
   thoughtCount = 0,
+  lanes = [],
   inputRef,
   exportAs,
 }: {
@@ -45,6 +47,9 @@ export function LogToolbar({
   // The model's thoughts on show beside the tool calls; with any, the menu
   // offers Type (thoughts or tool calls). Without, there's nothing to pick.
   thoughtCount?: number;
+  // A fan-out run's lanes on show (lanes.ts), each with its thoughts and
+  // tool calls; with any, the menu offers Lane.
+  lanes?: { value: string; count: number }[];
   inputRef: RefObject<HTMLInputElement | null>;
   // What's shown, as a file, while a search or filter narrows it.
   exportAs?: ExportSource;
@@ -57,7 +62,9 @@ export function LogToolbar({
             { value: "tool", count: steps.length },
           ]
         : []
-      : facetOptions(steps, facet);
+      : facet === "lane"
+        ? lanes
+        : facetOptions(steps, facet);
   const menuFacets: FilterFacet[] = facets.map((facet) => ({
     id: facet,
     label: facetLabels[facet],

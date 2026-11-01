@@ -1,4 +1,5 @@
-import type { Evidence, EvidenceKind, InvestigationStep } from "@/lib/investigation/schema";
+import type { Evidence, EvidenceKind, InvestigationStep, Thought } from "@/lib/investigation/schema";
+import { laneLabel } from "./lanes";
 import { metricLabel } from "./metric-labels";
 
 // Search and faceted filters for the investigation log, the way log and
@@ -7,13 +8,15 @@ import { metricLabel } from "./metric-labels";
 
 // `kind` is the step-by-step view's Type: the model's thoughts or its tool
 // calls. Every step is a tool call; the timeline shows thoughts by it.
-export type Facet = "kind" | "status" | "tool" | "service" | "evidence";
+// `lane` is a fan-out run's lane (lanes.ts), on thoughts and tool calls alike.
+export type Facet = "kind" | "lane" | "status" | "tool" | "service" | "evidence";
 export type Filters = Record<Facet, string[]>;
 
-export const emptyFilters: Filters = { kind: [], status: [], tool: [], service: [], evidence: [] };
+export const emptyFilters: Filters = { kind: [], lane: [], status: [], tool: [], service: [], evidence: [] };
 
 export const facetLabels: Record<Facet, string> = {
   kind: "Type",
+  lane: "Lane",
   status: "Status",
   tool: "Tool",
   service: "Service",
@@ -39,13 +42,15 @@ const evidenceLabels: Record<EvidenceKind, string> = {
 
 export function valueLabel(facet: Facet, value: string): string {
   if (facet === "kind") return kindLabels[value] ?? value;
+  if (facet === "lane") return laneLabel(value);
   if (facet === "status") return statusLabels[value as InvestigationStep["status"]] ?? value;
   if (facet === "evidence") return evidenceLabels[value as EvidenceKind] ?? value;
   return value;
 }
 
-// Evidence IDs are ev_<kind>_<n>.
-const kindOf = (evidenceId: string) => evidenceId.split("_")[1];
+// Evidence IDs are ev_<kind>_<n>, or ev_<prefix>_<kind>_<n> for an Ask
+// question's (ev_q2_span_1) or a fan-out lane's (ev_h1_log_1).
+export const kindOf = (evidenceId: string) => /^ev_(?:[a-z]\d+_)?([a-z]+)/.exec(evidenceId)?.[1] ?? evidenceId;
 
 function serviceOf(step: InvestigationStep): string | undefined {
   if (typeof step.input.service === "string") return step.input.service;
@@ -57,6 +62,8 @@ export function facetValues(step: InvestigationStep, facet: Facet): string[] {
   switch (facet) {
     case "kind":
       return ["tool"];
+    case "lane":
+      return step.lane ? [step.lane] : [];
     case "status":
       return [step.status];
     case "tool":
@@ -119,6 +126,22 @@ export function filterSteps(
     (step) =>
       (!q || searchText(step, evidence).includes(q)) &&
       active.every((f) => facetValues(step, f).some((v) => filters[f].includes(v))),
+  );
+}
+
+// The thoughts the step-by-step view shows. Type picks thoughts, tool calls
+// or both; the other tool-call facets (Status, Tool...) are about calls, so
+// with one on, thoughts show only if Type asks for them. Lane and a search
+// narrow thoughts and calls alike.
+export function filterThoughts(thoughts: Thought[], query: string, filters: Filters): Thought[] {
+  const toolFiltersOn = activeFilterCount({ ...filters, kind: [], lane: [] }) > 0;
+  const shown = filters.kind.length > 0 ? filters.kind.includes("thought") : !toolFiltersOn;
+  if (!shown) return [];
+  const q = query.trim().toLowerCase();
+  return thoughts.filter(
+    (t) =>
+      (!q || `${t.text ?? ""}\n${t.reasoning ?? ""}`.toLowerCase().includes(q)) &&
+      (filters.lane.length === 0 || (t.lane !== undefined && filters.lane.includes(t.lane))),
   );
 }
 

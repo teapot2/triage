@@ -110,7 +110,7 @@ Most of what Triage shows can be downloaded, so its claims can be checked in oth
 | `incidents` | Incidents toolbar: the rows the filters and sort show, every page | CSV, JSON |
 | `incident` | Incident header: the whole stored record | JSON |
 | `evidence-logs`, `-spans`, `-metrics`, `-db` | Incident header: the raw evidence, the investigation's and each Ask answer's (`source` column) | CSV, JSON; logs also NDJSON |
-| `investigation-trace` | Incident header, and the timeline's filter toolbar for the steps on show: the run, steps and thoughts in order | JSON, NDJSON |
+| `investigation-trace` | Incident header, and the timeline's filter toolbar for the steps on show: the run, steps and thoughts in order, each with its fan-out `lane` where it has one | JSON, NDJSON |
 | `fix-patch` | Fix section: the diff exactly as stored, for `git apply` | `.patch` |
 | `ask-answers` | Ask section: questions, answers and their cited evidence | Markdown, JSON |
 | `postmortem-actions` | Postmortem section: action items with title, description, priority, labels and blank owner and due date, for a Jira or Linear import | CSV, JSON |

@@ -23,6 +23,7 @@ import { citedDeploys, VerdictCard } from "./diagnosis-panel";
 import { EndpointCard } from "./endpoint-card";
 import { FailedRunNotice } from "./failed-run-notice";
 import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
+import { HypothesesChecked } from "./hypotheses-checked";
 import { incidentSubject } from "./incident-export";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { type ChartMarker, MetricChart } from "./metric-chart";
@@ -148,6 +149,12 @@ export function IncidentReport({
             {factors} contributing {factors === 1 ? "factor" : "factors"} in the postmortem
             <ArrowRightIcon className="size-3.5" />
           </button>
+        )}
+
+        {/* A fan-out run's hypotheses, under the verdict they were merged
+            into, or being checked while it runs. */}
+        {run?.fanout && (
+          <HypothesesChecked fanout={run.fanout} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
         )}
 
         {mitigation && (

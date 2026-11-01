@@ -157,6 +157,7 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
     evidence_ids: null,
     error: null,
     turn: null,
+    lane: null,
     reasoning: null,
     reasoning_kind: null,
     text: null,
@@ -204,6 +205,7 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
         reasoning: t.reasoning ?? null,
         reasoning_kind: t.reasoningKind ?? null,
         text: t.text ?? null,
+        lane: t.lane ?? null,
       };
     }
     case "step": {
@@ -221,6 +223,8 @@ function traceRecord(row: TraceRow): Record<string, unknown> {
         error: s.error ?? null,
         // The thought ID of the model call that asked for it.
         turn: s.turn ?? null,
+        // A fan-out run's lane: scout, h1 to h3 or merge.
+        lane: s.lane ?? null,
       };
     }
   }

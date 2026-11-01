@@ -111,6 +111,9 @@ export const investigationStepSchema = z.object({
   // dropped for being empty. Missing on runs recorded before Oct 31 and on
   // stages that record no thoughts.
   turn: z.string().optional(),
+  // Which part of a fan-out investigation ran it: "scout", a hypothesis's
+  // lane ("h1" to "h3") or "merge". Missing on single-agent runs.
+  lane: z.string().optional(),
 });
 export type InvestigationStep = z.infer<typeof investigationStepSchema>;
 
@@ -127,6 +130,8 @@ export const thoughtSchema = z.object({
   reasoningKind: z.enum(["raw", "summary"]).optional(),
   // What the model wrote alongside its tool calls, if anything.
   text: z.string().optional(),
+  // As on steps: the fan-out lane that made this model call.
+  lane: z.string().optional(),
 });
 export type Thought = z.infer<typeof thoughtSchema>;
 
@@ -326,6 +331,27 @@ export const incidentStatusSchema = z.enum([
 ]);
 export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
 
+// A fan-out investigation's hypotheses, each checked in its own lane, and
+// the lead model that proposed and merged them.
+export const fanoutSchema = z.object({
+  leadProvider: z.string().optional(),
+  leadModel: z.string(),
+  hypotheses: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string(),
+      claim: z.string(),
+      finding: z.enum(["supported", "refuted", "unclear"]).optional(),
+      reason: z.string().optional(),
+      evidenceFor: z.array(evidenceId).default([]),
+      evidenceAgainst: z.array(evidenceId).default([]),
+      steps: z.number().int().optional(),
+      error: z.string().optional(),
+    }),
+  ),
+});
+export type Fanout = z.infer<typeof fanoutSchema>;
+
 // How the investigation ran, for the UI and the benchmark.
 export const runSchema = z.object({
   source: z.string().describe("Telemetry source, e.g. scenario:pool-leak"),
@@ -352,6 +378,8 @@ export const runSchema = z.object({
   // As on the fix run: model calls retried.
   modelRetries: z.number().int().optional(),
   error: z.string().optional(),
+  // Set on a fan-out investigation (lib/investigation/fanout).
+  fanout: fanoutSchema.optional(),
 });
 export type Run = z.infer<typeof runSchema>;
 

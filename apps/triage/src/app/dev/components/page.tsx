@@ -1,5 +1,6 @@
-import { LoaderCircleIcon, PlayIcon, SearchIcon, TrashIcon } from "lucide-react";
+import { LoaderCircleIcon, PlayIcon, SearchIcon, SplitIcon, TrashIcon } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { HttpStatusBadge, LogLevelBadge, MetricBadges, TestResultBadge } from "@/components/incident/outcome-badges";
@@ -42,9 +43,16 @@ export default function ComponentsPage() {
         <ThemeSelect aria-label="Theme" />
       </header>
 
-      <Section title="Demo data" source="lib/investigation/demo.ts">
+      <Section title="Demo data" source="lib/investigation/demo.ts, fanout-fixture.ts">
         <Row label="30 incidents, every status">
           <DemoData />
+        </Row>
+        <Row label="Fan-out incident">
+          <Button size="sm" variant="secondary" asChild>
+            <Link href="/dev/fanout">
+              <SplitIcon /> Open the fan-out fixture
+            </Link>
+          </Button>
         </Row>
       </Section>
 
