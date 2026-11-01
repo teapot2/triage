@@ -2,7 +2,7 @@ import { type LanguageModel, type ModelMessage, ToolLoopAgent } from "ai";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, reasoningKind, wakeProvider } from "../models/client";
 import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
-import { stageModel, stageProblem } from "../models/settings";
+import { fanoutLead, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
 import { addUsage, noTokens } from "../models/usage";
 import { runFanout, type Stage } from "./fanout/run";
@@ -286,8 +286,11 @@ export async function runInvestigation(
     stage?: Stage;
     save?: (incident: Incident) => Promise<void>;
     // A fan-out investigation (fanout/run.ts): `lead` surveys and merges,
-    // the stage's model checks each hypothesis. Without it, one agent.
-    fanout?: { lead: Stage };
+    // the stage's model checks each hypothesis. false: one agent. Left out,
+    // as Settings has it ("Check hypotheses in parallel", with the Lead
+    // stage's model); the benchmark always passes one, so Settings never
+    // changes what it measures.
+    fanout?: { lead: Stage } | false;
     // Tests: a scripted model in place of each provider's.
     languageModel?: (s: Stage) => LanguageModel;
   } = {},
@@ -299,7 +302,7 @@ export async function runInvestigation(
   // on the run. A stage that can't run (no key, no URL) fails the run, and
   // so does a fan-out's lead.
   const stage = opts.stage ?? (await stageModel("investigate"));
-  const lead = opts.fanout?.lead;
+  const lead = opts.fanout === undefined ? await fanoutLead() : opts.fanout ? opts.fanout.lead : undefined;
   recorder.update({
     run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) },
   });
@@ -347,7 +350,11 @@ export async function runInvestigation(
     }
     // The run's time limit starts once the host is awake.
     const budget = runBudget("investigate");
+    // The stage's model's tokens (the single agent's, or a fan-out's lanes'
+    // and fallback's) go on the run; a fan-out's lead's on run.fanout, so
+    // each is priced at its own model's rates.
     const tokens = noTokens();
+    const leadTokens = noTokens();
     // The single agent, until a report is accepted or its steps run out.
     const alone = async (messages: ModelMessage[]) => {
       for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && count.steps < MAX_STEPS; attempt++) {
@@ -357,10 +364,11 @@ export async function runInvestigation(
         addUsage(tokens, result.usage);
       }
     };
-    if (lead) await runFanout({ incident, source, recorder, budget, tokens, count, lane: stage, lead, model, alone });
+    if (lead) await runFanout({ incident, source, recorder, budget, tokens, leadTokens, count, lane: stage, lead, model, alone });
     else await alone([{ role: "user", content: prompt(incident, source) }]);
 
     const report = recorder.report;
+    const fanout = recorder.incident.run!.fanout;
     recorder.update({
       status: !report ? "failed" : report.verdict.kind === "healthy" ? "healthy" : "diagnosed",
       run: {
@@ -368,6 +376,7 @@ export async function runInvestigation(
         finishedAt: new Date().toISOString(),
         modelSteps: count.steps,
         ...tokens,
+        ...(fanout && { fanout: { ...fanout, ...leadTokens } }),
         rejectedReports: recorder.rejectedReports,
         modelRetries: retries,
         error: report ? undefined : `No accepted report after ${count.steps} model steps`,

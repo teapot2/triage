@@ -3,7 +3,7 @@ import { z } from "zod";
 // Triage's stages that call a model, each configured with its own provider
 // and model in Settings. Safe to import in the browser.
 
-export const stageIds = ["investigate", "fix", "ask", "postmortem"] as const;
+export const stageIds = ["investigate", "lead", "fix", "ask", "postmortem"] as const;
 export const stageIdSchema = z.enum(stageIds);
 export type StageId = z.infer<typeof stageIdSchema>;
 
@@ -11,6 +11,10 @@ export const stageLabels: Record<StageId, { label: string; description: string }
   investigate: {
     label: "Investigate",
     description: "Reads the telemetry, database and code, and writes the diagnosis. Needs tool calling.",
+  },
+  lead: {
+    label: "Lead",
+    description: "With hypotheses checked in parallel, proposes them and merges the checks' findings into the diagnosis.",
   },
   fix: {
     label: "Fix",
@@ -30,6 +34,11 @@ export const stageLabels: Record<StageId, { label: string; description: string }
 // Settings: Ask answers with the Investigate stage's model, and the
 // Postmortem with Ask's (so Investigate's, when Ask has none either).
 export const stageFallback: Partial<Record<StageId, StageId>> = { ask: "investigate", postmortem: "ask" };
+
+// The Lead (a fan-out's scout and merge) starts on Wonder rather than the
+// env's model: proposing and weighing hypotheses is where the bigger model
+// pays for itself, over a few calls.
+export const leadDefault = { provider: "meta", model: "muse-wonder-1.0" } as const;
 
 // How hard Meta's models think before answering (the Responses API's
 // reasoning.effort). Other providers ignore it. "none" is left out: every
@@ -51,6 +60,7 @@ export const effortLabels: Record<ReasoningEffort, string> = {
 // fallback chain: a Postmortem on Ask's model still thinks at its own level.
 export const defaultEffort: Record<StageId, ReasoningEffort> = {
   investigate: "high",
+  lead: "high",
   fix: "high",
   ask: "low",
   postmortem: "medium",

@@ -1,6 +1,6 @@
 import { after } from "next/server";
 import { z } from "zod";
-import { stageModel, stageProblem } from "@/lib/models/settings";
+import { investigationProblem } from "@/lib/models/settings";
 import { createLiveIncident, createRangeIncident, createScenarioIncident, runInvestigation } from "@/lib/investigation/agent";
 import { createLiveSource, shopfrontDir } from "@/lib/investigation/live/live-source";
 import { LIVE_ID } from "@/lib/investigation/options";
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
     const issue = parsed.error.issues[0];
     return Response.json({ error: issue ? `${issue.path.join(".") || "body"}: ${issue.message}` : "expected { scenario }" }, { status: 400 });
   }
-  const problem = stageProblem(await stageModel("investigate"));
+  const problem = await investigationProblem();
   if (problem) return Response.json({ error: problem }, { status: 409 });
 
   if (parsed.data.scenario === LIVE_ID) {

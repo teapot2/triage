@@ -26,12 +26,15 @@ export const STALL_MS = 60_000;
 // 16–33 s to write a postmortem.
 const RUN_BUDGET_MS: Record<StageId, number> = {
   investigate: 10 * 60_000,
+  // The Lead runs inside an investigation, on its budget.
+  lead: 10 * 60_000,
   fix: 15 * 60_000,
   ask: 5 * 60_000,
   postmortem: 5 * 60_000,
 };
 const RUN_NAMES: Record<StageId, string> = {
   investigate: "The investigation",
+  lead: "The investigation",
   fix: "The fix",
   ask: "The answer",
   postmortem: "The postmortem",

@@ -1,4 +1,4 @@
-import { stageModel, stageProblem } from "../models/settings";
+import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
@@ -212,7 +212,7 @@ async function open(rule: WatchRule, trip: { route: string; method: string }, su
     console.log(`[triage] watch rule ${rule.id} reopened ${incident.id}`);
     return true;
   }
-  const problem = stageProblem(await stageModel("investigate"));
+  const problem = await investigationProblem();
   if (problem) {
     state.error = `${problem} No incident was opened.`;
     return false;

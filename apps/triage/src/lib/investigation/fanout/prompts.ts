@@ -30,7 +30,7 @@ export const laneInstructions = () => `You are Triage, an SRE checking one hypot
 Method:
 1. Work out what else must be true if the hypothesis holds, and what would be true if it doesn't.
 2. Look for evidence against it as hard as for it: timing that doesn't line up, a service that stayed healthy, a change that never touched the code path, an effect that should show elsewhere and doesn't.
-3. Start from what the survey found. Make independent queries in the same turn.
+3. Start from what the survey found. Where its evidence already answers a question, cite its ID instead of querying again. Make independent queries in the same turn.
 
 Rules:
 - Cite evidence IDs exactly as they appear below or as your tools return them. Never invent an ID.
@@ -69,32 +69,47 @@ Check this hypothesis and submit your finding.`,
   );
 }
 
+// Each checked hypothesis with its finding, for the merge (and the single
+// agent when the merge can't finish).
+function checkedLines(hypotheses: Fanout["hypotheses"]) {
+  return hypotheses
+    .map((h) => {
+      const outcome = h.error ? `${h.finding ?? "unclear"} (the check failed: ${h.error})` : `${h.finding}: ${h.reason}`;
+      return `${h.id}: ${h.title}
+  Claim: ${h.claim}
+  Finding: ${outcome}
+  Evidence for: ${h.evidenceFor.join(", ") || "none"}; against: ${h.evidenceAgainst.join(", ") || "none"}`;
+    })
+    .join("\n");
+}
+
 export function mergePrompt(
   incident: Incident,
   source: TelemetrySource,
   evidence: Evidence[],
   hypotheses: Fanout["hypotheses"],
 ) {
-  const checked = hypotheses.map((h) => {
-    const outcome = h.error ? `${h.finding ?? "unclear"} (the check failed: ${h.error})` : `${h.finding}: ${h.reason}`;
-    return `${h.id}: ${h.title}
-  Claim: ${h.claim}
-  Finding: ${outcome}
-  Evidence for: ${h.evidenceFor.join(", ") || "none"}; against: ${h.evidenceAgainst.join(", ") || "none"}`;
-  });
-  const task = checked.length
-    ? `Hypotheses checked:\n${checked.join("\n")}\n\nWeigh the findings against the evidence and submit your report.`
+  const task = hypotheses.length
+    ? `Hypotheses checked:\n${checkedLines(hypotheses)}\n\nWeigh the findings against the evidence and submit your report.`
     : "The survey proposed no hypotheses: it found every signal at baseline. Check that against the evidence and submit your report.";
   return prompt(incident, source, `Evidence you may cite, from the survey and every check:\n${evidenceLines(evidence)}\n\n${task}`);
 }
 
-// A scout that failed hands its evidence to the single agent, which goes on
-// from there.
-export function fallbackPrompt(incident: Incident, source: TelemetrySource, evidence: Evidence[]) {
-  if (!evidence.length) return prompt(incident, source);
+// A scout or merge that failed hands its evidence to the single agent,
+// which goes on from there; after the merge, with each lane's finding too.
+export function fallbackPrompt(
+  incident: Incident,
+  source: TelemetrySource,
+  evidence: Evidence[],
+  hypotheses: Fanout["hypotheses"] = [],
+) {
+  if (!evidence.length && !hypotheses.length) return prompt(incident, source);
+  const checked = hypotheses.length
+    ? `\n\nHypotheses checked so far, each finding input to weigh, not a verdict:\n${checkedLines(hypotheses)}`
+    : "";
   return prompt(
     incident,
     source,
-    `Evidence gathered so far, which you may cite:\n${evidenceLines(evidence)}\n\nInvestigate further as needed and submit your report.`,
+    `Evidence gathered so far, which you may cite:\n${evidenceLines(evidence)}${checked}\n\nInvestigate further as needed and submit your report.`,
   );
 }

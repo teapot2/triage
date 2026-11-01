@@ -336,6 +336,14 @@ export type IncidentStatus = z.infer<typeof incidentStatusSchema>;
 export const fanoutSchema = z.object({
   leadProvider: z.string().optional(),
   leadModel: z.string(),
+  leadReasoningEffort: reasoningEffortSchema.optional(),
+  // The lead's own tokens (scout and merge), priced at its model's rates;
+  // the run's token fields hold the lanes'. Missing on fan-outs from before
+  // they were split, whose run fields hold every phase's.
+  inputTokens: z.number().int().optional(),
+  cachedInputTokens: z.number().int().optional(),
+  outputTokens: z.number().int().optional(),
+  reasoningTokens: z.number().int().optional(),
   hypotheses: z.array(
     z.object({
       id: z.string(),

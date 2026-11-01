@@ -34,17 +34,22 @@ function add(total: UsageTotal, r: UsageRecord) {
 }
 
 // Undefined when nothing on the incident recorded tokens (a bundled
-// example, or a run still on its first call).
+// example, or a run still on its first call). A fan-out's lead (scout and
+// merge) counts in the investigation, at its own model's price; the Lead
+// stage never has a total of its own.
 export function incidentUsage(incident: Incident): IncidentUsage | undefined {
-  const records: Record<StageId, UsageRecord[]> = {
-    investigate: incident.run ? [incident.run] : [],
+  const fanout = incident.run?.fanout;
+  const records: Partial<Record<StageId, UsageRecord[]>> = {
+    investigate: incident.run
+      ? [incident.run, ...(fanout ? [{ ...fanout, provider: fanout.leadProvider, model: fanout.leadModel }] : [])]
+      : [],
     fix: [...(incident.fixAttempts ?? []).map((a) => a.fixRun), ...(incident.fixRun ? [incident.fixRun] : [])],
     ask: incident.questions ?? [],
     postmortem: incident.postmortem ? [incident.postmortem] : [],
   };
   const usage: IncidentUsage = { tokens: noTokens(), cost: 0, detailed: false, stages: {} };
   for (const stage of stageIds) {
-    for (const r of records[stage].filter(counted)) {
+    for (const r of (records[stage] ?? []).filter(counted)) {
       const total = (usage.stages[stage] ??= { tokens: noTokens(), cost: 0, detailed: false });
       add(total, r);
       add(usage, r);

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
 import { type NotificationEvent, notificationEvents, slackWebhookPattern } from "../notifications/types";
 import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
-import { defaultEffort, reasoningEffortSchema, type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
+import { defaultEffort, leadDefault, reasoningEffortSchema, type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
 export { type StageId, stageIdSchema, stageIds } from "./stages";
 
@@ -15,6 +15,10 @@ export { type StageId, stageIdSchema, stageIds } from "./stages";
 // the app's settings, so it also holds the non-model keys: the postmortem
 // template, and the notifications (a Slack webhook URL, a secret like the
 // keys, and which events send a message).
+//
+// fanout: whether investigations check their hypotheses in parallel, the
+// Lead stage proposing and merging them (lib/investigation/fanout). Missing
+// (off) on files saved before it existed.
 
 // effort: Meta's reasoning effort for the stage. Missing on settings saved
 // before it existed, and on presets, which leave each stage its default.
@@ -33,6 +37,7 @@ const endpointSchema = z.object({
 const settingsSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).default({}),
   endpoints: z.partialRecord(providerIdSchema, endpointSchema).default({}),
+  fanout: z.boolean().optional(),
   postmortemTemplate: templateSchema.optional(),
   notifications: z
     .object({
@@ -45,8 +50,10 @@ type Settings = z.infer<typeof settingsSchema>;
 
 const file = path.join(process.cwd(), ".data", "settings.json");
 
-// Before anything is saved, every stage uses the env's model on Meta's API.
-const defaultStage = (): StageModel => ({ provider: "meta", model: process.env.MODEL_ID ?? "muse-spark-1.3" });
+// Before anything is saved, every stage uses the env's model on Meta's API,
+// except the Lead, which starts on Wonder.
+const defaultStage = (stage: StageId): StageModel =>
+  stage === "lead" ? { ...leadDefault } : { provider: "meta", model: process.env.MODEL_ID ?? "muse-spark-1.3" };
 
 async function read(): Promise<Settings> {
   try {
@@ -83,7 +90,7 @@ export async function endpointFor(id: ProviderId): Promise<Endpoint> {
 // (Postmortem uses Ask's, then Investigate's), else the env's. The effort is
 // always the stage's own, saved or default, never one down the chain.
 export function chosenModel(settings: Pick<Settings, "stages">, stage: StageId): Required<StageModel> {
-  let chosen = defaultStage();
+  let chosen = defaultStage(stage);
   for (let s: StageId | undefined = stage; s; s = stageFallback[s]) {
     const saved = settings.stages[s];
     if (saved) {
@@ -98,6 +105,19 @@ export async function stageModel(stage: StageId): Promise<Required<StageModel> &
   const settings = await read();
   const chosen = chosenModel(settings, stage);
   return { ...chosen, ...endpointOf(settings, chosen.provider) };
+}
+
+// The Lead's model when Settings has investigations fan out, else
+// undefined: the single agent.
+export async function fanoutLead(): Promise<(Required<StageModel> & Endpoint) | undefined> {
+  return (await read()).fanout ? stageModel("lead") : undefined;
+}
+
+// Why an investigation can't start as configured: its stage's problem, or
+// the Lead's when it fans out. Undefined when it can.
+export async function investigationProblem(): Promise<string | undefined> {
+  const lead = await fanoutLead();
+  return stageProblem(await stageModel("investigate")) ?? (lead && stageProblem(lead));
 }
 
 // Why a stage can't run as configured, or undefined when it can.
@@ -121,9 +141,12 @@ export async function publicModelSettings() {
     StageId,
     Required<StageModel>
   >;
+  const fanout = settings.fanout ?? false;
   return {
     stages,
-    openWeights: stageIds.every((id) => isOpenWeights(stages[id].model)),
+    fanout,
+    // The Lead counts only while it runs.
+    openWeights: stageIds.every((id) => (id === "lead" && !fanout) || isOpenWeights(stages[id].model)),
     providers: providerIds.map((id) => {
       const info = providers[id];
       const endpoint = endpointOf(settings, id);
@@ -149,6 +172,7 @@ export type PublicModelSettings = Awaited<ReturnType<typeof publicModelSettings>
 
 export const updateSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).optional(),
+  fanout: z.boolean().optional(),
   // apiKey: a new key, "" to clear it, or absent to keep the saved one.
   endpoints: z.partialRecord(providerIdSchema, z.object({ baseUrl: z.url().or(z.literal("")).optional(), apiKey: z.string().max(500).optional() })).optional(),
 });
@@ -156,6 +180,7 @@ export const updateSchema = z.object({
 export async function updateModelSettings(update: z.infer<typeof updateSchema>) {
   const settings = await read();
   for (const [id, s] of Object.entries(update.stages ?? {}) as [StageId, StageModel][]) settings.stages[id] = s;
+  if (update.fanout !== undefined) settings.fanout = update.fanout;
   for (const [id, e] of Object.entries(update.endpoints ?? {}) as [ProviderId, { baseUrl?: string; apiKey?: string }][]) {
     if (!providers[id].configurable) continue;
     const next = { ...settings.endpoints[id] };

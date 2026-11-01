@@ -1,4 +1,4 @@
-import { stageModel, stageProblem } from "../models/settings";
+import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
 import { runInvestigation } from "./agent";
 import { incidentToReopen, isOpen } from "./reopen";
@@ -106,7 +106,8 @@ type Deps = {
   probe: (check: UptimeCheck) => Promise<UptimeSample>;
   now: () => number;
   notify: typeof notify;
-  // Why the investigate stage can't run, or undefined when it can.
+  // Why an investigation can't start (its stage, or a fan-out's Lead), or
+  // undefined when it can.
   investigationProblem: () => Promise<string | undefined>;
   investigate: (incident: Incident, source: TelemetrySource, appDir?: string) => Promise<unknown>;
 };
@@ -114,7 +115,7 @@ const realDeps: Deps = {
   probe: (check) => probe(check),
   now: () => Date.now(),
   notify,
-  investigationProblem: async () => stageProblem(await stageModel("investigate")),
+  investigationProblem,
   investigate: (incident, source, appDir) => runInvestigation(incident, source, { appDir }),
 };
 let deps = realDeps;

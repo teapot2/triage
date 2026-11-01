@@ -1,9 +1,10 @@
 import { connection } from "next/server";
-import { stageIds, stageModel, stageProblem } from "@/lib/models/settings";
+import { publicModelSettings, stageIds, stageModel, stageProblem } from "@/lib/models/settings";
 import { recordedEffort } from "@/lib/models/stages";
 
 // Each stage's provider, model and effort (Meta only), and whether it can
-// run, without calling any model.
+// run, without calling any model. `fanout`: whether investigations check
+// hypotheses in parallel, so whether the Lead stage runs at all.
 export async function GET() {
   await connection();
   const stages = Object.fromEntries(
@@ -23,5 +24,6 @@ export async function GET() {
       }),
     ),
   );
-  return Response.json({ ok: true, stages });
+  const { fanout } = await publicModelSettings();
+  return Response.json({ ok: true, fanout, stages });
 }

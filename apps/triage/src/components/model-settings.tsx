@@ -2,6 +2,7 @@
 
 import { LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { toast } from "sonner";
 import { FormField } from "@/components/form-fields";
 import { StageRow, useModelList } from "@/components/model-stage-row";
 import { DisclosureFooter, DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
@@ -11,6 +12,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import type { PublicModelSettings } from "@/lib/models/settings";
 import { type StageId, stageIds, stageLabels } from "@/lib/models/stages";
 
@@ -19,6 +21,7 @@ export type StageModel = PublicModelSettings["stages"][keyof PublicModelSettings
 // A stage saved without an effort (a preset) goes back to its default.
 export type ModelUpdate = {
   stages?: Partial<Record<StageId, Omit<StageModel, "effort"> & Partial<Pick<StageModel, "effort">>>>;
+  fanout?: boolean;
   endpoints?: Partial<Record<Provider["id"], { baseUrl?: string; apiKey?: string }>>;
 };
 // Saves an update and resolves to an error message, or nothing on success.
@@ -71,9 +74,14 @@ export function ModelSettings() {
   const row = (id: string) => ({ open: open === id, onOpenChange: (o: boolean) => setOpen(o ? id : undefined) });
   const hosted = settings?.providers.filter((p) => p.keyEnv) ?? [];
   const configurable = settings?.providers.filter((p) => p.configurable) ?? [];
-  // The stages that run on a provider, for its row.
+  // The stages that run on a provider, for its row: the Lead only while
+  // investigations fan out.
   const usedBy = (id: Provider["id"]) =>
-    settings ? stageIds.filter((s) => settings.stages[s].provider === id).map((s) => stageLabels[s].label) : [];
+    settings
+      ? stageIds
+          .filter((s) => settings.stages[s].provider === id && (s !== "lead" || settings.fanout))
+          .map((s) => stageLabels[s].label)
+      : [];
 
   return (
     <>
@@ -116,16 +124,25 @@ export function ModelSettings() {
           <div className="divide-y overflow-hidden rounded-lg border">
             <PresetRow providers={settings.providers} onSave={save} />
             <ListGroup label="Stages" />
-            {stageIds.map((stage) => (
-              <StageRow
-                key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}|${settings.stages[stage].effort}`}
-                stage={stage}
-                saved={settings.stages[stage]}
-                providers={settings.providers}
-                onSave={save}
-                {...row(stage)}
-              />
-            ))}
+            {/* The fan-out switch sits under Investigate, the stage it
+                changes, and the Lead only shows while it's on: off, the
+                Lead never runs, so its row would only be noise. */}
+            {stageIds.flatMap((stage) => {
+              if (stage === "lead" && !settings.fanout) return [];
+              const stageRow = (
+                <StageRow
+                  key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}|${settings.stages[stage].effort}`}
+                  stage={stage}
+                  saved={settings.stages[stage]}
+                  providers={settings.providers}
+                  onSave={save}
+                  {...row(stage)}
+                />
+              );
+              return stage === "investigate"
+                ? [stageRow, <FanoutRow key="fanout" on={settings.fanout} onSave={save} />]
+                : [stageRow];
+            })}
           </div>
         )}
       </section>
@@ -156,6 +173,42 @@ export function ModelSettings() {
         </section>
       )}
     </>
+  );
+}
+
+// The Investigate stage's "Check hypotheses in parallel" switch. It saves
+// as it flips, like Settings' other switches, and goes back if the server
+// says no.
+function FanoutRow({ on, onSave }: { on: boolean; onSave: SaveModelSettings }) {
+  // The flip being saved, shown until the server's answer replaces `on`.
+  const [pending, setPending] = useState<boolean>();
+
+  async function toggle(next: boolean) {
+    setPending(next);
+    const err = await onSave({ fanout: next });
+    setPending(undefined);
+    if (err) toast.error(`Couldn't save: ${err}`);
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-6 px-4 py-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <label htmlFor="fanout" className="font-medium text-sm">
+          Check hypotheses in parallel
+        </label>
+        <span id="fanout-description" className="max-w-xl text-muted-foreground text-xs">
+          The Lead proposes up to three causes, the Investigate model checks each at once, and the Lead writes the
+          diagnosis from their findings. More model calls per run.
+        </span>
+      </div>
+      <Switch
+        id="fanout"
+        aria-describedby="fanout-description"
+        checked={pending ?? on}
+        disabled={pending !== undefined}
+        onCheckedChange={toggle}
+      />
+    </div>
   );
 }
 

@@ -81,7 +81,8 @@ async function investigate(script: Script, { fanout = true, scenario = "pool-lea
   const seen: Seen[] = [];
   const incident = await runInvestigation(await scenarioIncident(s), createScenarioSource(s), {
     stage: laneStage,
-    ...(fanout && { fanout: { lead } }),
+    // Always given, so the worktree's Settings never decide.
+    fanout: fanout && { lead },
     save: async () => {},
     languageModel: (stage) => scripted(stage.model, script, seen),
   });
@@ -241,6 +242,12 @@ describe("runFanout", () => {
     assert.deepEqual(incident.run?.fanout, {
       leadProvider: "meta",
       leadModel: "lead-model",
+      leadReasoningEffort: "high",
+      // The lead's tokens: 2 scout calls and 1 merge call.
+      inputTokens: 300,
+      cachedInputTokens: 0,
+      outputTokens: 30,
+      reasoningTokens: 0,
       hypotheses: [
         {
           id: "h1",
@@ -264,10 +271,11 @@ describe("runFanout", () => {
         },
       ],
     });
-    // Every phase's steps and tokens count: 2 scout + 2 + 2 lanes + 1 merge.
+    // Every phase's steps count: 2 scout + 2 + 2 lanes + 1 merge. The run's
+    // tokens are the lanes' 4 calls; the lead's are on the fan-out, above.
     assert.equal(incident.run?.modelSteps, 7);
-    assert.equal(incident.run?.inputTokens, 700);
-    assert.equal(incident.run?.outputTokens, 70);
+    assert.equal(incident.run?.inputTokens, 400);
+    assert.equal(incident.run?.outputTokens, 40);
   });
 
   it("hands a refuted lane's evidence and finding to the merge, which can cite it", async () => {
@@ -417,6 +425,47 @@ describe("runFanout", () => {
     );
     assert.deepEqual(incident.run?.fanout?.hypotheses, []);
     assert.equal(incident.run?.modelSteps, 4);
+    assert.equal(incident.status, "diagnosed", incident.run?.error);
+  });
+
+  it("hands over to the single agent, with every finding, when the merge ends without a report", async () => {
+    const { incident, seen } = await investigate({
+      scout: scout(poolAlert),
+      h1: supportedLane,
+      h2: refutedLane,
+      merge: () => ({ text: "The pool leak looks right." }),
+      single: () => ({
+        tools: [["submit_report", rootCause({ symptom: "ev_metric_1", cause: "ev_h1_db_1", ruledOut: "ev_h2_metric_1" })]],
+      }),
+    });
+    // The merge was nudged once, then the stage's model took over.
+    assert.equal(seen.filter((s) => s.phase === "merge").length, 2);
+    const single = seen.find((s) => s.phase === "single")!;
+    assert.equal(single.model, "lane-model");
+    const text = userText(single.call);
+    assert.match(text, /Evidence gathered so far[\s\S]*"id":"ev_h2_metric_1"/);
+    assert.match(text, /Hypotheses checked so far[\s\S]*h1: Connection pool leak[\s\S]*Finding: supported: Idle connections pile up/);
+    assert.match(text, /h2: Traffic spike[\s\S]*Finding: refuted: Request rate stayed flat/);
+    assert.equal(incident.status, "diagnosed", incident.run?.error);
+    // 2 scout + 4 lanes + 2 merge + 1 alone, within the run's 30.
+    assert.equal(incident.run?.modelSteps, 9);
+    // The lead's 4 calls on the fan-out; the lanes' 4 and the fallback's 1
+    // on the run, at the stage's model.
+    assert.equal(incident.run?.fanout?.inputTokens, 400);
+    assert.equal(incident.run?.inputTokens, 500);
+  });
+
+  it("hands over to the single agent when the merge's model fails", async () => {
+    const { incident, seen } = await investigate({
+      scout: scout(poolAlert),
+      h1: supportedLane,
+      h2: refutedLane,
+      merge: () => new Error("lead model down"),
+      single: () => ({
+        tools: [["submit_report", rootCause({ symptom: "ev_metric_1", cause: "ev_h1_db_1", ruledOut: "ev_h2_metric_1" })]],
+      }),
+    });
+    assert.match(userText(seen.find((s) => s.phase === "single")!.call), /Hypotheses checked so far/);
     assert.equal(incident.status, "diagnosed", incident.run?.error);
   });
 });

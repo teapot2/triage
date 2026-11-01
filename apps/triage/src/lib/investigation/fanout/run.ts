@@ -2,6 +2,7 @@ import { type LanguageModel, type ModelMessage, ToolLoopAgent, type ToolSet } fr
 import { cacheKey, callSettings, modelErrorText, modelOptions, reasoningKind } from "../../models/client";
 import { RunTimeoutError } from "../../models/policy";
 import type { Endpoint, StageModel } from "../../models/settings";
+import { recordedEffort } from "../../models/stages";
 import { addUsage, type TokenCounts } from "../../models/usage";
 import { recordThoughts } from "../agent";
 import type { InvestigationRecorder, ThoughtRecorder } from "../recorder";
@@ -29,7 +30,9 @@ import { type Finding, type Proposal, proposeHypothesesTool, submitFindingTool }
 // 3. Merge (the lead model): reads every lane's evidence and finding, may
 //    query a little more, and submits the report through the usual checks.
 // A scout that fails hands over to the single agent; a lane that fails is
-// an unclear finding, and the merge goes on.
+// an unclear finding, and the merge goes on. A merge that fails or ends
+// without an accepted report hands over to the single agent too, with every
+// lane's finding, for what is left of the run's steps.
 
 export type Stage = Required<StageModel> & Endpoint;
 
@@ -55,20 +58,28 @@ export interface FanoutRun {
   recorder: InvestigationRecorder;
   // The run's budget, shared by every phase and lane.
   budget: AbortSignal;
+  // The lanes' tokens, and the lead's (scout and merge), kept apart so each
+  // is priced at its own model's rates.
   tokens: TokenCounts;
+  leadTokens: TokenCounts;
   // Model steps across the run, the single agent's included.
   count: { steps: number };
   // The lanes' model (the Investigate stage) and the lead's.
   lane: Stage;
   lead: Stage;
   model: (s: Stage) => LanguageModel;
-  // The single-agent loop, for when the scout fails.
+  // The single-agent loop, for when the scout or the merge fails.
   alone: (messages: ModelMessage[]) => Promise<void>;
 }
 
 export async function runFanout(run: FanoutRun): Promise<void> {
   const { incident, source, recorder } = run;
-  setFanout(recorder, { leadProvider: run.lead.provider, leadModel: run.lead.model, hypotheses: [] });
+  setFanout(recorder, {
+    leadProvider: run.lead.provider,
+    leadModel: run.lead.model,
+    leadReasoningEffort: recordedEffort(run.lead),
+    hypotheses: [],
+  });
 
   // 1. Scout. Its steps stay on the record whatever happens next.
   let proposal: Proposal[] | undefined;
@@ -87,7 +98,8 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       finish: "propose_hypotheses",
       done: () => proposal !== undefined,
     });
-    await generateUntilDone(run, scout, [{ role: "user", content: scoutPrompt(incident, source) }], SCOUT_NUDGE, run.budget);
+    const content = scoutPrompt(incident, source);
+    await generateUntilDone(scout, [{ role: "user", content }], SCOUT_NUDGE, run.budget, run.leadTokens);
   } catch (err) {
     if (run.budget.aborted) throw err;
     console.error("[triage] fan-out scout failed, investigating alone", incident.id, err);
@@ -122,9 +134,18 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       done: () => recorder.report !== undefined,
     });
     const content = mergePrompt(incident, source, recorder.evidence, recorder.incident.run!.fanout!.hypotheses);
-    await generateUntilDone(run, merge, [{ role: "user", content }], MERGE_NUDGE, run.budget);
+    await generateUntilDone(merge, [{ role: "user", content }], MERGE_NUDGE, run.budget, run.leadTokens);
+  } catch (err) {
+    if (run.budget.aborted) throw err;
+    console.error("[triage] fan-out merge failed, finishing alone", incident.id, err);
   } finally {
     recorder.lane = undefined;
+  }
+  // The lanes' work isn't lost to a merge that couldn't finish: the single
+  // agent writes the report from it.
+  if (!recorder.report) {
+    const hypotheses = recorder.incident.run!.fanout!.hypotheses;
+    await run.alone([{ role: "user", content: fallbackPrompt(incident, source, recorder.evidence, hypotheses) }]);
   }
 }
 
@@ -155,7 +176,8 @@ async function runLane(run: FanoutRun, h: Hypothesis, scoutEvidence: Evidence[])
   });
   try {
     const content = lanePrompt(run.incident, run.source, scoutEvidence, h);
-    await generateUntilDone(run, agent, [{ role: "user", content }], LANE_NUDGE, AbortSignal.any([run.budget, limit.signal]));
+    const signal = AbortSignal.any([run.budget, limit.signal]);
+    await generateUntilDone(agent, [{ role: "user", content }], LANE_NUDGE, signal, run.tokens);
     if (!finding) error = `No finding after ${agent.steps()} model steps`;
   } catch (err) {
     console.error("[triage] fan-out lane failed", run.incident.id, h.id, err);
@@ -209,19 +231,19 @@ function boundedAgent<T extends ToolSet>(
 }
 
 // Runs an agent until it finishes, nudging it once if it stops in plain
-// text, and adds its tokens to the run's.
+// text, and adds its tokens to `tokens`: the lead's or the lanes'.
 async function generateUntilDone(
-  run: FanoutRun,
   { agent, steps, maxSteps, done }: Bounded,
   messages: ModelMessage[],
   nudge: string,
   abortSignal: AbortSignal,
+  tokens: TokenCounts,
 ): Promise<void> {
   for (let attempt = 0; attempt <= MAX_NUDGES && !done() && steps() < maxSteps; attempt++) {
     if (attempt > 0) messages.push({ role: "user", content: nudge });
     const result = await agent.generate({ messages, abortSignal });
     messages.push(...result.responseMessages);
-    addUsage(run.tokens, result.usage);
+    addUsage(tokens, result.usage);
   }
 }
 

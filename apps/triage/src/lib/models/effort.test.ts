@@ -17,6 +17,11 @@ describe("chosenModel", () => {
     assert.deepEqual(chosenModel({ stages }, "postmortem"), { provider: "meta", model: "muse-wonder-1.0", effort: "medium" });
     assert.equal(chosenModel({ stages }, "ask").effort, "minimal");
   });
+
+  it("starts the Lead on Wonder at high effort, whatever the Investigate stage uses", () => {
+    const stages = { investigate: { provider: "openrouter" as const, model: "meta/muse-glimmer-30b" } };
+    assert.deepEqual(chosenModel({ stages }, "lead"), { provider: "meta", model: "muse-wonder-1.0", effort: "high" });
+  });
 });
 
 describe("modelOptions", () => {

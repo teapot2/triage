@@ -71,6 +71,35 @@ describe("incidentUsage", () => {
     assert.equal(u.tokens.inputTokens, 105_000);
   });
 
+  describe("on a fan-out", () => {
+    const fanout = { leadProvider: "meta", leadModel: "muse-wonder-1.0", hypotheses: [] };
+    // The lead's own tokens: 40K uncached at $4, 10K cached at $0.20, 1K out at $20.
+    const leadTokens = { inputTokens: 50_000, cachedInputTokens: 10_000, outputTokens: 1_000, reasoningTokens: 800 };
+
+    it("prices the lead's tokens at the lead model's rates, in the investigation", () => {
+      const u = incidentUsage({ ...incident, run: { ...incident.run!, fanout: { ...fanout, ...leadTokens } } })!;
+      // $0.0675 for the Spark lanes, $0.182 for the Wonder lead.
+      assert.equal(u.stages.investigate?.cost?.toFixed(4), (0.0675 + 0.182).toFixed(4));
+      assert.equal(u.cost?.toFixed(4), "0.2495");
+      assert.deepEqual(Object.keys(u.stages), ["investigate"]);
+      assert.deepEqual(u.tokens, { inputTokens: 150_000, cachedInputTokens: 70_000, outputTokens: 3_000, reasoningTokens: 2_300 });
+    });
+
+    it("prices a fan-out from before the split as it was recorded, all at the stage's model", () => {
+      const u = incidentUsage({ ...incident, run: { ...incident.run!, fanout } })!;
+      assert.equal(u.cost?.toFixed(4), "0.0675");
+    });
+
+    it("leaves the cost out when the lead ran on a model with no price", () => {
+      const u = incidentUsage({
+        ...incident,
+        run: { ...incident.run!, fanout: { ...fanout, leadProvider: "openrouter", leadModel: "meta/muse-glimmer-30b", ...leadTokens } },
+      })!;
+      assert.equal(u.cost, undefined);
+      assert.equal(u.tokens.inputTokens, 150_000);
+    });
+  });
+
   it("is undefined when nothing recorded tokens", () => {
     assert.equal(incidentUsage({ ...incident, run: { ...incident.run!, inputTokens: undefined, outputTokens: undefined } }), undefined);
   });
