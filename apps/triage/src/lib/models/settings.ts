@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { isOpenWeights, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
+import { isOpenWeights, isSparkOpen, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
 import { type NotificationEvent, notificationEvents, slackWebhookPattern } from "../notifications/types";
 import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
 import { defaultEffort, leadDefault, reasoningEffortSchema, type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
@@ -147,6 +147,9 @@ export async function publicModelSettings() {
     fanout,
     // The Lead counts only while it runs.
     openWeights: stageIds.every((id) => (id === "lead" && !fanout) || isOpenWeights(stages[id].model)),
+    // Any running stage on Muse Spark Open: Settings then shows "Built with
+    // Muse Spark Open", as its license asks.
+    builtWithSparkOpen: stageIds.some((id) => (id !== "lead" || fanout) && isSparkOpen(stages[id].model)),
     providers: providerIds.map((id) => {
       const info = providers[id];
       const endpoint = endpointOf(settings, id);

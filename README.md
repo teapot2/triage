@@ -46,7 +46,7 @@ Once an incident has a finished report, Triage writes a blameless postmortem fro
 
 ## Models and providers
 
-Each stage that calls a model (**Investigate**, **Fix**, **Ask** and **Postmortem**) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
+Each stage that calls a model (**Investigate**, **Fix**, **Ask** and **Postmortem**, plus **Lead** when hypotheses are checked in parallel) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:
 
 | Provider | Endpoint | Key |
 | --- | --- | --- |
@@ -61,5 +61,7 @@ Each stage that calls a model (**Investigate**, **Fix**, **Ask** and **Postmorte
 Put hosted keys in `apps/triage/.env.local` and restart. Keys entered in Settings are saved server-side in `apps/triage/.data/settings.json` (gitignored) and never sent to the browser.
 
 **Open-weights mode.** The "Glimmer" presets run every stage on Muse Glimmer (Meta's open-weights 30B model) on OpenRouter, Fireworks or a local server; Settings shows an "Open weights" badge when every stage runs on open weights. Until a stage is changed, both use `MODEL_ID` on Meta's API.
+
+**Built with Muse Spark Open.** Any stage can run on Muse Spark Open, the open weights of Meta's Muse Spark, through OpenRouter, Baseten or your own server; the "Spark Open" presets set every stage at once. Muse Spark Open is licensed under the [Muse Model License](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B), and Settings → Models shows "Built with Muse Spark Open" whenever a stage runs it.
 
 Check a stage from Settings, or call `GET /api/ping-model?stage=investigate` (may incur charges). `GET /api/health` shows each stage's model without calling it.

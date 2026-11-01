@@ -88,6 +88,7 @@ export function ModelSettings() {
       <section aria-labelledby="models" className="flex flex-col gap-3">
         <SettingsSectionHeader id="models" title="Models">
           {settings?.openWeights && <Badge variant="info">Open weights</Badge>}
+          {settings?.builtWithSparkOpen && <Badge variant="outline">Built with Muse Spark Open</Badge>}
         </SettingsSectionHeader>
 
         {loadError && (

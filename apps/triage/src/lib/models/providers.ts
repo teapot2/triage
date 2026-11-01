@@ -141,3 +141,7 @@ export const providers: Record<ProviderId, ProviderInfo> = {
 // Meta's open-weights models: a stage on one of these runs on weights you
 // could host yourself.
 export const isOpenWeights = (model: string) => /glimmer|spark-open/i.test(model);
+
+// Muse Spark Open in particular, whose license (Muse Model License §2) asks
+// a product that uses it to show "Built with Muse Spark Open".
+export const isSparkOpen = (model: string) => /spark-open/i.test(model);
