@@ -409,6 +409,26 @@ export const runSchema = z.object({
 });
 export type Run = z.infer<typeof runSchema>;
 
+// A question's prompt, part by part, in estimated tokens; `screenshot`
+// only when one was attached.
+export const promptPartsSchema = z.object({
+  instructions: z.number().int(),
+  tools: z.number().int(),
+  report: z.number().int(),
+  evidence: z.number().int(),
+  history: z.number().int(),
+  question: z.number().int(),
+  screenshot: z.number().int().optional(),
+});
+export type PromptParts = z.infer<typeof promptPartsSchema>;
+
+export const questionStartSchema = z.object({
+  inputTokens: z.number().int(),
+  parts: promptPartsSchema,
+  history: z.object({ included: z.number().int(), asked: z.number().int() }),
+});
+export type QuestionStart = z.infer<typeof questionStartSchema>;
+
 // A follow-up question on a finished incident, answered by a small,
 // bounded investigation with the same read-only tools. Its steps and
 // evidence live on the question; evidence IDs carry the question's ID
@@ -451,6 +471,11 @@ export const questionSchema = z.object({
   reasoningTokens: z.number().int().optional(),
   modelRetries: z.number().int().optional(),
   context: contextSchema.optional(),
+  // What the question started from: its first model call's input, split
+  // roughly by what filled it (ask/context-parts.ts), and how many earlier
+  // questions it carried of those asked. The Ask composer shows the
+  // latest one's. Missing on records from before it was recorded.
+  start: questionStartSchema.optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
 

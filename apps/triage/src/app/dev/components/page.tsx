@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { ProgressRing } from "@/components/ui/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -267,6 +268,26 @@ export default function ComponentsPage() {
               </div>
             ))}
           </div>
+        </Row>
+      </Section>
+
+      <Section title="Progress ring" source="ui/progress-ring.tsx">
+        <Row label="Values">
+          {[0, 0.004, 0.35, 0.72, 0.9, 1].map((v) => (
+            <span key={v} className="flex items-center gap-1.5 font-mono text-muted-foreground text-xs tabular-nums">
+              <ProgressRing
+                value={v}
+                aria-label={`${v * 100} percent`}
+                className={v >= 0.85 ? "text-destructive" : v >= 0.7 ? "text-warning" : undefined}
+              />
+              {Math.round(v * 1000) / 10}%
+            </span>
+          ))}
+        </Row>
+        <Row label="Sizes">
+          {["size-3", "size-4", "size-5", "size-7"].map((size) => (
+            <ProgressRing key={size} value={0.42} className={size} />
+          ))}
         </Row>
       </Section>
 

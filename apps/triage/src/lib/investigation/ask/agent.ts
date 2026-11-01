@@ -28,6 +28,7 @@ import type { Incident, Question } from "../schema";
 import { sourceFor } from "../source-for";
 import type { TelemetrySource } from "../source";
 import { createInvestigationTools, forModel } from "../tools";
+import { type PromptText, splitTokens, toolsText } from "./context-parts";
 import { readQuestionImage } from "./images";
 import { conversationHistory, knownEvidenceIds, parseCitations } from "./rules";
 
@@ -74,18 +75,24 @@ ${tools}${image ? IMAGE_RULES : ""}
 - Answer in plain sentences. Use a short list only when the answer really is a list (steps, several separate causes). No headings.`;
 }
 
-function prompt(incident: Incident, question: Question, source: TelemetrySource | undefined): string {
+// The question's prompt in its parts, which joined are the prompt; and of
+// the earlier questions asked, how many the history carries.
+function promptSections(incident: Incident, question: Question, source: TelemetrySource | undefined) {
   const earlier = (incident.questions ?? []).filter((q) => q.id !== question.id);
   const evidence = [...incident.evidence, ...earlier.flatMap((q) => q.evidence)]
     .map((e) => JSON.stringify(forModel(e)))
     .join("\n");
   const history = conversationHistory(earlier, HISTORY);
-  return `${incidentBlock(incident, source)}
-
-Evidence you may cite:
-${evidence || "(none)"}
-${history ? `\nEarlier questions:\n${history}\n` : ""}
-Question: ${question.text}`;
+  const asked = earlier.filter((q) => q.status !== "answering").length;
+  return {
+    sections: {
+      report: incidentBlock(incident, source),
+      evidence: `\n\nEvidence you may cite:\n${evidence || "(none)"}\n`,
+      history: history ? `\nEarlier questions:\n${history}\n` : "",
+      question: `\nQuestion: ${question.text}`,
+    },
+    history: { included: Math.min(asked, HISTORY), asked },
+  };
 }
 
 const NO_VISION_HINT = "(This model may not read images: pick a vision model for Ask in Settings.)";
@@ -143,12 +150,16 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     const question = recorder.question;
     const image = await readQuestionImage(incident.id, question);
     if (question.image && !image) throw new Error("The attached image couldn't be read back: ask again with it");
+    const { sections, history } = promptSections(incident, question, source);
+    const prompt = Object.values(sections).join("");
     const content: UserContent = image
       ? [
-          { type: "text", text: prompt(incident, question, source) },
+          { type: "text", text: prompt },
           { type: "file", mediaType: image.mediaType, data: image.bytes },
         ]
-      : prompt(incident, question, source);
+      : prompt;
+    const system = instructions(mode, image !== undefined);
+    const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...sections };
 
     // As in the investigation: Meta's API only supports tool_choice "auto",
     // so the last step has no tools and must answer, and a run that stops
@@ -158,8 +169,18 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...callSettings({ stream: true }),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
-      ...onEachCall((call) => recorder.update({ context: fuller(recorder.question.context, call) })),
-      instructions: instructions(mode, image !== undefined),
+      ...onEachCall((call) =>
+        recorder.update({
+          context: fuller(recorder.question.context, call),
+          // The first call is what the question started from.
+          start: recorder.question.start ?? {
+            inputTokens: call.inputTokens,
+            parts: splitTokens(call.inputTokens, promptText, image !== undefined),
+            history,
+          },
+        }),
+      ),
+      instructions: system,
       tools,
       stopWhen: () => stepsUsed >= MAX_STEPS,
       prepareStep: () => {

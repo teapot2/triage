@@ -1,10 +1,12 @@
 "use client";
 
 import { CoinsIcon } from "lucide-react";
+import { ProgressRing } from "@/components/ui/progress-ring";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cachedShare, formatCost, type IncidentUsage, type UsageTotal } from "@/lib/investigation/cost";
 import { stageIds, stageLabels } from "@/lib/models/stages";
-import { formatShare } from "./context-meter";
+import { cn } from "@/lib/utils";
+import { formatShare, toneOf } from "./context-meter";
 import { formatCompact, formatPercent } from "./format";
 
 // What the incident's model calls cost, in one line for the header: "$0.19,
@@ -57,7 +59,16 @@ function StageRow({ label, usage: { tokens, cost, detailed, context } }: { label
       <td className="pr-3 text-right">{detailed ? formatPercent(cachedShare(tokens)) : "–"}</td>
       <td className="pr-3 text-right">{formatCompact(tokens.outputTokens)}</td>
       <td className="pr-3 text-right">{detailed ? formatCompact(tokens.reasoningTokens) : "–"}</td>
-      <td className="pr-3 text-right">{context === undefined ? "–" : formatShare(context)}</td>
+      <td className="pr-3 text-right">
+        {context === undefined ? (
+          "–"
+        ) : (
+          <span className={cn("inline-flex items-center gap-1", toneOf(context))}>
+            <ProgressRing value={context} className="size-3" />
+            {formatShare(context)}
+          </span>
+        )}
+      </td>
       <td className="text-right">{cost === undefined ? "–" : formatCost(cost)}</td>
     </tr>
   );

@@ -53,13 +53,15 @@ import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shr
 import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
-import { providerLabels } from "@/lib/models/labels";
+import { contextLimit, contextShare } from "@/lib/models/context";
+import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { effortLabels, type ReasoningEffort } from "@/lib/models/stages";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
-import { contextText } from "./context-meter";
-import { formatDuration } from "./format";
+import { formatShare } from "./context-meter";
+import { type ContextSegment, ContextWindow } from "./context-window";
+import { formatCompact, formatDuration } from "./format";
 import { StepRow } from "./investigation-timeline";
 
 // Follow-up questions on a finished incident: the thread oldest first, then
@@ -617,7 +619,15 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   // scenario is gone) answers come from the recorded evidence alone
   // (evidence_only), as the route decides.
   const mode: Question["mode"] = sourceKind(incident) ? "tools" : "evidence_only";
-  const composer = <Composer ask={ask} mode={mode} incidentId={incident.id} textareaRef={textareaRef} />;
+  const composer = (
+    <Composer
+      ask={ask}
+      mode={mode}
+      incidentId={incident.id}
+      textareaRef={textareaRef}
+      contextWindow={conversationContext(incident.questions ?? [])}
+    />
+  );
   const suggestions = suggestedQuestions(incident);
 
   // Nothing asked yet: the composer first, then questions to start from.
@@ -1055,16 +1065,55 @@ function CopyAnswer({ answer }: { answer: string }) {
   );
 }
 
+// How full the conversation's context is, for under the composer: what
+// the latest question started from (its first model call), part by part.
+// Each question sends the instructions, the report, all the evidence so
+// far and the last few questions again, so the next one starts about
+// there. Nothing before a question records it, or for a model whose
+// window Triage isn't sure of.
+function conversationContext(questions: Question[]): ReactNode {
+  const q = questions.findLast((q) => q.start && contextLimit(q.provider, q.model));
+  const limit = q && contextLimit(q.provider, q.model);
+  if (!q?.start || !limit) return undefined;
+  const { parts, history } = q.start;
+  const segments: ContextSegment[] = [
+    { key: "instructions", label: "Instructions", tokens: parts.instructions },
+    { key: "tools", label: "Tools", tokens: parts.tools },
+    { key: "report", label: "Incident report", tokens: parts.report },
+    { key: "evidence", label: "Evidence", tokens: parts.evidence },
+    {
+      key: "history",
+      label: "Earlier questions",
+      tokens: parts.history,
+      // Older ones drop out of the prompt: say so rather than hide it.
+      detail: history.asked > history.included ? `last ${history.included} of ${history.asked}` : undefined,
+    },
+    { key: "question", label: "Question", tokens: parts.question },
+    { key: "screenshot", label: "Screenshot", tokens: parts.screenshot ?? 0 },
+  ];
+  return (
+    <ContextWindow
+      used={q.start.inputTokens}
+      limit={limit}
+      segments={segments}
+      note={`${modelLabel(q.model, q.provider)} · as the last question started · parts estimated from their length`}
+      className="-mr-2 ml-auto"
+    />
+  );
+}
+
 // The reply's details behind a "⋯", so the row under it stays quiet: the
-// model that wrote it, how full its context got, where it read from, and
-// when it was asked.
+// model that wrote it, how full its fullest call's context got, where it
+// read from, and when it was asked.
 function ReplyDetails({ view }: { view: QuestionView }) {
   const rows: [string, ReactNode][] = [];
   if (view.model) rows.push(["Model", view.model]);
   if (view.provider) rows.push(["Provider", providerLabels[view.provider] ?? view.provider]);
   if (view.reasoningEffort) rows.push(["Effort", effortLabels[view.reasoningEffort]]);
-  const context = view.model && contextText({ ...view, model: view.model });
-  if (context) rows.push(["Context", context]);
+  const peak = view.model ? contextShare({ ...view, model: view.model }) : undefined;
+  if (peak !== undefined && view.context) {
+    rows.push(["Peak context", `${formatShare(peak)} · ${formatCompact(view.context.inputTokens)} tokens`]);
+  }
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
   return (
@@ -1222,11 +1271,13 @@ function Composer({
   mode,
   incidentId,
   textareaRef,
+  contextWindow,
 }: {
   ask: Ask;
   mode: Question["mode"];
   incidentId: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  contextWindow?: ReactNode;
 }) {
   const disabled = ask.refusal !== undefined;
   const length = ask.draft.length;
@@ -1335,6 +1386,7 @@ function Composer({
     submit();
   };
 
+  const statusLine = ask.error || (showMic && (dictation.status !== "idle" || dictation.error));
   const box = (
     <form
       onSubmit={(e) => {
@@ -1491,6 +1543,11 @@ function Composer({
           box
         )}
       </div>
+      {/* Under the box: what went wrong or the microphone's state on the
+          left, how full the conversation's context is on the right. */}
+      {(statusLine || contextWindow) && (
+      <div className="flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
       {ask.error && (
         <p id="ask-triage-error" role="alert" className="flex items-center gap-1.5 text-destructive text-xs">
           <CircleXIcon className="size-3.5 shrink-0" />
@@ -1519,6 +1576,10 @@ function Composer({
           <CircleXIcon className="size-3.5 shrink-0" />
           Voice input: {dictation.error}
         </p>
+      )}
+        </div>
+        {contextWindow}
+      </div>
       )}
     </div>
   );
