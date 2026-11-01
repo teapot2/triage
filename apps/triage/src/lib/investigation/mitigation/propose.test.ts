@@ -88,6 +88,43 @@ describe("proposeMitigation", () => {
     assert.equal(m?.risk, "low");
   });
 
+  it("prefers a flag turned on after the blamed deploy, even when the chain cites only the deploy", () => {
+    const later = { ...flagOn, observedAt: "2026-10-23T02:05:00.000Z" };
+    const evidence = [latency, codeDeploy, later];
+    const m = proposeMitigation(report([latency.id, codeDeploy.id]), evidence, "shopfront", now);
+    assert.equal(m?.kind, "flag_off");
+    assert.equal(m?.target, "FF_STOCK_DIRECT_QUERY");
+    assert.deepEqual(m?.why.evidenceIds, [later.id]);
+  });
+
+  it("still rolls back when the flag was turned on before the blamed deploy", () => {
+    const earlier = { ...flagOn, observedAt: "2026-10-23T01:00:00.000Z" };
+    const m = proposeMitigation(report([latency.id, codeDeploy.id]), [latency, codeDeploy, earlier], "shopfront", now);
+    assert.equal(m?.kind, "rollback");
+  });
+
+  it("ignores a flag turned on after the alert, which can't have caused it", () => {
+    const afterAlert = { ...flagOn, observedAt: "2026-10-23T02:12:00.000Z" };
+    const evidence = [latency, codeDeploy, afterAlert];
+    const m = proposeMitigation(report([latency.id, codeDeploy.id]), evidence, "shopfront", now, "2026-10-23T02:10:00.000Z");
+    assert.equal(m?.kind, "rollback");
+    // Without an alert time there's no bound, as before.
+    assert.equal(proposeMitigation(report([latency.id, codeDeploy.id]), evidence, "shopfront", now)?.kind, "flag_off");
+  });
+
+  it("of several flags turned on after the deploy, picks the first", () => {
+    const second = deploy("ev_commit_3", "config:FF_NEW_CHECKOUT", "ops: FF_NEW_CHECKOUT turned on");
+    const evidence = [
+      latency,
+      codeDeploy,
+      { ...second, observedAt: "2026-10-23T02:08:00.000Z" },
+      { ...flagOn, observedAt: "2026-10-23T02:03:00.000Z" },
+    ];
+    const m = proposeMitigation(report([latency.id, codeDeploy.id]), evidence, "shopfront", now, "2026-10-23T02:10:00.000Z");
+    assert.equal(m?.kind, "flag_off");
+    assert.equal(m?.target, "FF_STOCK_DIRECT_QUERY");
+  });
+
   it("proposes nothing for a healthy verdict", () => {
     const r: InvestigationReport = {
       hypotheses: [],

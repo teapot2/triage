@@ -383,7 +383,7 @@ export async function runInvestigation(
       },
     });
     if (report?.verdict.kind === "root_cause") {
-      const mitigation = proposeMitigation(report, recorder.evidence, incident.service);
+      const mitigation = proposeMitigation(report, recorder.evidence, incident.service, undefined, incident.detectedAt);
       if (mitigation) recorder.update({ mitigation });
     }
   } catch (err) {
