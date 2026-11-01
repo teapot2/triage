@@ -44,7 +44,7 @@ Each change is logged at warn (`ops: FF_STOCK_DIRECT_QUERY turned on`), so it sh
 
 Triage reads this app's source, git history and telemetry, so none of them may describe the planted bug: the flag is named like an ordinary rollout, `src/lib/stock.ts` carries no hint, and the explanation lives here and in `src/lib/ops.ts`. Triage's `read_source` and `git_log` skip the demo harness (`src/app/ops/`, `src/app/api/ops/`, `src/lib/ops.ts`, `src/lib/traffic.ts`, `src/lib/traffic-profile.ts`, `src/db/pool-watch.ts`, `scripts/shoppers.ts`) and can't open this README. Two rules keep it that way:
 
-- Nothing Triage can read mentions the bug, the fault or Triage itself. `pnpm --filter @triage/web check:blind` fails if it does.
+- Nothing Triage can read mentions the bug, the fault or Triage itself, and nothing the harness logs names the demo (the traffic generator's starts and stops aren't logged for that reason; a flag flip is, as a config push would be). `pnpm --filter @triage/web check:blind` fails if either does.
 - Commit messages for this app read like a real team's ("stock: read stock with a direct query"), since `git_log` shows them.
 
 ## Telemetry

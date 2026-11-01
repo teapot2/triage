@@ -1,6 +1,5 @@
 import { context, ROOT_CONTEXT } from "@opentelemetry/api";
 import { infoSections } from "@/lib/info-pages";
-import { logger } from "@/lib/logger";
 import { defaultProfile, normalizeProfile, type Profile } from "@/lib/traffic-profile";
 
 // Synthetic visitors for the demo: real HTTP requests to the store, sent from
@@ -354,26 +353,25 @@ function measureVisits() {
 export function setProfile(input: unknown) {
   state.profile = normalizeProfile(input, state.profile);
   measureVisits();
-  logger.info("ops: traffic profile changed", { "traffic.rps": state.profile.rps });
   return state.profile;
 }
 
+// Starting and stopping aren't logged: a customer's app has no visitor
+// generator, and a "synthetic traffic started" line in the logs Triage
+// reads would give the demo away. The ops page shows the state instead.
 export function startTraffic(origin: string, catalog: CatalogItem[]) {
-  stopTraffic(false);
+  stopTraffic();
   state.origin = origin;
   state.catalog = catalog;
   measureVisits();
   scheduleNext(state.run);
-  logger.info("ops: synthetic traffic started", { "traffic.rps": state.profile.rps });
 }
 
-export function stopTraffic(log = true) {
+export function stopTraffic() {
   if (state.timer) clearTimeout(state.timer);
-  const wasRunning = state.timer !== null;
   state.timer = null;
   state.run++;
   state.rushUntil = 0;
-  if (log && wasRunning) logger.info("ops: synthetic traffic stopped");
 }
 
 const p95 = (values: number[]) => {
