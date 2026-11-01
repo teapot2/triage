@@ -114,9 +114,10 @@ function uptimeTelemetry(check: UptimeCheck, samples: UptimeSample[], now: numbe
       return [...groups.values()].sort((a, b) => b.count - a.count);
     },
 
-    async queryTraces({ service: wanted, route, status, minDurationMs }: Parameters<TelemetrySource["queryTraces"]>[0]) {
+    async queryTraces({ service: wanted, route, status, minDurationMs, windowMinutes }: Parameters<TelemetrySource["queryTraces"]>[0]) {
       if (wanted && wanted !== service) return [];
       return spans
+        .filter((sp) => windowMinutes === undefined || Date.parse(sp.startedAt) > now - windowMinutes * MINUTE)
         .filter((sp) => !route || sp.route === route || sp.name.includes(route))
         .filter((sp) => !status || sp.status === status)
         .filter((sp) => minDurationMs === undefined || sp.durationMs >= minDurationMs);

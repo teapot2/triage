@@ -122,8 +122,8 @@ describe("GET /api/export/incidents", () => {
       all.filter((_, i) => i % 2 === 0).reverse(),
     );
     assert.deepEqual(await ids(await get("incidents", "format=json&q=errors%201&sort=oldest")), all.slice(9));
-    const none = await (await get("incidents", "format=json&service=nope")).json();
-    assert.equal(none.count, 0);
+    // Nothing matching: a 404, as the list then offers no Export.
+    assert.equal((await get("incidents", "format=json&service=nope")).status, 404);
   });
 });
 

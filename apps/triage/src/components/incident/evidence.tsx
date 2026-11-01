@@ -349,7 +349,7 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
                 <TableRow key={key}>
                   <TableCell className="font-mono text-muted-foreground text-xs">{key}</TableCell>
                   {/* Values (error messages, URLs) wrap instead of scrolling the table. */}
-                  <TableCell className="whitespace-normal break-all font-mono text-xs">{String(value)}</TableCell>
+                  <TableCell className="whitespace-normal wrap-anywhere font-mono text-xs">{String(value)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

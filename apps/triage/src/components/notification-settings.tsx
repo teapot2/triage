@@ -350,7 +350,9 @@ export function NotificationSettings() {
                 id={`${id}-${event}`}
                 aria-describedby={`${id}-${event}-description`}
                 disabled={!configured}
-                checked={data.events[event]}
+                // Off until Slack is connected, as nothing is sent; the
+                // saved choice shows (and applies) once it is.
+                checked={configured && data.events[event]}
                 onCheckedChange={(on) => void toggle(event, on)}
               />
             </div>

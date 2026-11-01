@@ -101,7 +101,8 @@ export function IncidentToolbar({
         <div className="flex items-center gap-2">
           <FilterMenu facets={facets} values={params.filters} onChange={setFilters} />
           <IncidentSortMenu params={params} variant="outline" />
-          <ExportMenu exports={[{ dataset: incidentList, params: exportParams }]} />
+          {/* No file to offer when nothing matches. */}
+          <ExportMenu exports={shown > 0 ? [{ dataset: incidentList, params: exportParams }] : []} />
         </div>
       </div>
       {(isFiltering(params) || query.trim() !== "") && (

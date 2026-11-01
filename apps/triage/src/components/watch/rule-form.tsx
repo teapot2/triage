@@ -29,7 +29,7 @@ import {
   type WatchRule,
   type WatchTarget,
 } from "@/lib/investigation/watch-rule-model";
-import { BacktestResult, sentence, updateRules, useBacktest, windowLabel } from "./watch-client";
+import { BacktestResult, ReadBack, sentence, updateRules, useBacktest, windowLabel } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
 // Where a new rule starts: the kind of rule that holds up at low traffic,
@@ -235,9 +235,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
         current={isNew ? "New rule" : "Edit"}
         title={isNew ? "New rule" : `Edit ${base.name}`}
       >
-        {/* The rule read back as it's edited; blank while a number is
-            invalid (its field says why), keeping its line so nothing jumps. */}
-        <span className="min-h-5">{unnamed && sentence(describeRule(unnamed))}</span>
+        <ReadBack text={unnamed && sentence(describeRule(unnamed))} />
       </WatchHeader>
 
       <form

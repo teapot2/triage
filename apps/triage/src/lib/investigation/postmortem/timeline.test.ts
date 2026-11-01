@@ -193,6 +193,25 @@ describe("durations", () => {
     assert.equal(firstBreach(incident), at(1));
   });
 
+  it("times a replay someone started from its run, not from the recording", () => {
+    // Recorded at 02:00, replayed two days later: the run took 23 s.
+    const incident = mitigated();
+    incident.openedBy = undefined;
+    incident.trigger.series = [{ t: at(0), value: 100 }, { t: at(1), value: 900 }];
+    incident.detectedAt = at(2);
+    const replayedAt = (seconds: number) => new Date(Date.parse(at(2 * 24 * 60)) + seconds * 1000).toISOString();
+    incident.run = { ...incident.run!, startedAt: replayedAt(0), finishedAt: replayedAt(23) };
+    incident.mitigation!.appliedAt = replayedAt(60);
+    incident.mitigation!.recovery!.recoveredAt = replayedAt(120);
+    assert.deepEqual(durations(incident), [
+      { label: "Time to detect", ms: 60_000 },
+      { label: "Time to diagnose", ms: 23_000 },
+      { label: "Time to mitigate", ms: 60_000 },
+      { label: "Time to recover", ms: 3 * 60_000 },
+    ]);
+    assert.ok(postmortemTimeline(incident).some((e) => e.event === "Investigation started (muse-spark-1.3), replaying the recorded telemetry"));
+  });
+
   it("measures the time to resolve from the first breach, only while resolved", () => {
     const resolve = (incident: Incident) => durations(incident).find((d) => d.label === "Time to resolve");
     assert.deepEqual(resolve(resolved()), { label: "Time to resolve", ms: 13 * 60_000 });

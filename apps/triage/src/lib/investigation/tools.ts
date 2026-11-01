@@ -128,7 +128,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         const groups = (await source.queryLogs({ service, minLevel, contains, windowMinutes })).slice(0, 8);
         const evidence: EvidenceDraft[] = groups.map((g) => ({
           kind: "log",
-          summary: `${g.count}x ${g.level} '${truncate(g.message, 70)}' (${hhmm(g.firstSeen)} to ${hhmm(g.lastSeen)})`,
+          summary: `${g.count}x ${g.level} '${truncate(g.message, 70)}' (${hhmm(g.firstSeen) === hhmm(g.lastSeen) ? `at ${hhmm(g.lastSeen)}` : `${hhmm(g.firstSeen)} to ${hhmm(g.lastSeen)}`})`,
           observedAt: g.lastSeen,
           service: g.service,
           level: g.level,
@@ -152,9 +152,12 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         status: z.enum(["ok", "error"]).optional(),
         minDurationMs: z.number().optional(),
         limit: z.number().int().min(1).max(10).optional(),
+        windowMinutes,
       }),
-      execute: recorded("query_traces", async ({ service, route, status, minDurationMs, limit = 5 }) => {
-        const spans = await source.queryTraces({ service, route, status, minDurationMs, limit });
+      // Windowed like the logs: slowest first over all that's kept would
+      // bring back an earlier outage's spans ahead of this one's.
+      execute: recorded("query_traces", async ({ service, route, status, minDurationMs, limit = 5, windowMinutes = 30 }) => {
+        const spans = await source.queryTraces({ service, route, status, minDurationMs, windowMinutes, limit });
         const evidence: EvidenceDraft[] = spans.map((s) => ({
           kind: "span",
           summary: `${s.service} ${s.name} ${Math.round(s.durationMs)} ms ${s.status} at ${hhmm(s.startedAt)}`,

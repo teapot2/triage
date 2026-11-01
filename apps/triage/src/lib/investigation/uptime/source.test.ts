@@ -159,6 +159,10 @@ describe("createUptimeSource", () => {
     assert.equal((await source.queryTraces({ status: "ok", limit: 10 })).length, 10);
     assert.deepEqual(await source.queryTraces({ route: "/api/health", limit: 10 }), []);
     assert.deepEqual(await source.queryTraces({ service: "postgres", limit: 10 }), []);
+    // A window leaves out the slow checks before it, however slow.
+    assert.deepEqual(await source.queryTraces({ status: "ok", minDurationMs: 10_000, windowMinutes: 4, limit: 10 }), []);
+    // After 10:06, so the 10:06:00 timeout is out too.
+    assert.equal((await source.queryTraces({ status: "error", windowMinutes: 4, limit: 10 })).length, 6);
   });
 
   it("has no database, source, git or deploys, and the tools say why in a line", async () => {

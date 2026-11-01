@@ -57,6 +57,8 @@ export function resolutionOptions(incident: Incident) {
     resolve: finished && incident.status !== "resolved",
     reopen: incident.status === "resolved",
     verify: finished && (v === undefined || v === "breached" || v === "stopped"),
+    // "again" only once there's been a verification.
+    verifyLabel: v === undefined ? "Verify" : "Verify again",
   };
 }
 

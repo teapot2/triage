@@ -200,6 +200,8 @@ export function AppSidebarNav({
               {openCount > 0 && (
                 <SidebarMenuBadge
                   key={openCount}
+                  title={`${openCount} open`}
+                  aria-label={`${openCount} open`}
                   className={cn(
                     countChanged &&
                       "animate-in zoom-in-75 duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:animate-none",

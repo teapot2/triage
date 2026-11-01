@@ -73,8 +73,9 @@ export function createScenarioSource(s: Scenario): TelemetrySource {
         .sort((a, b) => b.count - a.count);
     },
 
-    async queryTraces({ service, route, status, minDurationMs, limit }) {
+    async queryTraces({ service, route, status, minDurationMs, windowMinutes, limit }) {
       return s.spans
+        .filter((sp) => windowMinutes === undefined || Date.parse(sp.startedAt) >= since(windowMinutes))
         .filter((sp) => !service || sp.service === service)
         .filter((sp) => !route || sp.route === route || sp.name.includes(route))
         .filter((sp) => !status || sp.status === status)

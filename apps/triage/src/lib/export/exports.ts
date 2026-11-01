@@ -87,10 +87,12 @@ export const exportEntries = exportRegistry([
     dataset: incidentList,
     params: listParams,
     // What the list shows, with the bundled examples as it shows them, on
-    // every page: the size and page are read and left out.
+    // every page: the size and page are read and left out. Nothing matching
+    // is a 404, as the list then offers no file.
     load: async (params, { origin }) => {
       const asked = parseListParams(params);
       const incidents = sortIncidents(filterIncidents(await listIncidents(), asked), asked.sort);
+      if (incidents.length === 0) return undefined;
       return {
         subject: { kind: "incidents", id: "list", name: "incidents" },
         rows: incidents.map((incident) => ({ incident, url: incidentUrl(origin, incident.id) })),

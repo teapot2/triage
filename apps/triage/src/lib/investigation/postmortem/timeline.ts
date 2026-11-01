@@ -44,6 +44,11 @@ export function firstBreach(incident: Incident): string | undefined {
 
 const firstLine = (text: string) => text.trim().split("\n")[0];
 
+// A replay someone started runs over recorded telemetry: its breach and
+// alert are at the recording's time, and the run and all after it at the
+// clock's. The watch only opens incidents on live telemetry.
+const isReplay = (incident: Incident) => incident.openedBy !== "watch" && (incident.run?.source.startsWith("scenario:") ?? false);
+
 function verdictEvent(incident: Incident): string {
   const { run, report } = incident;
   if (run?.error || incident.status === "failed") {
@@ -101,7 +106,7 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
   );
 
   if (run) {
-    add(run.startedAt, `Investigation started (${run.model})`);
+    add(run.startedAt, `Investigation started (${run.model})${isReplay(incident) ? ", replaying the recorded telemetry" : ""}`);
     add(run.finishedAt, verdictEvent(incident));
   }
 
@@ -162,12 +167,17 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
 // or the alert. Only spans whose two ends are both recorded, in order.
 export function durations(incident: Incident): Duration[] {
   const breach = firstBreach(incident);
+  // A replay's stages after the alert are timed as if it fired when the run
+  // started, not across the days since the recording.
+  const { run } = incident;
+  const lag = run && isReplay(incident) ? Math.max(0, Date.parse(run.startedAt) - Date.parse(incident.detectedAt)) : 0;
+  const later = (at: string | undefined) => at && new Date(Date.parse(at) - lag).toISOString();
   const spans: [string, string | undefined, string | undefined][] = [
     ["Time to detect", breach, incident.detectedAt],
-    ["Time to diagnose", incident.detectedAt, incident.run?.finishedAt],
-    ["Time to mitigate", incident.detectedAt, incident.mitigation?.appliedAt],
-    ["Time to recover", breach, incident.mitigation?.recovery?.recoveredAt],
-    ["Time to resolve", breach, incident.resolvedAt],
+    ["Time to diagnose", incident.detectedAt, later(run?.finishedAt)],
+    ["Time to mitigate", incident.detectedAt, later(incident.mitigation?.appliedAt)],
+    ["Time to recover", breach, later(incident.mitigation?.recovery?.recoveredAt)],
+    ["Time to resolve", breach, later(incident.resolvedAt)],
   ];
   return spans.flatMap(([label, from, to]) => {
     if (!from || !to) return [];

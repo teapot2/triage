@@ -210,7 +210,7 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
       return [...groups.values()].sort((a, b) => b.count - a.count);
     },
 
-    async queryTraces({ service, route, status, minDurationMs, limit }) {
+    async queryTraces({ service, route, status, minDurationMs, windowMinutes, limit }) {
       const candidates: SpanRecord[] = [];
       if (!service || service === "shopfront") {
         for (const r of requests) candidates.push(requestRecord(r, subtree(r), statusCode, failed));
@@ -219,6 +219,7 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
         for (const s of spans) if (s.attributes["db.system.name"] === "postgresql" && s.name.startsWith("pg.query")) candidates.push(queryRecord(s));
       }
       return candidates
+        .filter((sp) => windowMinutes === undefined || Date.parse(sp.startedAt) >= since(windowMinutes))
         .filter((sp) => !route || sp.route === route || sp.name.includes(route))
         .filter((sp) => !status || sp.status === status)
         .filter((sp) => minDurationMs === undefined || sp.durationMs >= minDurationMs)

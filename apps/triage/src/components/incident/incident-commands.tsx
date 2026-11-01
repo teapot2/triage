@@ -61,7 +61,7 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
             keywords: "question follow-up",
             pinned: true,
             run: () => {
-              section("questions")();
+              section("ask")();
               requestComposerFocus();
             },
           },

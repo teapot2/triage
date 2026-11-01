@@ -34,7 +34,7 @@ import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
 import { type Ask, QuestionsPanel } from "./questions-panel";
 import { ReopenedNotice, reopening, VerificationCard } from "./verification";
 
-type SectionId = "overview" | "fix" | "investigation" | "questions" | "postmortem";
+type SectionId = "overview" | "fix" | "investigation" | "ask" | "postmortem";
 
 interface ReportSection {
   id: SectionId;
@@ -87,7 +87,7 @@ export function IncidentReport({
   const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
   if (report) {
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
-    sections.push({ id: "questions", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
+    sections.push({ id: "ask", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
   // The postmortem, once a report names something wrong.
   const postmortem = incident.postmortem;
@@ -99,8 +99,10 @@ export function IncidentReport({
   // one: while the agent runs there's no verdict yet, so its live log.
   const searchParams = useSearchParams();
   const fallback: SectionId = running ? "investigation" : "overview";
+  // ?section=questions is Ask's old name, kept for links made before.
+  const asked = searchParams.get("section");
   const current =
-    sections.find((s) => s.id === searchParams.get("section")) ??
+    sections.find((s) => s.id === (asked === "questions" ? "ask" : asked)) ??
     sections.find((s) => s.id === fallback) ??
     sections[0];
   const setSelected = (id: SectionId) => {
@@ -221,7 +223,7 @@ export function IncidentReport({
     investigation: () => (
       <InvestigationTimeline steps={steps} thoughts={incident.thoughts} cited={cited} running={running} run={run} />
     ),
-    questions: () => <QuestionsPanel incident={incident} ask={ask} />,
+    ask: () => <QuestionsPanel incident={incident} ask={ask} />,
     postmortem: () => <PostmortemPanel incident={incident} />,
   };
 
@@ -249,7 +251,7 @@ export function IncidentReport({
                   )}
                 >
                   {(s.id === "investigation" && running) ||
-                  (s.id === "questions" && answering) ||
+                  (s.id === "ask" && answering) ||
                   (s.id === "postmortem" && postmortem?.status === "writing") ? (
                     <LoaderCircleIcon className="size-4 animate-spin" />
                   ) : (

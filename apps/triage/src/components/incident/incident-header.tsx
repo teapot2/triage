@@ -94,7 +94,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
       ? [{ id: "reopen", group: THIS_INCIDENT, label: "Reopen incident", icon: RotateCcwIcon, run: () => setReopeningOpen(true) }]
       : []),
     ...(options.verify
-      ? [{ id: "verify", group: THIS_INCIDENT, label: "Verify again", icon: ShieldCheckIcon, keywords: "check fix worked", run: () => void resolution.act("verify") }]
+      ? [{ id: "verify", group: THIS_INCIDENT, label: options.verifyLabel, icon: ShieldCheckIcon, keywords: "check fix worked", run: () => void resolution.act("verify") }]
       : []),
   ]);
   const exports = incidentExports(incident);
@@ -312,7 +312,7 @@ function ResolutionMenu({
         {options.verify && (
           <DropdownMenuItem onSelect={onVerify}>
             <ShieldCheckIcon />
-            Verify again
+            {options.verifyLabel}
           </DropdownMenuItem>
         )}
         {exports.length > 0 && (options.resolve || options.reopen || options.verify) && <DropdownMenuSeparator />}

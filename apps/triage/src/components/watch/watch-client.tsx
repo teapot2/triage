@@ -21,6 +21,15 @@ export const plural = (n: number, one: string, many: string) => `${n.toLocaleStr
 // metric name like p95, which stays as it's written.
 export const sentence = (s: string) => (/^p\d/.test(s) ? s : s.charAt(0).toUpperCase() + s.slice(1));
 
+// A form's header sentence as it's edited. While a number is invalid (its
+// field says why) the last sentence that read stays, dimmed, rather than an
+// empty line.
+export function ReadBack({ text }: { text: string | undefined }) {
+  const [last, setLast] = useState(text);
+  if (text !== undefined && text !== last) setLast(text);
+  return <span className={cn("min-h-5 transition-opacity", text === undefined && "opacity-50")}>{text ?? last}</span>;
+}
+
 export const windowLabel = (s: number) => (s < 60 ? `${s} seconds` : s === 60 ? "minute" : `${s / 60} minutes`);
 
 // The watch's state, polled, for each rule's live status. The sidebar polls

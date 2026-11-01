@@ -35,7 +35,7 @@ import {
   urlProblem,
 } from "@/lib/investigation/uptime/model";
 import { updateEndpoints, useChecks } from "./endpoint-client";
-import { plural, sentence } from "./watch-client";
+import { plural, ReadBack, sentence } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
 // The form's draft: the check's fields as typed, numbers as text so a field
@@ -251,9 +251,7 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
         current={isNew ? "New endpoint" : "Edit"}
         title={isNew ? "New endpoint" : `Edit ${base.name}`}
       >
-        {/* The check read back as it's edited; blank while a number is
-            invalid (its field says why), keeping its line so nothing jumps. */}
-        <span className="min-h-5">{unnamed && describeCheck(urlOk ? unnamed : { ...unnamed, url: "the URL" })}</span>
+        <ReadBack text={unnamed && describeCheck(urlOk ? unnamed : { ...unnamed, url: "the URL" })} />
       </WatchHeader>
 
       {full && (

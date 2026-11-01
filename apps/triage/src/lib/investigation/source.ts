@@ -88,6 +88,8 @@ export interface TelemetrySource {
     route?: string;
     status?: "ok" | "error";
     minDurationMs?: number;
+    // Spans that started in the last `windowMinutes`; unset, all that's kept.
+    windowMinutes?: number;
     limit: number;
   }): Promise<SpanRecord[]>;
   queryMetric(q: { name: string; windowMinutes: number }): Promise<MetricSeries | undefined>;
