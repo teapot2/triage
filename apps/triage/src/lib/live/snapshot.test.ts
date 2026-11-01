@@ -98,6 +98,26 @@ describe("summarize", () => {
     assert.equal(s.routes.find((r) => r.route === "/")?.limitMs, undefined);
   });
 
+  it("sums up the whole window apart from the last 30 seconds", () => {
+    const spans = [
+      request(END - 200_000, { ms: 900, status: 500 }),
+      request(END - 10_000, { ms: 20 }),
+      request(END - 9_000, { ms: 30 }),
+      request(END - 8_000, { ms: 40 }),
+    ];
+    const metrics = [used(END - 120_000, 4), used(END - 30_000, 1)];
+    const s = summarize(input({ spans, metrics }), "shopfront", "5m", NOW);
+    assert.deepEqual(s.overall, { perSecond: 0.01, p95Ms: 900, errorPercent: 25, poolPeak: 4 });
+    assert.equal(s.now.p95Ms, 40);
+    assert.equal(s.now.errorPercent, 0);
+    assert.equal(s.now.poolUsed, 1);
+  });
+
+  it("leaves the window's figures out when there's nothing to sum up", () => {
+    const s = summarize(input({}), "shopfront", "5m", NOW);
+    assert.deepEqual(s.overall, { perSecond: 0, p95Ms: undefined, errorPercent: undefined, poolPeak: undefined });
+  });
+
   it("draws the watch rules' limits only for the service they watch", () => {
     const spans = [request(END - 10_000, { route: "/api/slow", ms: 900, service: "checkout-api" })];
     const s = summarize(input({ spans }), "checkout-api", "5m", NOW);

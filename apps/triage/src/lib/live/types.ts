@@ -67,6 +67,14 @@ export interface LiveSnapshot {
     poolUsed?: number;
     poolMax?: number;
   };
+  // Over the whole window, for the chart headers, so they change with the
+  // window rather than repeating the tiles.
+  overall: {
+    perSecond: number;
+    p95Ms?: number;
+    errorPercent?: number;
+    poolPeak?: number;
+  };
   // One point per bucket across the whole window; null where there was
   // nothing to measure (no requests, no pool reading yet).
   series: {

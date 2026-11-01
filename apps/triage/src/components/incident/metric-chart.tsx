@@ -245,9 +245,12 @@ export function MetricChart({
               )
             );
           })}
-        {shaded && (
-          <ReferenceArea x1={shaded[0]} x2={shaded[1]} fill="var(--primary)" fillOpacity={0.12} stroke="var(--primary)" strokeOpacity={0.4} />
-        )}
+        {/* Neutral, so the line inside keeps its own color (a red breach
+            stays red); the edges say where the range starts and ends. */}
+        {shaded && <ReferenceArea x1={shaded[0]} x2={shaded[1]} fill="var(--foreground)" fillOpacity={0.07} />}
+        {shaded?.map((x, i) => (
+          <ReferenceLine key={i} x={x} stroke="var(--foreground)" strokeOpacity={0.4} />
+        ))}
         <Area
           dataKey="value"
           type="monotone"

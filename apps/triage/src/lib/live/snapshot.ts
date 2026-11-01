@@ -160,6 +160,12 @@ export function summarize(input: SnapshotInput, service: string, window: LiveWin
       poolUsed: used.at(-1)?.value,
       poolMax,
     },
+    overall: {
+      perSecond: round(charted.length / (windowMs / 1000), 2),
+      p95Ms: charted.length ? Math.round(p95(charted.map((r) => r.durationMs))) : undefined,
+      errorPercent: charted.length ? round((charted.filter((r) => r.failed).length / charted.length) * 100) : undefined,
+      poolPeak: poolUsed.some((p) => p.value !== null) ? Math.max(...poolUsed.map((p) => p.value ?? 0)) : undefined,
+    },
     series: { perSecond, p95Ms, errorPercent, poolUsed, poolWaiting },
     limits: {
       // The API rule's limit: the chart is every route's p95 together, so
