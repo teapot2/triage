@@ -28,7 +28,7 @@ Watch also checks public URLs from the outside, so a site with no SDK or telemet
 
 ## Mitigate first
 
-After a root-cause verdict, Triage proposes one mitigation from the evidence the diagnosis cites: turn off the cited feature flag, or roll back the cited deploy (proposed only: Shopfront has no deploy pipeline to run it against). Once a person approves it, Triage applies it through Shopfront's ops API (on in development; `OPS_ENABLED=1` in a production build; `SHOPFRONT_URL` if the store runs elsewhere) and re-reads the alert's metric until it recovers. Turning the flag off stops new leaks but frees none of the pooled connections the leak already holds, so the flag-off also recycles them. The tested patch still follows as the permanent fix.
+After a root-cause verdict, Triage proposes one mitigation from the evidence the diagnosis cites: turn off the cited feature flag, or roll back the cited deploy (proposed only: Shopfront has no deploy pipeline to run it against). Once a person approves it, Triage applies it through Shopfront's ops API (on in development; `OPS_ENABLED=1` in a production build; `SHOPFRONT_URL` if the store runs elsewhere) and re-reads the alert's metric until it recovers. When the diagnosis cites a connection pool well above its usual level, as Shopfront's pool leak does, turning the flag off stops new leaks but frees none of the connections already held, so the flag-off also recycles them; other flag-offs (the price list gap, the live ratings loop) are the flag alone. The tested patch still follows as the permanent fix.
 
 ## Verify
 

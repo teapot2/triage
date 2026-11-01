@@ -1,0 +1,42 @@
+import { count, inArray } from "drizzle-orm";
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { db, pool, queriesIssued, rowsFetched } from "@/db/client";
+import { products, reviews } from "@/db/schema";
+import { setFlag } from "@/lib/flags";
+import { getListingRatings } from "@/lib/ratings";
+
+beforeAll(() => {
+  setFlag("FF_LIVE_RATINGS", true);
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+it("rates every listed product with one query, a row per product", async () => {
+  // A listing of the whole catalog, as GET /api/products shows it.
+  const ids = (await db.select({ id: products.id }).from(products)).map((p) => p.id);
+  expect(ids.length).toBeGreaterThan(1);
+
+  const queriesBefore = queriesIssued();
+  const rowsBefore = rowsFetched();
+  const ratings = await getListingRatings(ids);
+  expect(queriesIssued() - queriesBefore, `queries to rate ${ids.length} products`).toBe(1);
+  // At most one row back per product: the work is done where the reviews
+  // are, not by fetching them.
+  expect(rowsFetched() - rowsBefore, `rows fetched to rate ${ids.length} products`).toBeLessThanOrEqual(ids.length);
+
+  // And the ratings are each product's own reviews.
+  const counts = await db
+    .select({ productId: reviews.productId, n: count() })
+    .from(reviews)
+    .where(inArray(reviews.productId, ids))
+    .groupBy(reviews.productId);
+  expect(counts.length).toBeGreaterThan(0);
+  for (const { productId, n } of counts) {
+    const rating = ratings.get(productId);
+    expect(rating?.reviewCount, `review count of product ${productId}`).toBe(n);
+    expect(rating!.ratingTenths).toBeGreaterThanOrEqual(10);
+    expect(rating!.ratingTenths).toBeLessThanOrEqual(50);
+  }
+});

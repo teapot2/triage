@@ -121,3 +121,54 @@ describe("price-gap scenario", () => {
     assert.ok(p95!.points.every((p) => p.value < 500));
   });
 });
+
+describe("live-ratings scenario", () => {
+  const s = getScenario("live-ratings")!;
+  const source = createScenarioSource(s);
+
+  it("is offered in the investigation menu", () => {
+    assert.ok(investigationOptions.some((o) => o.id === "live-ratings" && o.label === "Live ratings"));
+  });
+
+  it("fires its alert: the last point is over the threshold, the minutes before the flag mostly under", async () => {
+    const alert = await source.queryMetric({ name: s.alert.metric, windowMinutes: 45 });
+    assert.ok(alert && alert.points.length > 0);
+    assert.ok(alert.points.at(-1)!.value > s.alert.threshold);
+    const over = alert.points.slice(0, -1).filter((p) => p.value > s.alert.threshold);
+    assert.ok(over.length <= 2, `${over.length} earlier minutes over the threshold`);
+  });
+
+  it("recovers right after the flag goes off", () => {
+    assert.ok(s.recovery!.length > 0);
+    assert.ok(s.recovery![0].value < s.alert.threshold);
+  });
+
+  it("shows a query per product on the slow listings, two before the flag", async () => {
+    const spans = (await source.queryTraces({ service: "shopfront", route: "/api/products", limit: 50 })).filter(
+      (sp) => sp.route === "/api/products",
+    );
+    const slow = spans.filter((sp) => sp.durationMs > s.alert.threshold);
+    assert.ok(slow.length > 0 && slow.every((sp) => sp.attributes["db.queries"] === 16));
+    assert.ok(spans.some((sp) => sp.durationMs < 100 && sp.attributes["db.queries"] === 2));
+    const reviews = await source.queryTraces({ service: "postgres", route: "reviews", limit: 50 });
+    assert.equal(reviews.length, 15);
+  });
+
+  it("serves the code and history the diagnosis needs", async () => {
+    const ratings = await source.readSource("src/lib/ratings.ts");
+    assert.match(ratings!.content, /isEnabled\("FF_LIVE_RATINGS"\)/);
+    assert.match(ratings!.content, /for \(const id of productIds\)/);
+    const schema = await source.readSource("src/db/schema.ts");
+    assert.match(schema!.content, /reviews_product_id_idx/);
+    const [flag] = await source.deployHistory({ sinceMinutes: 5 });
+    assert.equal(flag.sha, "config:FF_LIVE_RATINGS");
+    assert.equal(flag.message, "ops: FF_LIVE_RATINGS turned on");
+  });
+
+  it("keeps the pool and errors at baseline", async () => {
+    const used = await source.queryMetric({ name: "db.client.connection.count{state=used}", windowMinutes: 45 });
+    assert.ok(used!.points.every((p) => p.value <= 2));
+    const errors = await source.queryMetric({ name: "http.server.error_ratio", windowMinutes: 45 });
+    assert.ok(errors!.points.every((p) => p.value === 0));
+  });
+});

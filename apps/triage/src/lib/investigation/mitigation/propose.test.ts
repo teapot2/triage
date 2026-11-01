@@ -147,4 +147,23 @@ describe("proposeMitigation", () => {
     assert.match(withPool?.steps[1] ?? "", /^Recycle pooled connections/);
     assert.deepEqual(withPool?.why.evidenceIds, ["ev_commit_1", "ev_metric_1"]);
   });
+
+  it("doesn't recycle for database diagnostics or a pool at its usual level", () => {
+    const activity: Evidence = {
+      id: "ev_db_1",
+      kind: "db",
+      tool: "db_diagnostics",
+      summary: "2 connections, both idle",
+      query: "SELECT pid, state FROM pg_stat_activity",
+      rows: [
+        { pid: 61204, state: "idle" },
+        { pid: 61211, state: "idle" },
+      ],
+    };
+    const normalPool: Evidence = { ...pool, id: "ev_metric_3", summary: "Pool at 1 of 10", baseline: 1, observed: 2 };
+    const m = propose([latency, flagOn, activity, normalPool]);
+    assert.deepEqual(m?.steps, ["Turn off FF_STOCK_DIRECT_QUERY on shopfront"]);
+    assert.deepEqual(m?.why.evidenceIds, ["ev_commit_1"]);
+    assert.doesNotMatch(m?.why.text ?? "", /pool|leak|connection/i);
+  });
 });

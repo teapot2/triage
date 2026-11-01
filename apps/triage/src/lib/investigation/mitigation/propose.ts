@@ -7,9 +7,15 @@ const flagCheck = /isEnabled\(\s*["'`](FF_[A-Z0-9_]+)["'`]\s*\)/;
 const isDeploy = (e: Evidence): e is Commit => e.kind === "commit" && e.tool === "deploy_history";
 const isConfig = (e: Commit) => e.sha.startsWith("config:");
 // Connections still checked out: turning the flag off stops new leaks but
-// frees none of these, so the flag-off also recycles them.
+// frees none of these, so the flag-off also recycles them. Only a pool
+// metric well above its baseline shows connections being held; database
+// diagnostics, or a pool metric at its usual level, cite the database
+// without saying the pool is full.
 const isPoolEvidence = (e: Evidence) =>
-  e.kind === "db" || (e.kind === "metric" && e.metric.startsWith("db.client.connection"));
+  e.kind === "metric" &&
+  e.metric.startsWith("db.client.connection") &&
+  e.observed >= 2 * e.baseline &&
+  e.observed >= 5;
 
 const recycleStep = "Recycle pooled connections held longer than 5 s (what a restart would do)";
 

@@ -502,8 +502,13 @@ const dbQueries: Record<DbCheck, string> = {
     "SELECT pid, application_name, state, to_char(now() - state_change, 'HH24:MI:SS') AS in_state_for, left(query, 60) AS last_query FROM pg_stat_activity WHERE datname = 'shopfront' AND pid <> pg_backend_pid() ORDER BY state_change",
   locks:
     "SELECT pid, pg_blocking_pids(pid)::text AS blocked_by, left(query, 60) AS query FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0",
+  // Only this database's statements: the sandbox proves fixes in throwaway
+  // copies on the same server, and their test queries would otherwise crowd
+  // the app's own out of the top five. One-off statements (a seed, the
+  // sandbox's database copies) can't be what slows a route either, so the
+  // list keeps to statements run at least ten times.
   slow_queries:
-    "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
+    "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND query NOT LIKE '%pg_stat_statements%' AND query NOT ILIKE 'CREATE DATABASE%' AND query NOT ILIKE 'DROP DATABASE%' AND calls >= 10 ORDER BY total_exec_time DESC LIMIT 5",
 };
 
 // Its own connection, not the app's pool: it has to work while the app's

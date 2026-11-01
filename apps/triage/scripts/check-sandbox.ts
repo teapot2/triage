@@ -93,6 +93,44 @@ const cases = async (): Promise<{ label: string; test: RegressionTest; edits: Ed
       },
     ],
   },
+  {
+    label: "live ratings loop",
+    test: {
+      file: "src/lib/ratings.test.ts",
+      name: "rates every listed product with one query, a row per product",
+      content: await reference("reference-ratings.test.ts.txt"),
+    },
+    edits: [
+      {
+        file: "src/lib/ratings.ts",
+        find: `import { eq, inArray } from "drizzle-orm";`,
+        replace: `import { avg, count, inArray } from "drizzle-orm";`,
+      },
+      {
+        file: "src/lib/ratings.ts",
+        find: `  for (const id of productIds) {
+    const rows = await db.select({ rating: reviews.rating }).from(reviews).where(eq(reviews.productId, id));
+    const total = rows.reduce((sum, r) => sum + r.rating, 0);
+    ratings.set(id, {
+      ratingTenths: rows.length ? Math.round((total / rows.length) * 10) : 0,
+      reviewCount: rows.length,
+    });
+  }
+  return ratings;`,
+        replace: `  // One query for all the listed products, averaged and counted in the
+  // database.
+  const rows = await db
+    .select({ productId: reviews.productId, average: avg(reviews.rating), reviewCount: count() })
+    .from(reviews)
+    .where(inArray(reviews.productId, productIds))
+    .groupBy(reviews.productId);
+  for (const { productId, average, reviewCount } of rows) {
+    ratings.set(productId, { ratingTenths: Math.round(Number(average) * 10), reviewCount });
+  }
+  return ratings;`,
+      },
+    ],
+  },
 ];
 
 // What a test could have changed in the real database: every table's rows
