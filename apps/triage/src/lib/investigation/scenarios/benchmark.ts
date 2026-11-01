@@ -1,4 +1,4 @@
-import { modelLabel } from "../../models/labels";
+import { fanoutLabel, modelLabel } from "../../models/labels";
 import { formatCost, incidentUsage } from "../cost";
 import type { Incident } from "../schema";
 import { grade } from "./grade";
@@ -26,12 +26,29 @@ export interface BenchmarkResult {
   cost?: number;
 }
 
+// A model spec's lanes and lead: "spark+wonder" is a fan-out, Spark checking
+// the hypotheses Wonder proposes and merges; "spark" alone, the single agent.
+export function splitModelSpec(spec: string): { lanes: string; lead?: string } {
+  const [lanes, lead, ...rest] = spec.split("+").map((s) => s.trim());
+  if (!lanes || lead === "" || rest.length) throw new Error(`"${spec}": expected a model, or <lanes>+<lead>`);
+  return { lanes, lead };
+}
+
+// The run's model, or for a fan-out both its models, so a report rebuilt
+// from saved runs labels them the same.
+function runLabel(run: NonNullable<Incident["run"]>): string {
+  const lanes = { model: run.model, provider: run.provider, effort: run.reasoningEffort };
+  const f = run.fanout;
+  if (!f) return modelLabel(lanes.model, lanes.provider, lanes.effort);
+  return fanoutLabel(lanes, { model: f.leadModel, provider: f.leadProvider, effort: f.leadReasoningEffort });
+}
+
 export function scoreRun(incident: Incident, scenario: string, expected: Expected): BenchmarkResult {
   const run = incident.run;
   const base = {
     scenario,
     control: expected.verdict === "no_root_cause",
-    model: run ? modelLabel(run.model, run.provider, run.reasoningEffort) : "unknown",
+    model: run ? runLabel(run) : "unknown",
     incidentId: incident.id,
     seconds:
       run?.finishedAt && incident.report ? (Date.parse(run.finishedAt) - Date.parse(run.startedAt)) / 1000 : undefined,

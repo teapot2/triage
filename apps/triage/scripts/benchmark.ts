@@ -14,6 +14,12 @@
 //     the Investigate stage's effort in Settings). --concurrency sets how
 //     many run at once.
 //
+//   pnpm --filter @triage/web benchmark --models spark,spark+wonder,glimmer+wonder@max
+//     <lanes>+<lead> runs the hypothesis fan-out: the lead model proposes
+//     and merges, the lanes' model checks each hypothesis. Each side is a
+//     model as above (the lead's effort defaults to the Lead stage's). A
+//     plain model runs the single agent, whatever Settings says.
+//
 //   pnpm --filter @triage/web benchmark --report .data/benchmarks/<stamp>
 //     Rebuilds a benchmark's report from the runs it finished, graded
 //     again, say after stopping it partway or changing a scenario's
@@ -28,7 +34,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { runInvestigation, scenarioIncident } from "../src/lib/investigation/agent";
 import { type Scenario, createScenarioSource, getScenario, scenarios } from "../src/lib/investigation/scenarios";
-import { type BenchmarkResult, benchmarkMarkdown, scoreRun } from "../src/lib/investigation/scenarios/benchmark";
+import { type BenchmarkResult, benchmarkMarkdown, scoreRun, splitModelSpec } from "../src/lib/investigation/scenarios/benchmark";
 import { formatCost } from "../src/lib/investigation/cost";
 import { incidentSchema } from "../src/lib/investigation/schema";
 import { providerIdSchema, providers } from "../src/lib/models/providers";
@@ -57,6 +63,19 @@ async function parseModel(spec: string, defaultEffort: Stage["effort"]): Promise
   const problem = stageProblem(stage);
   if (problem) throw new Error(`${spec}: ${problem}`);
   return stage;
+}
+
+// A model spec: one model for the single agent, or <lanes>+<lead> for a
+// fan-out.
+async function parseSpec(
+  spec: string,
+  efforts: { lanes: Stage["effort"]; lead: Stage["effort"] },
+): Promise<{ stage: Stage; lead?: Stage }> {
+  const { lanes, lead } = splitModelSpec(spec);
+  return {
+    stage: await parseModel(lanes, efforts.lanes),
+    lead: lead === undefined ? undefined : await parseModel(lead, efforts.lead),
+  };
 }
 
 // Runs `jobs` with at most `limit` at once, in order.
@@ -128,8 +147,8 @@ async function main() {
     if (!s?.expected) throw new Error(`"${id}": no scenario with ground truth by that id (${scenarios.map((x) => x.id).join(", ")})`);
     return s;
   });
-  const { effort } = await stageModel("investigate");
-  const models = await Promise.all(values.models.split(",").map((m) => parseModel(m.trim(), effort)));
+  const efforts = { lanes: (await stageModel("investigate")).effort, lead: (await stageModel("lead")).effort };
+  const models = await Promise.all(values.models.split(",").map((m) => parseSpec(m.trim(), efforts)));
 
   const started = new Date();
   const dir = path.join(process.cwd(), ".data", "benchmarks", started.toISOString().replace(/[:.]/g, "-").slice(0, 19));
@@ -138,16 +157,18 @@ async function main() {
   // Round by round, so a benchmark stopped partway still has every
   // scenario and model about equally often.
   const jobs = Array.from({ length: runs }, (_, round) =>
-    picked.flatMap((scenario) => models.map((stage) => ({ round, scenario, stage }))),
+    picked.flatMap((scenario) => models.map((m) => ({ round, scenario, ...m }))),
   ).flat();
   console.log(`Benchmark: ${jobs.length} runs (${runs} × ${picked.length} scenarios × ${models.length} models), ${concurrency} at a time.`);
   console.log(`Writing to ${path.relative(process.cwd(), dir)}\n`);
 
   let done = 0;
   const results = await pool(
-    jobs.map(({ scenario, stage }) => async () => {
+    jobs.map(({ scenario, stage, lead }) => async () => {
       const incident = await runInvestigation(await scenarioIncident(scenario), createScenarioSource(scenario), {
         stage,
+        // Explicit either way, so Settings' fan-out switch never applies.
+        fanout: lead ? { lead } : false,
         // Saved once, below, instead of after every step.
         save: async () => {},
       });

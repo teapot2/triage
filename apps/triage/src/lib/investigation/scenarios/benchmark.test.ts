@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "../fixtures";
-import type { Incident } from "../schema";
-import { type BenchmarkResult, benchmarkMarkdown, formatRate, median, scoreRun, summarize, wilson } from "./benchmark";
+import type { Fanout, Incident } from "../schema";
+import {
+  type BenchmarkResult,
+  benchmarkMarkdown,
+  formatRate,
+  median,
+  scoreRun,
+  splitModelSpec,
+  summarize,
+  wilson,
+} from "./benchmark";
 import { healthy } from "./healthy";
 import { poolLeak } from "./pool-leak";
 
@@ -44,6 +53,62 @@ describe("scoreRun", () => {
     };
     const r = scoreRun(failed, "pool-leak", poolLeak.expected!);
     assert.deepEqual([r.verdict, r.hit, r.reasons, r.seconds], ["failed", false, ["No accepted report after 30 model steps"], undefined]);
+  });
+});
+
+describe("fan-out runs", () => {
+  const fanout: Fanout = {
+    leadProvider: "meta",
+    leadModel: "muse-wonder-1.0",
+    leadReasoningEffort: "high",
+    hypotheses: [],
+    inputTokens: 50_000,
+    cachedInputTokens: 10_000,
+    outputTokens: 1_000,
+    reasoningTokens: 0,
+  };
+  const fanoutRun: Incident = {
+    ...poolLeakRun,
+    run: {
+      ...poolLeakRun.run!,
+      provider: "meta",
+      model: "muse-spark-1.3",
+      reasoningEffort: "high",
+      inputTokens: 100_000,
+      cachedInputTokens: 60_000,
+      outputTokens: 2_000,
+      reasoningTokens: 0,
+      fanout,
+    },
+    questions: [],
+    postmortem: undefined,
+    fixAttempts: [],
+    fixRun: undefined,
+  };
+
+  it("labels a fan-out by both its models, and prices the lead at its own rates", () => {
+    const r = scoreRun(fanoutRun, "pool-leak", poolLeak.expected!);
+    assert.equal(r.model, "muse-spark-1.3 lanes, muse-wonder-1.0 lead (Meta Model API, high effort)");
+    // $0.0675 for the Spark lanes and $0.182 for the Wonder lead.
+    assert.equal(r.cost?.toFixed(4), "0.2495");
+  });
+
+  it("names each side's provider and effort when they differ", () => {
+    const run = { ...fanoutRun.run!, provider: "openrouter", model: "muse-glimmer-30b", reasoningEffort: undefined };
+    const r = scoreRun({ ...fanoutRun, run }, "pool-leak", poolLeak.expected!);
+    assert.equal(r.model, "muse-glimmer-30b lanes (OpenRouter), muse-wonder-1.0 lead (Meta Model API, high effort)");
+    // Glimmer on OpenRouter has no price, so neither has the run.
+    assert.equal(r.cost, undefined);
+  });
+
+  it("splits a model spec into lanes and lead", () => {
+    assert.deepEqual(splitModelSpec("spark"), { lanes: "spark", lead: undefined });
+    assert.deepEqual(splitModelSpec("spark@low+wonder@max"), { lanes: "spark@low", lead: "wonder@max" });
+    assert.deepEqual(splitModelSpec("openrouter:meta/muse-glimmer-30b+wonder"), {
+      lanes: "openrouter:meta/muse-glimmer-30b",
+      lead: "wonder",
+    });
+    for (const bad of ["spark+", "+wonder", "spark+wonder+glimmer"]) assert.throws(() => splitModelSpec(bad), /<lanes>\+<lead>/);
   });
 });
 
