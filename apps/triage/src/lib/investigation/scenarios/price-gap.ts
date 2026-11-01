@@ -373,7 +373,8 @@ export const priceGap: Scenario = {
     verdict: "root_cause",
     rootCauseFiles: ["src/lib/prices.ts"],
     mustMention: [
-      ["product_prices", "productPrices"],
+      // The table by name, or its row in words ("the price row is missing").
+      ["product_prices", "productPrices", "price row", "price list row", "price-list row", "list price row"],
       ["stock", "join"],
       ["missing", "no row", "no price row", "no matching row", "absent", "without a", "does not exist", "doesn't exist", "not exist"],
     ],

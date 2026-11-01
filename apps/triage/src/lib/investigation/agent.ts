@@ -2,7 +2,7 @@ import { type ModelMessage, ToolLoopAgent } from "ai";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, reasoningKind, wakeProvider } from "../models/client";
 import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
-import { stageModel, stageProblem } from "../models/settings";
+import { type Endpoint, type StageModel, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
 import { addUsage, noTokens } from "../models/usage";
 import { runFixStage } from "./fix/agent";
@@ -71,10 +71,18 @@ function focusLine(focus: Incident["trigger"]["focus"]): string {
 }
 
 export async function createScenarioIncident(scenario: Scenario): Promise<Incident> {
+  const incident = await scenarioIncident(scenario);
+  await saveIncident(incident);
+  return incident;
+}
+
+// The scenario's incident, not saved: the benchmark keeps its runs out of
+// the incident list.
+export async function scenarioIncident(scenario: Scenario): Promise<Incident> {
   const source = createScenarioSource(scenario);
   const alert = await source.queryMetric({ name: scenario.alert.metric, windowMinutes: 30 });
   if (!alert) throw new Error(`scenario ${scenario.id} has no series for ${scenario.alert.metric}`);
-  return saveNewIncident(source, alert, {
+  return newIncident(source, alert, {
     title: scenario.alert.title,
     service: scenario.alert.service,
     severity: scenario.alert.severity,
@@ -178,25 +186,29 @@ export async function createRuleIncident(
   });
 }
 
+type NewIncident = {
+  title: string;
+  service: string;
+  severity: Incident["severity"];
+  threshold: number;
+  // The latest point of the series unless given.
+  observed?: number;
+  openedBy?: Incident["openedBy"];
+  rule?: Incident["trigger"]["rule"];
+  route?: string;
+  focus?: Incident["trigger"]["focus"];
+  uptime?: Incident["uptime"];
+};
+
 // Saves a new incident charting `alert`, ready for runInvestigation. Shared
 // by every way one opens, uptime/incident.ts included.
-export async function saveNewIncident(
-  source: TelemetrySource,
-  alert: MetricSeries,
-  a: {
-    title: string;
-    service: string;
-    severity: Incident["severity"];
-    threshold: number;
-    // The latest point of the series unless given.
-    observed?: number;
-    openedBy?: Incident["openedBy"];
-    rule?: Incident["trigger"]["rule"];
-    route?: string;
-    focus?: Incident["trigger"]["focus"];
-    uptime?: Incident["uptime"];
-  },
-): Promise<Incident> {
+export async function saveNewIncident(source: TelemetrySource, alert: MetricSeries, a: NewIncident): Promise<Incident> {
+  const incident = await newIncident(source, alert, a);
+  await saveIncident(incident);
+  return incident;
+}
+
+async function newIncident(source: TelemetrySource, alert: MetricSeries, a: NewIncident): Promise<Incident> {
   const stage = await stageModel("investigate");
   const incident: Incident = {
     id: `inc_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`,
@@ -227,7 +239,6 @@ export async function saveNewIncident(
     },
     uptime: a.uptime,
   };
-  await saveIncident(incident);
   return incident;
 }
 
@@ -257,17 +268,23 @@ export function recordThoughts(recorder: ThoughtRecorder, kind: Thought["reasoni
   };
 }
 
+// `stage` and `save` are for the benchmark: a model other than Settings'
+// one, and somewhere other than the incident store.
 export async function runInvestigation(
   incident: Incident,
   source: TelemetrySource,
-  opts: { appDir?: string } = {},
+  opts: {
+    appDir?: string;
+    stage?: Required<StageModel> & Endpoint;
+    save?: (incident: Incident) => Promise<void>;
+  } = {},
 ): Promise<Incident> {
-  const recorder = new InvestigationRecorder(incident, saveIncident);
+  const recorder = new InvestigationRecorder(incident, opts.save ?? saveIncident);
   const tools = createInvestigationTools(source, recorder);
 
   // The investigate stage's model as configured in Settings now, recorded
   // on the run. A stage that can't run (no key, no URL) fails the run.
-  const stage = await stageModel("investigate");
+  const stage = opts.stage ?? (await stageModel("investigate"));
   recorder.update({
     run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) },
   });

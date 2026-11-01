@@ -283,7 +283,9 @@ export const poolLeak: Scenario = {
   expected: {
     verdict: "root_cause",
     rootCauseFiles: ["src/lib/stock.ts"],
-    mustMention: [["release"], ["pool", "connection"]],
+    // A connection never given back, however it's put: "doesn't release",
+    // "leaks a connection".
+    mustMention: [["release", "leak", "never returned", "not returned"], ["pool", "connection"]],
     mitigation: { kind: "flag_off", target: "FF_STOCK_DIRECT_QUERY" },
   },
 };

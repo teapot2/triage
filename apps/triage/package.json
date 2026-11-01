@@ -11,7 +11,8 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "check:blind": "tsx scripts/check-blind.ts",
     "check:sandbox": "tsx scripts/check-sandbox.ts",
-    "check:uptime": "tsx --env-file-if-exists=.env.local scripts/check-uptime.ts"
+    "check:uptime": "tsx --env-file-if-exists=.env.local scripts/check-uptime.ts",
+    "benchmark": "tsx --env-file-if-exists=.env.local scripts/benchmark.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.99",
