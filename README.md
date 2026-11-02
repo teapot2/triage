@@ -44,6 +44,21 @@ Questions can also be spoken. With **Voice input** on in **Settings → Speech**
 
 Once an incident has a finished report, Triage writes a blameless postmortem from the incident's record on request, by default with a summary, impact, timeline, contributing factors, what went well, where we got lucky and action items, each claim citing the evidence behind it. It shows in the incident page's **Postmortem** section and can be copied or downloaded as Markdown. The sections are a template the team edits in **Settings → Postmortems**: reorder or remove the built-in ones and add its own, and the model writes only the sections the template keeps. Each postmortem keeps the template it was written with. The model is the **Postmortem** stage in Settings → Models, which uses Ask's model until it is changed; see `apps/triage/README.md`.
 
+## Use Triage from Muse Code
+
+Triage is an MCP server too, so Meta's Muse Code (or any MCP client) can ask it about incidents from the terminal: "summarize incident inc_pool_leak with its evidence" returns Triage's cited report, with a line per evidence item, and the agent can pull the proven patch, the evidence in full or the postmortem, or ask a follow-up question that is saved on the incident. Add it to `~/.config/muse/settings.json`:
+
+```json
+{
+  "schema_version": 1,
+  "mcpServers": {
+    "triage": { "transport": "streamable_http", "url": "http://localhost:3000/api/mcp", "mode": "optional" }
+  }
+}
+```
+
+The tools only read, apart from saving a question; approvals stay on the incident page. See `apps/triage/README.md` for the tools and access.
+
 ## Models and providers
 
 Each stage that calls a model (**Investigate**, **Fix**, **Ask** and **Postmortem**, plus **Lead** when hypotheses are checked in parallel) has its own provider and model, chosen in Triage's **Settings → Models**. Every provider is an OpenAI-compatible endpoint:

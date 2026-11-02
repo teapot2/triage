@@ -17,6 +17,7 @@
   "dependencies": {
     "@ai-sdk/openai": "4.0.99",
     "@ai-sdk/openai-compatible": "3.0.75",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "ai": "7.0.148",
     "ansi-to-react": "^6.2.6",
     "class-variance-authority": "^0.7.1",

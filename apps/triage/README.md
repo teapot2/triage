@@ -30,6 +30,7 @@ pnpm benchmark      # root cause found rate, control false positives, median tim
 - `GET /api/health` returns each stage's provider, model and any problem, the Lead's included, and whether investigations fan out (`{ ok, fanout, stages }`), without calling a model.
 - `GET /api/ping-model?stage=<id>` (or `?provider=<id>&model=<id>`) calls that model once and returns `{ ok, text, usage }`.
 - `GET`/`PUT /api/settings/models` read and change each stage's model and the local/custom endpoints (keys are write-only). `GET /api/settings/models/list?provider=<id>` lists a provider's chat models.
+- `POST`/`GET`/`DELETE /api/mcp` is Triage's MCP server (see MCP server).
 - `POST /api/investigations` with `{ "scenario": "pool-leak" | "price-gap" | "live-ratings" | "healthy" }` starts an investigation and returns `{ id }` (202). The agent runs after the response and saves progress to `.data/incidents/<id>.json` (gitignored); open `/incidents/<id>` to watch it.
 
 ## Watch (Stage 1)
@@ -88,6 +89,33 @@ Once an incident has a report, its **Ask** section (also "Ask Triage" in the com
 - **Keyword biasing:** the session opens with the incident's service, route and host names as Meta's `keywords`, so "shopfront" stops coming out "shop front". They are sent as the words a person says (`/api/products/[id]` → "products", `www.portionary.app` → "portionary"), since Meta drops punctuation from keywords and `portionary.app` then came out "portionaryapp". `src/lib/speech/keywords.ts` builds them from the alert, the focus, HTTP spans, metric evidence and span hosts (at most 20); Meta fixes them for the whole session, so each dictation opens its own.
 - **Read aloud:** the speaker button under each answer reads it with the browser's own voices (the Web Speech API: no server, no key, nothing leaves the browser). Citations and markdown marks are dropped before reading, so the voice says the prose, not `[ev_…]`. One answer plays at a time across the app: pressing another speaker, or the same one again, stops it. The voice and speed are chosen in Settings → Speech (per browser, saved in `localStorage`, with a preview); the button is hidden in a browser without speech synthesis.
 - **Limits:** one question answering per incident at a time (a second gets 409), 500 characters per question, 10 model steps per answer with one nudge if it stops without text, and the request's 120 s limit. Every tool is read-only; an answer can point at the mitigation or fix cards but never acts.
+
+## MCP server
+
+Triage is also an MCP server, so a coding agent can read its incidents from the terminal: `/api/mcp`, Streamable HTTP, stateless (`src/app/api/mcp/route.ts`, tools in `src/lib/mcp/server.ts`). In Muse Code, add it to `~/.config/muse/settings.json` and run `/mcp` in a new session to check it loaded:
+
+```json
+{
+  "schema_version": 1,
+  "mcpServers": {
+    "triage": { "transport": "streamable_http", "url": "http://localhost:3000/api/mcp", "mode": "optional" }
+  }
+}
+```
+
+`"mode": "optional"` lets Muse Code start with a warning when Triage isn't running. Any MCP client that speaks Streamable HTTP works the same way (Claude Code: `claude mcp add --transport http triage http://localhost:3000/api/mcp`).
+
+| Tool | What it returns |
+|---|---|
+| `list_incidents` | Incidents newest first, filtered by `status` (open, resolved, all) and `service`, with a one-line headline each |
+| `get_incident` | The cited report: summary, verdict and causal chain with `[ev_…]` citations, the hypotheses ruled out and why, the alert, mitigation, fix, resolution, and one line per cited evidence item. `id` can be `"latest"` |
+| `get_evidence` | Evidence in full by `ids` or `kind` (the report's citations by default, at most 20), each with the tool call that found it; series cut to 24 points, code to 80 lines, rows to 20 |
+| `get_fix` | The fix's summary, risk, data change, regression test, sandbox runs and the patch as a unified diff; `attempt` picks an earlier, denied one |
+| `get_postmortem` | The postmortem as Markdown (`postmortemMarkdown`), once written on the page |
+| `ask_incident` | Asks a follow-up question, answered like the page's Ask (same stage, limits and tools, up to about two minutes) with progress per tool call; the question is saved on the incident with `via: "mcp"` and the page marks it "From a coding agent" |
+
+- **Read-only:** every tool but `ask_incident` only reads, and none changes the system: approving a mitigation or a fix stays on the incident's page, with a person. Commit authors are never shown.
+- **Access:** without `TRIAGE_MCP_TOKEN` it answers only on a loopback host, and refuses a browser `Origin` that isn't one (DNS rebinding). With it set (a hosted Triage), every request needs `Authorization: Bearer <token>`: add `"headers": { "Authorization": "Bearer …" }` to the Muse Code entry. Links in answers use `TRIAGE_URL` when set, else the request's origin.
 
 ## Postmortem
 

@@ -109,11 +109,13 @@ export interface AnswerStream {
 }
 
 // Tests: a model other than Settings' one, and a scripted model to call.
-type TestModel = { stage?: Stage; languageModel?: LanguageModel };
+// `onToolCall` hears each tool the model calls, by name, as it calls it
+// (the MCP server reports them as progress).
+type AnswerOptions = { stage?: Stage; languageModel?: LanguageModel; onToolCall?: (tool: string) => void };
 
 // Answers a question already appended to the incident (status answering).
 // Never rejects: failures land on the question as status failed.
-export async function answerQuestion(incident: Incident, question: Question, opts: TestModel = {}): Promise<AnswerStream> {
+export async function answerQuestion(incident: Incident, question: Question, opts: AnswerOptions = {}): Promise<AnswerStream> {
   const recorder = new QuestionRecorder(structuredClone(question), incident.id, incident.service);
   let done: Promise<void> = Promise.resolve();
   const stream = createUIMessageStream({
@@ -129,7 +131,7 @@ async function answer(
   incident: Incident,
   recorder: QuestionRecorder,
   writer: UIMessageStreamWriter,
-  opts: TestModel,
+  opts: AnswerOptions,
 ): Promise<void> {
   // An error the stream already carried to the tab, so it isn't sent twice.
   let streamed = false;
@@ -242,6 +244,7 @@ async function answer(
           if (chunk.type === "text-delta") recorder.appendAnswer(chunk.delta);
           else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
             stepToolCalls = madeToolCalls = true;
+            if (chunk.type === "tool-input-available") opts.onToolCall?.(chunk.toolName);
           } else if (chunk.type === "finish-step") {
             // Text written alongside tool calls is the model thinking aloud
             // (kept as a thought), not the answer.

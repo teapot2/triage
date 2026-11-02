@@ -447,6 +447,9 @@ export const questionSchema = z.object({
       bytes: z.number().int(),
     })
     .optional(),
+  // Asked from a coding agent through Triage's MCP server (lib/mcp), not
+  // from the incident's page. Missing on questions asked on the page.
+  via: z.enum(["mcp"]).optional(),
   askedAt: timestamp,
   answeredAt: timestamp.optional().describe("Set on finish or failure"),
   status: z.enum(["answering", "answered", "failed"]),

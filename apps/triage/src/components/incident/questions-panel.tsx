@@ -22,6 +22,7 @@ import {
   PencilIcon,
   RotateCcwIcon,
   ScanSearchIcon,
+  SquareTerminalIcon,
   TimerIcon,
   XIcon,
 } from "lucide-react";
@@ -445,6 +446,8 @@ interface QuestionView {
   // The attached screenshot: this tab's copy while it streams, then the
   // server's.
   image?: { url: string; width: number; height: number };
+  // Asked by a coding agent through Triage's MCP server, not on this page.
+  via?: Question["via"];
   askedAt: string;
   status: Question["status"];
   answer: string;
@@ -472,6 +475,7 @@ function savedView(q: Question, key: string, incidentId: string): QuestionView {
       width: q.image.width,
       height: q.image.height,
     },
+    via: q.via,
     askedAt: q.askedAt,
     status: q.status,
     answer: q.answer,
@@ -935,6 +939,12 @@ function ChatTurn({
         <p className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-sm leading-relaxed">
           {view.text}
         </p>
+        {view.via === "mcp" && (
+          <span className="flex items-center gap-1 text-muted-foreground text-xs">
+            <SquareTerminalIcon aria-hidden className="size-3.5" />
+            From a coding agent
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -1116,6 +1126,7 @@ function ReplyDetails({ view }: { view: QuestionView }) {
     rows.push(["Peak context", `${formatShare(peak)} · ${formatCompact(view.context.inputTokens)} tokens`]);
   }
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
+  if (view.via === "mcp") rows.push(["Asked from", "A coding agent, over MCP"]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
   return (
     <Popover>
