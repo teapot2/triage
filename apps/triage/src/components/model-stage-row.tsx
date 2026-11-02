@@ -15,13 +15,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProviderId } from "@/lib/models/providers";
 import { defaultEffort, effortLabels, effortsFor, type ReasoningEffort, type StageId, stageLabels } from "@/lib/models/stages";
+import { errorMessage } from "@/lib/errors";
 
 type Check = { ok: true; text: string; ms: number } | { ok: false; error: string };
 
 // How long a success stays before it dismisses itself.
 const SUCCESS_MS = 6_000;
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 // One call to the model, timed. Outside the component because the React
 // compiler's purity rule treats a clock read inside one as a render-time
@@ -54,7 +53,7 @@ export function useModelList(provider: Provider | undefined) {
           ? { models: data.models ?? [] }
           : { models: [], error: data.error ?? `HTTP ${res.status}`, unreachable: data.unreachable };
       })
-      .catch((err) => (ctrl.signal.aborted ? undefined : { models: [], error: message(err) }))
+      .catch((err) => (ctrl.signal.aborted ? undefined : { models: [], error: errorMessage(err) }))
       .then((r) => {
         if (r && !ctrl.signal.aborted) setResult({ key, ...r });
       });
@@ -199,7 +198,7 @@ export function StageRow({
     try {
       setCheck(await pingModel(new URLSearchParams({ provider: draft.provider, model, ...(meta && { effort }) })));
     } catch (err) {
-      setCheck({ ok: false, error: message(err) });
+      setCheck({ ok: false, error: errorMessage(err) });
     } finally {
       setChecks((n) => n + 1);
       setChecking(false);

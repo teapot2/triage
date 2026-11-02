@@ -4,7 +4,8 @@ import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
 import { fanoutLead, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
-import { addUsage, fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
+import { fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
+import { runAgentLoop } from "./agent-loop";
 import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
@@ -326,10 +327,9 @@ export async function runInvestigation(
   // merge, and the single agent, which a failed scout hands over to.
   const count = { steps: 0 };
 
-  // Meta's API only supports tool_choice "auto" (other providers vary), so
-  // the agent can't be forced to call tools. Instead: near the step cap only submit_report
-  // stays available, and a run that ends in plain text without an accepted
-  // report is nudged to continue.
+  // The agent can't be forced to call submit_report (see runAgentLoop), so
+  // near the step cap it's the only tool left, and a run that ends in plain
+  // text without an accepted report is nudged to continue.
   const agent = new ToolLoopAgent({
     model: model(stage),
     providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
@@ -364,14 +364,18 @@ export async function runInvestigation(
     const tokens = noTokens();
     const leadTokens = noTokens();
     // The single agent, until a report is accepted or its steps run out.
-    const alone = async (messages: ModelMessage[]) => {
-      for (let attempt = 0; attempt <= MAX_NUDGES && !recorder.report && count.steps < MAX_STEPS; attempt++) {
-        if (attempt > 0) messages.push({ role: "user", content: NUDGE });
-        const result = await agent.generate({ messages, abortSignal: budget });
-        messages.push(...result.responseMessages);
-        addUsage(tokens, result.usage);
-      }
-    };
+    const alone = (messages: ModelMessage[]) =>
+      runAgentLoop({
+        agent,
+        messages,
+        abortSignal: budget,
+        steps: () => count.steps,
+        maxSteps: MAX_STEPS,
+        maxNudges: MAX_NUDGES,
+        nudge: NUDGE,
+        done: () => recorder.report !== undefined,
+        tokens,
+      });
     if (lead) await runFanout({ incident, source, recorder, budget, tokens, leadTokens, count, lane: stage, lead, model, alone });
     else await alone([{ role: "user", content: prompt(incident, source) }]);
 

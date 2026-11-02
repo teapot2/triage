@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { errorMessage } from "../lib/errors";
 
 export interface ScenarioOption {
   id: string;
@@ -50,7 +51,7 @@ export function useStartInvestigation() {
       startNavigation(() => router.push(`/incidents/${data.id}`));
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
       return false;
     } finally {
       // Set in the same update as the transition's start, so pending

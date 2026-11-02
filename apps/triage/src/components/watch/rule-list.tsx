@@ -27,7 +27,8 @@ import {
   ruleSorts,
   ruleStatus,
 } from "./rule-filters";
-import { liveBadge, message, sentence, updateRules, useWatchState } from "./watch-client";
+import { liveBadge, sentence, updateRules, useWatchState } from "./watch-client";
+import { errorMessage } from "@/lib/errors";
 
 // The Watch page's list of rules: each a row linking to the rule's own page,
 // with its live status from the watch. Nothing here edits a rule; that's
@@ -52,7 +53,7 @@ export function WatchRuleList() {
         setRules(((await res.json()) as { rules: WatchRule[] }).rules);
       })
       .catch((err) => {
-        if (!ctrl.signal.aborted) setLoadError(message(err));
+        if (!ctrl.signal.aborted) setLoadError(errorMessage(err));
       });
     return () => ctrl.abort();
   }, [attempt]);

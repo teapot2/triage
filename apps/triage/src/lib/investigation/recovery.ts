@@ -1,6 +1,7 @@
 import { createLiveSource } from "./live/live-source";
 import type { Incident, Recovery } from "./schema";
 import { getIncident, patchIncident } from "./store";
+import { errorMessage } from "../errors";
 
 const MINUTE = 60_000;
 const INTERVAL_MS = 15_000;
@@ -53,7 +54,7 @@ export async function watchRecovery(incidentId: string): Promise<Recovery | unde
   } catch (err) {
     console.error("[triage] recovery watch failed", incidentId, err);
     if (!recovery) return undefined;
-    const note = `The watch stopped: ${(err instanceof Error ? err.message : String(err)).split("\n")[0]}`;
+    const note = `The watch stopped: ${errorMessage(err).split("\n")[0]}`;
     recovery = { ...recovery, status: "not_recovered", note };
     await save(recovery).catch(() => {});
     return recovery;

@@ -22,6 +22,7 @@ import {
   type PublicNotificationSettings,
   slackWebhookPattern,
 } from "@/lib/notifications/types";
+import { errorMessage } from "@/lib/errors";
 
 const API = "/api/settings/notifications";
 
@@ -35,8 +36,6 @@ const kindLabels: Record<Delivery["kind"], string> = {
   resolved: "Incident resolved",
   test: "Test",
 };
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 // The Notifications section of Settings: one Slack incoming webhook, a test
 // message, which of three events send one, and the latest delivery attempts
@@ -73,7 +72,7 @@ export function NotificationSettings() {
         setData((await res.json()) as PublicNotificationSettings);
       })
       .catch((err) => {
-        if (!ctrl.signal.aborted) setLoadError(message(err));
+        if (!ctrl.signal.aborted) setLoadError(errorMessage(err));
       });
     return () => ctrl.abort();
   }, [attempt]);
@@ -126,7 +125,7 @@ export function NotificationSettings() {
       restoreFocus.current = true;
       setReplacing(false);
     } catch (err) {
-      setUrlError(message(err));
+      setUrlError(errorMessage(err));
       input.current?.focus();
     } finally {
       setSaving(false);
@@ -149,7 +148,7 @@ export function NotificationSettings() {
       setReplacing(false);
       toast.success("Webhook removed");
     } catch (err) {
-      toast.error(`Couldn't remove the webhook: ${message(err)}`);
+      toast.error(`Couldn't remove the webhook: ${errorMessage(err)}`);
     } finally {
       setRemoving(false);
     }
@@ -170,7 +169,7 @@ export function NotificationSettings() {
       if (res.ok) toast.success("Test message sent");
       else toast.error(`Slack didn't take the test message: ${body.error ?? `HTTP ${res.status}`}`);
     } catch (err) {
-      toast.error(`Couldn't send the test message: ${message(err)}`);
+      toast.error(`Couldn't send the test message: ${errorMessage(err)}`);
     } finally {
       setTesting(false);
       void refreshDeliveries();
@@ -192,7 +191,7 @@ export function NotificationSettings() {
       if (pending.current === 1) setData(body);
     } catch (err) {
       set(!checked);
-      toast.error(`Couldn't save: ${message(err)}`);
+      toast.error(`Couldn't save: ${errorMessage(err)}`);
     } finally {
       pending.current -= 1;
     }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { listModels, Unreachable, WAKE_TIMEOUT_MS } from "@/lib/models/client";
 import { providerIdSchema, providers } from "@/lib/models/providers";
 import { endpointFor } from "@/lib/models/settings";
+import { errorMessage } from "@/lib/errors";
 
 // Tests an endpoint before it's saved: lists the models at a draft base URL
 // with a draft key. Absent fields fall back to what's saved, though the saved
@@ -36,7 +37,7 @@ export async function POST(req: Request) {
     // rather than reporting it unreachable after a few seconds.
     return Response.json({ models: await listModels(provider, endpoint, info.coldStart ? WAKE_TIMEOUT_MS : undefined) });
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const error = errorMessage(err);
     return Response.json({ error, unreachable: err instanceof Unreachable }, { status: 502 });
   }
 }

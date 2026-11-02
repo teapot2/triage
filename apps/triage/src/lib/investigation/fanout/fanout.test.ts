@@ -1,30 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MockLanguageModelV4 } from "ai/test";
 import { runInvestigation, scenarioIncident } from "../agent";
 import { InvestigationRecorder } from "../recorder";
 import { createScenarioSource, getScenario } from "../scenarios";
 import { evidenceId, type Incident } from "../schema";
+import {
+  type Call,
+  claim,
+  rootCause,
+  scriptedModel,
+  systemText,
+  toolNames,
+  toolResults,
+  type Turn,
+  turnOf,
+  userText,
+} from "../scripted-model";
 import { LaneRecorder } from "./lane-recorder";
 import type { Stage } from "./run";
 
 // A scripted model: each phase of the run (told apart by its tools and
 // prompt) answers turn by turn, and every call is kept for the asserts.
 
-type Call = Parameters<MockLanguageModelV4["doGenerate"]>[0];
-type Reply = Awaited<ReturnType<MockLanguageModelV4["doGenerate"]>>;
-type Turn = { tools?: [string, unknown][]; text?: string } | Error;
 type Phase = "scout" | "h1" | "h2" | "h3" | "merge" | "single";
 type Script = Partial<Record<Phase, (turn: number, call: Call) => Turn>>;
 type Seen = { phase: Phase; model: string; call: Call };
 
 const laneStage: Stage = { provider: "meta", model: "lane-model", effort: "high", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test" };
 const lead: Stage = { ...laneStage, model: "lead-model" };
-
-const userText = (call: Call) =>
-  call.prompt.flatMap((m) => (m.role === "user" ? m.content.flatMap((p) => (p.type === "text" ? [p.text] : [])) : [])).join("\n");
-const systemText = (call: Call) => call.prompt.flatMap((m) => (m.role === "system" ? [m.content] : [])).join("\n");
-const toolNames = (call: Call) => (call.tools ?? []).map((t) => t.name).sort();
 
 function phaseOf(call: Call): Phase {
   const tools = toolNames(call);
@@ -33,47 +36,17 @@ function phaseOf(call: Call): Phase {
   return systemText(call).includes("A finding is input, not a vote") ? "merge" : "single";
 }
 
-// What the tools returned so far in this agent's conversation.
-function toolResults(call: Call): Record<string, unknown>[] {
-  return call.prompt.flatMap((m) =>
-    m.role === "tool"
-      ? m.content.flatMap((p) => (p.type === "tool-result" && p.output.type === "json" ? [p.output.value as Record<string, unknown>] : []))
-      : [],
-  );
-}
-
-let callIds = 0;
-function reply(turn: Exclude<Turn, Error>): Reply {
-  const calls = (turn.tools ?? []).map(([toolName, input]) => ({
-    type: "tool-call" as const,
-    toolCallId: `call_${++callIds}`,
-    toolName,
-    input: JSON.stringify(input),
-  }));
-  return {
-    content: [...(turn.text ? [{ type: "text" as const, text: turn.text }] : []), ...calls],
-    finishReason: { unified: calls.length ? "tool-calls" : "stop", raw: undefined },
-    usage: {
-      inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 },
-      outputTokens: { total: 10, text: 10, reasoning: 0 },
-    },
-    warnings: [],
-  };
-}
-
 function scripted(model: string, script: Script, seen: Seen[]) {
-  return new MockLanguageModelV4({
-    provider: "mock",
-    modelId: model,
-    doGenerate: async (call) => {
+  return scriptedModel(
+    (call) => {
       const phase = phaseOf(call);
       seen.push({ phase, model, call });
-      const turn = call.prompt.filter((m) => m.role === "assistant").length;
-      const next = script[phase]?.(turn, call) ?? { text: `no script for ${phase} turn ${turn}` };
-      if (next instanceof Error) throw next;
-      return reply(next);
+      const turn = turnOf(call);
+      return script[phase]?.(turn, call) ?? { text: `no script for ${phase} turn ${turn}` };
     },
-  });
+    [],
+    model,
+  );
 }
 
 async function investigate(script: Script, { fanout = true, scenario = "pool-leak" } = {}) {
@@ -90,52 +63,6 @@ async function investigate(script: Script, { fanout = true, scenario = "pool-lea
 }
 
 const poolAlert = getScenario("pool-leak")!.alert.metric;
-
-const claim = (text: string, ...evidenceIds: string[]) => ({ text, evidenceIds });
-
-// A root-cause report that passes reportProblems, citing `ids`.
-function rootCause(ids: { symptom: string; cause: string; ruledOut: string }) {
-  return {
-    summary: "Product pages slowed down because the stock lookup leaks database connections.",
-    hypotheses: [
-      {
-        id: "A",
-        title: "Connection pool leak in the stock lookup",
-        confidence: 0.8,
-        status: "leading",
-        causalChain: {
-          symptom: claim("Product page p95 latency climbed past the limit", ids.symptom),
-          propagation: claim("Requests wait for a pooled connection that never frees", ids.cause),
-          rootCause: claim("getStockLevel never releases its connection", ids.cause),
-        },
-      },
-      {
-        id: "B",
-        title: "Traffic spike overloaded the service",
-        confidence: 0.1,
-        status: "rejected",
-        causalChain: {
-          symptom: claim("Latency rose with load", ids.symptom),
-          propagation: claim("More requests queue for the database", ids.ruledOut),
-          rootCause: claim("A burst of traffic arrived", ids.ruledOut),
-        },
-        rejectedBecause: claim("The request rate stayed flat throughout", ids.ruledOut),
-      },
-      {
-        id: "C",
-        title: "Slow queries in Postgres",
-        confidence: 0.1,
-        status: "plausible",
-        causalChain: {
-          symptom: claim("Latency rose on database routes", ids.symptom),
-          propagation: claim("Queries hold connections for longer", ids.cause),
-          rootCause: claim("A query plan regressed", ids.cause),
-        },
-      },
-    ],
-    verdict: { kind: "root_cause", hypothesisId: "A" },
-  };
-}
 
 // The scout surveys once, then proposes the pool leak and a traffic spike.
 const scout = (alert: string): Script["scout"] => (turn) =>

@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { defaultRules, rulesSchema, type WatchRule } from "./watch-rule-model";
+import { errorMessage } from "../errors";
 
 // What the watch listens for: rules, each a condition on the requests to
 // some routes over a recent window (the model is in watch-rule-model). Saved
@@ -26,7 +27,7 @@ export async function readRules(): Promise<WatchRule[]> {
   try {
     return rulesSchema.parse(JSON.parse(text).rules);
   } catch (err) {
-    const why = err instanceof z.ZodError ? z.prettifyError(err) : err instanceof Error ? err.message : String(err);
+    const why = err instanceof z.ZodError ? z.prettifyError(err) : errorMessage(err);
     throw new Error(`${file} isn't valid (${why}). Fix it, or delete it to use the default rules.`);
   }
 }

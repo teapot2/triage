@@ -4,6 +4,7 @@ import { withUnit } from "./postmortem/timeline";
 import type { Incident, MetricPoint, Reopening, Verification } from "./schema";
 import { notify } from "../notifications/notify";
 import { getIncident, patchIncident } from "./store";
+import { errorMessage } from "@/lib/errors";
 
 // Checks that the fix worked: after the alert's metric recovers, a quiet
 // window of completed minutes under the threshold resolves the incident,
@@ -81,7 +82,7 @@ export function resolveRefusal(incident: Incident): string | undefined {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const firstLine = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0];
+const firstLine = (err: unknown) => errorMessage(err).split("\n")[0];
 
 // Starts a verification: saves the record (or throws Refused with the
 // reason), then watches the window. `finished` settles when the loop ends

@@ -1,4 +1,5 @@
 import type { RetryPolicy } from "./policy";
+import { errorMessage } from "../errors";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -172,7 +173,7 @@ const NETWORK_CODES: Record<string, string> = {
 // when it's a usual one, else the innermost message. fetch itself only
 // says "fetch failed".
 function networkDetail(err: unknown): string {
-  let message = err instanceof Error ? err.message : String(err);
+  let message = errorMessage(err);
   for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
     const code = (e as { code?: unknown }).code;
     if (typeof code === "string") return NETWORK_CODES[code] ?? code;

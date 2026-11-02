@@ -3,8 +3,9 @@ import { cacheKey, callSettings, modelErrorText, modelOptions, reasoningKind } f
 import { RunTimeoutError } from "../../models/policy";
 import type { Endpoint, StageModel } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, fuller, onEachCall, type TokenCounts } from "../../models/usage";
+import { fuller, onEachCall, type TokenCounts } from "../../models/usage";
 import { recordRunContext, recordThoughts } from "../agent";
+import { runAgentLoop } from "../agent-loop";
 import type { InvestigationRecorder, ThoughtRecorder } from "../recorder";
 import type { Evidence, Fanout, Incident } from "../schema";
 import type { TelemetrySource } from "../source";
@@ -100,7 +101,7 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       done: () => proposal !== undefined,
     });
     const content = scoutPrompt(incident, source);
-    await generateUntilDone(scout, [{ role: "user", content }], SCOUT_NUDGE, run.budget, run.leadTokens);
+    await untilDone(scout, [{ role: "user", content }], SCOUT_NUDGE, run.budget, run.leadTokens);
   } catch (err) {
     if (run.budget.aborted) throw err;
     console.error("[triage] fan-out scout failed, investigating alone", incident.id, err);
@@ -136,7 +137,7 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       done: () => recorder.report !== undefined,
     });
     const content = mergePrompt(incident, source, recorder.evidence, recorder.incident.run!.fanout!.hypotheses);
-    await generateUntilDone(merge, [{ role: "user", content }], MERGE_NUDGE, run.budget, run.leadTokens);
+    await untilDone(merge, [{ role: "user", content }], MERGE_NUDGE, run.budget, run.leadTokens);
   } catch (err) {
     if (run.budget.aborted) throw err;
     console.error("[triage] fan-out merge failed, finishing alone", incident.id, err);
@@ -188,7 +189,7 @@ async function runLane(run: FanoutRun, h: Hypothesis, scoutEvidence: Evidence[])
   try {
     const content = lanePrompt(run.incident, run.source, scoutEvidence, h);
     const signal = AbortSignal.any([run.budget, limit.signal]);
-    await generateUntilDone(agent, [{ role: "user", content }], LANE_NUDGE, signal, run.tokens);
+    await untilDone(agent, [{ role: "user", content }], LANE_NUDGE, signal, run.tokens);
     if (!finding) error = `No finding after ${agent.steps()} model steps`;
   } catch (err) {
     console.error("[triage] fan-out lane failed", run.incident.id, h.id, err);
@@ -251,20 +252,13 @@ function boundedAgent<T extends ToolSet>(
 
 // Runs an agent until it finishes, nudging it once if it stops in plain
 // text, and adds its tokens to `tokens`: the lead's or the lanes'.
-async function generateUntilDone(
-  { agent, steps, maxSteps, done }: Bounded,
+const untilDone = (
+  bounded: Bounded,
   messages: ModelMessage[],
   nudge: string,
   abortSignal: AbortSignal,
   tokens: TokenCounts,
-): Promise<void> {
-  for (let attempt = 0; attempt <= MAX_NUDGES && !done() && steps() < maxSteps; attempt++) {
-    if (attempt > 0) messages.push({ role: "user", content: nudge });
-    const result = await agent.generate({ messages, abortSignal });
-    messages.push(...result.responseMessages);
-    addUsage(tokens, result.usage);
-  }
-}
+) => runAgentLoop({ ...bounded, messages, abortSignal, maxNudges: MAX_NUDGES, nudge, tokens });
 
 // A call of the lead's, scout or merge, as its context if it's the fullest yet.
 function recordLeadContext(recorder: InvestigationRecorder, call: TokenCounts) {

@@ -4,6 +4,7 @@ import { DatabaseIcon, LoaderCircleIcon, TrashIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { errorMessage } from "@/lib/errors";
 
 // Adds or removes the 30 demo incidents, for seeing pagination, sorting and
 // every status with more than a handful of incidents.
@@ -22,7 +23,7 @@ export function DemoData() {
       setResult(data.added !== undefined ? `Added ${data.added} demo incidents.` : `Removed ${data.removed} demo incidents.`);
       router.refresh();
     } catch (err) {
-      setResult(err instanceof Error ? err.message : String(err));
+      setResult(errorMessage(err));
     } finally {
       setBusy(null);
     }

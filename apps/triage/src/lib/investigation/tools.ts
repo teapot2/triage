@@ -11,6 +11,7 @@ import {
   type ToolName,
 } from "./schema";
 import type { TelemetrySource } from "./source";
+import { errorMessage } from "../errors";
 
 interface ToolRun {
   summary: string;
@@ -74,7 +75,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         const evidence = recorder.completeStep(toolCallId, name, result.summary, result.evidence);
         return { summary: result.summary, evidence: evidence.map(forModel) };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         recorder.failStep(toolCallId, message);
         throw err;
       }

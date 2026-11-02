@@ -4,6 +4,7 @@ import type { Incident, Mitigation, Recovery } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { Refused as VerificationRefused, startVerification, verificationRefusal } from "../verify";
 import { shopfrontOps, simulated } from "./executors";
+import { errorMessage } from "../../errors";
 
 export type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
 
@@ -49,7 +50,7 @@ export async function applyMitigation(id: string): Promise<void> {
     recovered = recovery;
   } catch (err) {
     console.error("[triage] mitigation failed", id, err);
-    const error = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+    const error = errorMessage(err).split("\n")[0];
     await setMitigation(id, { state: "failed", error }).catch((e) => console.error("[triage] saving the failure failed", id, e));
     return;
   }

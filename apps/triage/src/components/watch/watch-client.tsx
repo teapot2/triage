@@ -9,11 +9,10 @@ import type { Backtest } from "@/lib/investigation/watch-judge";
 import type { WatchRule } from "@/lib/investigation/watch-rule-model";
 import { cn } from "@/lib/utils";
 import { ruleStatus, ruleStatuses } from "./rule-filters";
+import { errorMessage } from "@/lib/errors";
 
 // What the Watch pages share in the browser: the watch's live state, a
 // rule's status badge, saving the rule list, and the backtest.
-
-export const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
@@ -94,7 +93,7 @@ export async function updateRules(
     const data = (await res.json()) as { rules?: WatchRule[]; error?: string };
     return res.ok && data.rules ? { rules: data.rules } : { error: data.error ?? `HTTP ${res.status}` };
   } catch (err) {
-    return { error: message(err) };
+    return { error: errorMessage(err) };
   }
 }
 
@@ -122,7 +121,7 @@ export function useBacktest(rule: WatchRule | undefined): BacktestState {
           setResult(res.ok ? { key, data } : { key, error: data.error ?? `HTTP ${res.status}` });
         })
         .catch((err) => {
-          if (!ctrl.signal.aborted) setResult({ key, error: message(err) });
+          if (!ctrl.signal.aborted) setResult({ key, error: errorMessage(err) });
         });
     }, 500);
     return () => {

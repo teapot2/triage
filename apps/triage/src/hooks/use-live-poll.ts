@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { errorMessage } from "../lib/errors";
 
 // Polls a JSON endpoint every `intervalMs` while `active` and the tab is
 // visible; a hidden tab stops polling and polls again as soon as it's back.
@@ -36,7 +37,7 @@ export function useLivePoll<T>(url: string, intervalMs: number, active: boolean)
         setUpdatedAt(Date.now());
       } catch (err) {
         if (ctrl.signal.aborted) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errorMessage(err));
       }
       if (!stopped) timer = setTimeout(poll, intervalMs);
     }

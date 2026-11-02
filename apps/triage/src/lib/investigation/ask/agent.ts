@@ -1,6 +1,7 @@
 import {
   createUIMessageStream,
   createUIMessageStreamResponse,
+  type LanguageModel,
   type ModelMessage,
   ToolLoopAgent,
   type ToolSet,
@@ -20,9 +21,11 @@ import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, fuller, noTokens, onEachCall } from "../../models/usage";
+import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { recordThoughts } from "../agent";
+import { runAgentLoop } from "../agent-loop";
 import { incidentBlock } from "../context";
+import type { Stage } from "../fanout/run";
 import { QuestionRecorder } from "../recorder";
 import type { Incident, Question } from "../schema";
 import { sourceFor } from "../source-for";
@@ -105,13 +108,16 @@ export interface AnswerStream {
   toUIMessageStreamResponse(init?: { status?: number; headers?: HeadersInit }): Response;
 }
 
+// Tests: a model other than Settings' one, and a scripted model to call.
+type TestModel = { stage?: Stage; languageModel?: LanguageModel };
+
 // Answers a question already appended to the incident (status answering).
 // Never rejects: failures land on the question as status failed.
-export async function answerQuestion(incident: Incident, question: Question): Promise<AnswerStream> {
+export async function answerQuestion(incident: Incident, question: Question, opts: TestModel = {}): Promise<AnswerStream> {
   const recorder = new QuestionRecorder(structuredClone(question), incident.id, incident.service);
   let done: Promise<void> = Promise.resolve();
   const stream = createUIMessageStream({
-    execute: ({ writer }) => (done = answer(incident, recorder, writer)),
+    execute: ({ writer }) => (done = answer(incident, recorder, writer, opts)),
   });
   return {
     consumeStream: () => done,
@@ -119,7 +125,12 @@ export async function answerQuestion(incident: Incident, question: Question): Pr
   };
 }
 
-async function answer(incident: Incident, recorder: QuestionRecorder, writer: UIMessageStreamWriter): Promise<void> {
+async function answer(
+  incident: Incident,
+  recorder: QuestionRecorder,
+  writer: UIMessageStreamWriter,
+  opts: TestModel,
+): Promise<void> {
   // An error the stream already carried to the tab, so it isn't sent twice.
   let streamed = false;
   let stepsUsed = 0;
@@ -129,7 +140,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
   let provider: ProviderId | undefined;
   let retries = 0;
   try {
-    const stage = await stageModel("ask");
+    const stage = opts.stage ?? (await stageModel("ask"));
     provider = stage.provider;
     recorder.update({ provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) });
     const problem = stageProblem(stage);
@@ -165,7 +176,7 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     // so the last step has no tools and must answer, and a run that stops
     // after tool calls without text is nudged once.
     const agent = new ToolLoopAgent({
-      model: languageModel(stage, { onRetry: () => retries++ }),
+      model: opts.languageModel ?? languageModel(stage, { onRetry: () => retries++ }),
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...callSettings({ stream: true }),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
@@ -194,51 +205,59 @@ async function answer(incident: Incident, recorder: QuestionRecorder, writer: UI
     let text = "";
     calledModel = true;
     const budget = runBudget("ask");
-    for (let pass = 0; pass <= MAX_NUDGES && stepsUsed < MAX_STEPS; pass++) {
-      if (pass > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.stream({ messages, abortSignal: budget });
-      let failure: unknown;
-      let aborted: Error | undefined;
-      let madeToolCalls = false;
-      let stepToolCalls = false;
-      const chunks = result.toUIMessageStream({
-        sendStart: pass === 0,
-        sendFinish: false,
-        onError: (err) => {
-          failure ??= err;
-          return modelErrorText(err, stage.provider);
-        },
-      });
-      for await (const chunk of chunks) {
-        // A stream the budget or the stall limit cut off ends in an abort,
-        // not an error: it fails the question like one, and the tab hears
-        // why from the catch below.
-        if (chunk.type === "abort") {
-          aborted = new Error(chunk.reason ?? "The answer was cut off.");
-          break;
+    await runAgentLoop({
+      agent,
+      messages,
+      abortSignal: budget,
+      steps: () => stepsUsed,
+      maxSteps: MAX_STEPS,
+      maxNudges: MAX_NUDGES,
+      nudge: NUDGE,
+      done: () => text !== "",
+      tokens,
+      // Streamed to the tab as it comes. A run that answers, or stops
+      // without calling tools, isn't nudged.
+      read: async (result, pass) => {
+        let failure: unknown;
+        let aborted: Error | undefined;
+        let madeToolCalls = false;
+        let stepToolCalls = false;
+        const chunks = result.toUIMessageStream({
+          sendStart: pass === 0,
+          sendFinish: false,
+          onError: (err) => {
+            failure ??= err;
+            return modelErrorText(err, stage.provider);
+          },
+        });
+        for await (const chunk of chunks) {
+          // A stream the budget or the stall limit cut off ends in an abort,
+          // not an error: it fails the question like one, and the tab hears
+          // why from the catch below.
+          if (chunk.type === "abort") {
+            aborted = new Error(chunk.reason ?? "The answer was cut off.");
+            break;
+          }
+          writer.write(chunk);
+          if (chunk.type === "text-delta") recorder.appendAnswer(chunk.delta);
+          else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
+            stepToolCalls = madeToolCalls = true;
+          } else if (chunk.type === "finish-step") {
+            // Text written alongside tool calls is the model thinking aloud
+            // (kept as a thought), not the answer.
+            if (stepToolCalls && recorder.question.answer) recorder.update({ answer: "" });
+            stepToolCalls = false;
+          }
         }
-        writer.write(chunk);
-        if (chunk.type === "text-delta") recorder.appendAnswer(chunk.delta);
-        else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
-          stepToolCalls = madeToolCalls = true;
-        } else if (chunk.type === "finish-step") {
-          // Text written alongside tool calls is the model thinking aloud
-          // (kept as a thought), not the answer.
-          if (stepToolCalls && recorder.question.answer) recorder.update({ answer: "" });
-          stepToolCalls = false;
+        if (failure) {
+          streamed = true;
+          throw failure;
         }
-      }
-      if (failure) {
-        streamed = true;
-        throw failure;
-      }
-      if (aborted) throw budget.aborted ? budget.reason : aborted;
-      const usage = await result.totalUsage;
-      addUsage(tokens, usage);
-      messages.push(...(await result.responseMessages));
-      text = (await result.steps).at(-1)?.text.trim() ?? "";
-      if (text || !madeToolCalls) break;
-    }
+        if (aborted) throw budget.aborted ? budget.reason : aborted;
+        text = (await result.steps).at(-1)?.text.trim() ?? "";
+        return text !== "" || !madeToolCalls;
+      },
+    });
 
     const { citedIds, unknownIds } = parseCitations(text, knownEvidenceIds(incident, recorder.question));
     recorder.update({

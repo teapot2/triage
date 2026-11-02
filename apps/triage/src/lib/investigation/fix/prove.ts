@@ -11,6 +11,7 @@ import {
   unifiedDiff,
   writeSandboxFile,
 } from "./sandbox";
+import { errorMessage } from "../../errors";
 
 // Stage 4: prove a proposed fix in a sandbox before anyone is asked to
 // approve it. The regression test has to fail on the code as it is (so it
@@ -136,7 +137,7 @@ export async function proveFix(opts: {
     for (const m of made) if (m.status === "fulfilled") databases.push(m.value);
     const failed = made.find((m) => m.status === "rejected");
     if (failed) {
-      const why = failed.reason instanceof Error ? failed.reason.message : String(failed.reason);
+      const why = errorMessage(failed.reason);
       return { ok: false, runs: [], problems: [`could not make a copy of the database for the sandbox: ${why}`], setup: true };
     }
     const [originalDb, patchedDb] = databases;

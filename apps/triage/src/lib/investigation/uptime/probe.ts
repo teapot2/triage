@@ -1,5 +1,6 @@
 import { checkUrl, type Lookup } from "./guard";
 import type { UptimeCheck, UptimeSample } from "./model";
+import { errorMessage } from "../../errors";
 
 // Runs one uptime check: a GET to the check's URL, timed to the response
 // headers, judged against its status range and slow limit. Redirects are
@@ -23,7 +24,7 @@ function failure(err: unknown): string {
   const cause = (err as { cause?: { code?: string; message?: string } }).cause;
   if (cause?.code) return cause.code;
   if (cause?.message) return cause.message;
-  return err instanceof Error ? err.message : String(err);
+  return errorMessage(err);
 }
 
 // The request's headers: the auth header when the check has one with a

@@ -15,6 +15,7 @@ import type {
   TelemetrySource,
 } from "../source";
 import { type Attrs, type LogRow, type MetricRow, readTelemetry, type SpanRow } from "./otlp-files";
+import { errorMessage } from "../../errors";
 
 // The running Shopfront, read from what it really emitted: OTLP spans, logs
 // and metrics from the collector's files, Postgres itself for diagnostics,
@@ -522,7 +523,7 @@ async function dbDiagnostics(check: DbCheck): Promise<DbResult> {
     const { rows } = await client.query(query);
     return { query, rows: rows.map(cells) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { query, rows: [{ error: message }] };
   } finally {
     await client.end().catch(() => {});

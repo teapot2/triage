@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { StatusBadge, type StatusTone } from "@/components/ui/badge";
 import type { EndpointState } from "@/lib/investigation/uptime";
 import { duration, type UptimeCheck, type UptimeSample } from "@/lib/investigation/uptime/model";
-import { message, useWatchState } from "./watch-client";
+import { useWatchState } from "./watch-client";
+import { errorMessage } from "@/lib/errors";
 
 // What the Watch pages share in the browser about uptime checks: a check's
 // live state and status badge, its results, and saving the list of checks.
@@ -126,7 +127,7 @@ export function useChecks() {
         setChecks(((await res.json()) as { checks: UptimeCheck[] }).checks);
       })
       .catch((err) => {
-        if (!ctrl.signal.aborted) setError(message(err));
+        if (!ctrl.signal.aborted) setError(errorMessage(err));
       });
     return () => ctrl.abort();
   }, [attempt]);
@@ -157,7 +158,7 @@ export async function updateEndpoints(
     if (res.ok && data.checks) return { checks: data.checks };
     return { error: data.error ?? `HTTP ${res.status}`, refused: res.status === 400 };
   } catch (err) {
-    return { error: message(err) };
+    return { error: errorMessage(err) };
   }
 }
 
@@ -181,7 +182,7 @@ export function useEndpointDetail(id: string) {
         setData({ ...next, samples: next.samples.toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)) });
         setError(undefined);
       } catch (err) {
-        if (!stopped) setError(message(err));
+        if (!stopped) setError(errorMessage(err));
       }
     }
     void load();
@@ -202,7 +203,7 @@ export async function checkNow(id: string): Promise<{ sample?: UptimeSample; err
     const data = (await res.json()) as UptimeSample & { error?: string };
     return res.ok ? { sample: data } : { error: data.error ?? `HTTP ${res.status}` };
   } catch (err) {
-    return { error: message(err) };
+    return { error: errorMessage(err) };
   }
 }
 

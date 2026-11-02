@@ -3,6 +3,7 @@ import { dataChangeOf } from "./fix/data-change";
 import { openPullRequest } from "./fix/pull-request";
 import type { Approval, Incident } from "./schema";
 import { getIncident, saveIncident, withIncidentLock } from "./store";
+import { errorMessage } from "../errors";
 
 export type Decision = Extract<Approval["state"], "approved" | "denied">;
 
@@ -132,7 +133,7 @@ export async function openPr(id: string, appDir: string): Promise<void> {
     result = { prState: "opened", prUrl, prError: undefined };
   } catch (err) {
     console.error("[triage] opening the PR failed", id, err);
-    result = { prState: "failed", prError: err instanceof Error ? err.message : String(err) };
+    result = { prState: "failed", prError: errorMessage(err) };
   }
   // Re-read so nothing saved meanwhile is lost.
   const latest = (await getIncident(id)) ?? incident;

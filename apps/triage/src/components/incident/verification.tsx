@@ -24,6 +24,7 @@ import type { Incident, Reopening, Verification } from "@/lib/investigation/sche
 import { cn } from "@/lib/utils";
 import { formatPercent, formatTime } from "./format";
 import { metricLabel } from "./metric-labels";
+import { errorMessage } from "@/lib/errors";
 
 // Checking that the fix worked: after the alert's metric recovers, Triage
 // watches it for a quiet window and resolves the incident, or reopens it on
@@ -94,7 +95,7 @@ export function useResolution(incident: Incident) {
     } catch (err) {
       const verb = action === "resolve" ? "resolve" : action === "reopen" ? "reopen" : "verify";
       toast.error(`Couldn't ${verb} the incident`, {
-        description: sentence(err instanceof Error ? err.message : String(err)),
+        description: sentence(errorMessage(err)),
       });
     }
     setPending(undefined);

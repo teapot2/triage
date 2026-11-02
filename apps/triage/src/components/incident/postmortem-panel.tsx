@@ -35,6 +35,7 @@ import { modelLabel } from "@/lib/models/labels";
 import { ContextMeter } from "./context-meter";
 import { MarkdownDoc } from "./markdown-doc";
 import { clock, contentOf, DraftDocument, DraftStatus, templateOf, usePostmortemDraft, useReveal } from "./postmortem-draft";
+import { errorMessage } from "@/lib/errors";
 
 // The Postmortem section: Triage writes a blameless postmortem from the
 // incident's record on request, writing it into the page as it goes
@@ -131,7 +132,7 @@ function useWritePostmortem(incident: Incident) {
       router.refresh();
     } catch (err) {
       setSentFrom(null);
-      toast.error("Couldn't write the postmortem", { description: sentence(err instanceof Error ? err.message : String(err)) });
+      toast.error("Couldn't write the postmortem", { description: sentence(errorMessage(err)) });
     }
   }, [incident.id, startedAt, router]);
 

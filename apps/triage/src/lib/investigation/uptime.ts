@@ -23,6 +23,7 @@ import { probe } from "./uptime/probe";
 import { appendSample, readSamples } from "./uptime/samples";
 import { availabilityMetric, createUptimeSource } from "./uptime/source";
 import { reopened, resolved } from "./verify";
+import { errorMessage } from "../errors";
 
 // The uptime loop: Triage requests each configured URL itself (uptime/) and
 // opens an incident when Slow or Down trips. Every TICK_MS it runs each
@@ -139,8 +140,6 @@ g.triageUptimeTick = tick;
 
 export class UnknownCheck extends Error {}
 export class CheckBusy extends Error {}
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export function startUptime() {
   if (state.timer) return;
@@ -271,7 +270,7 @@ async function tick() {
         const last = endpoint(c.id).samples?.at(-1);
         if (!last || now - Date.parse(last.at) >= c.intervalSeconds * 1000) return run(c).catch(() => {});
         // Not due: a recovery that was waiting on the incident may go ahead.
-        return settle(c).catch((err) => (endpoint(c.id).error = message(err)));
+        return settle(c).catch((err) => (endpoint(c.id).error = errorMessage(err)));
       }),
   );
 }
@@ -294,12 +293,12 @@ async function run(check: UptimeCheck): Promise<UptimeSample> {
       // check, and the next sample tries again.
       e.error = await follow(check, e.samples).then(
         () => undefined,
-        (err: unknown) => message(err),
+        errorMessage,
       );
     }
     return sample;
   } catch (err) {
-    e.error = message(err);
+    e.error = errorMessage(err);
     throw err;
   } finally {
     e.inFlight = false;

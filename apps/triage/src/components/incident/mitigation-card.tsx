@@ -26,6 +26,7 @@ import { THIS_INCIDENT } from "./incident-commands";
 import type { ChartMarker } from "./metric-chart";
 import { metricLabel } from "./metric-labels";
 import { VerificationLine } from "./verification";
+import { errorMessage } from "@/lib/errors";
 
 type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
 
@@ -52,7 +53,7 @@ function useMitigationDecision(incidentId: string, saved: Mitigation["state"]) {
       else toast("Mitigation denied", { description: "Nothing is changed; the fix still follows." });
     } catch (err) {
       setOptimistic(undefined);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
     router.refresh();
   }

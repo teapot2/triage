@@ -63,6 +63,7 @@ import { formatShare } from "./context-meter";
 import { type ContextSegment, ContextWindow } from "./context-window";
 import { formatCompact, formatDuration } from "./format";
 import { StepRow } from "./investigation-timeline";
+import { errorMessage } from "@/lib/errors";
 
 // Follow-up questions on a finished incident: the thread oldest first, then
 // a composer. Finished questions (and ones another tab is asking) come from
@@ -142,7 +143,7 @@ export interface Ask {
   keyFor: (id: string) => string;
 }
 
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).split("\n")[0];
+const errorText = (err: unknown) => errorMessage(err).split("\n")[0];
 
 // Turn and queue keys, unique in this tab.
 let lastKey = 0;

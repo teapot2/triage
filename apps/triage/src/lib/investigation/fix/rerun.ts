@@ -3,6 +3,7 @@ import type { FixRun } from "../schema";
 import { sourceFor } from "../source-for";
 import { getIncident, patchIncident, saveIncident } from "../store";
 import { runFixStage } from "./agent";
+import { errorMessage } from "../../errors";
 
 // Stage 3 again, after a reviewer denied the fix with feedback: the fix
 // stage runs on the stored incident with every denied attempt's reason and
@@ -32,6 +33,6 @@ export async function rerunFix(id: string, appDir: string): Promise<void> {
     await recorder.flush();
   } catch (err) {
     console.error("[triage] fix rerun failed", id, err);
-    await fail(err instanceof Error ? err.message : String(err));
+    await fail(errorMessage(err));
   }
 }

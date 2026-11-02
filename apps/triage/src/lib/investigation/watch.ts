@@ -8,6 +8,7 @@ import { type EndpointState, startUptime, stopUptime, uptimeState } from "./upti
 import { reopened } from "./verify";
 import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
 import { describeRule, readRules, type WatchRule } from "./watch-rules";
+import { errorMessage } from "../errors";
 
 // Stage 1: Triage watches the live store and opens an incident on its own.
 // Every CHECK_MS it judges each watch rule (see watch-rules) on the real
@@ -162,7 +163,7 @@ async function check() {
       // Alerting only once the incident is open. If it can't be, the rule
       // stays breaching, so the next check tries again and the error stays up.
       const opened = await open(first.rule, first.trip, first.summary).catch((err: unknown) => {
-        state.error = `Couldn't open an incident: ${err instanceof Error ? err.message : String(err)}`;
+        state.error = `Couldn't open an incident: ${errorMessage(err)}`;
         return false;
       });
       // Paused while it opened: the pause stands.
@@ -189,7 +190,7 @@ async function check() {
       }),
     );
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    state.error = errorMessage(err);
   } finally {
     state.checking = false;
   }

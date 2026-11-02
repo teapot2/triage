@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { PublicModelSettings } from "@/lib/models/settings";
 import { type StageId, stageIds, stageLabels } from "@/lib/models/stages";
+import { errorMessage } from "@/lib/errors";
 
 export type Provider = PublicModelSettings["providers"][number];
 export type StageModel = PublicModelSettings["stages"][keyof PublicModelSettings["stages"]];
@@ -26,8 +27,6 @@ export type ModelUpdate = {
 };
 // Saves an update and resolves to an error message, or nothing on success.
 export type SaveModelSettings = (update: ModelUpdate) => Promise<string | undefined>;
-
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 // The Models and Providers sections of Settings: a provider and model per
 // stage, presets that set them all at once, and the providers with their
@@ -51,7 +50,7 @@ export function ModelSettings() {
         setSettings((await res.json()) as PublicModelSettings);
       })
       .catch((err) => {
-        if (!ctrl.signal.aborted) setLoadError(message(err));
+        if (!ctrl.signal.aborted) setLoadError(errorMessage(err));
       });
     return () => ctrl.abort();
   }, [attempt]);
@@ -67,7 +66,7 @@ export function ModelSettings() {
       if (!res.ok) return data.error ?? `HTTP ${res.status}`;
       setSettings(data);
     } catch (err) {
-      return message(err);
+      return errorMessage(err);
     }
   };
 
@@ -302,7 +301,7 @@ async function verify(body: { provider: Provider["id"]; baseUrl?: string; apiKey
     const data = (await res.json()) as { models?: string[]; error?: string };
     return res.ok ? { ok: true, models: data.models ?? [] } : { ok: false, error: data.error ?? `HTTP ${res.status}` };
   } catch (err) {
-    return { ok: false, error: message(err) };
+    return { ok: false, error: errorMessage(err) };
   }
 }
 

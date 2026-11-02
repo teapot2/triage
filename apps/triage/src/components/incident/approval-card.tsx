@@ -25,6 +25,7 @@ import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Approval, Fix } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { DataChangeReview } from "./data-change-review";
+import { errorMessage } from "@/lib/errors";
 
 // The decision on the proposed fix, saved on the server. A click shows
 // right away; the server then saves it and the page refreshes, so the status
@@ -68,7 +69,7 @@ export function useApprovalDecision(incidentId: string, saved: Approval["state"]
       }
     } catch (err) {
       setOptimistic(undefined);
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
     router.refresh();
   }
@@ -166,7 +167,7 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     } catch (err) {
-      setRetryError(err instanceof Error ? err.message : String(err));
+      setRetryError(errorMessage(err));
     }
     setRetrying(false);
     router.refresh();

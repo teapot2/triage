@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { getIncident } from "@/lib/investigation/store";
 import { incidentKeywords } from "@/lib/speech/keywords";
 import { endAudio, openSession, sendAudio, type TranscribeEvent } from "@/lib/speech/realtime";
+import { errorMessage } from "@/lib/errors";
 
 // Voice input for the Ask composer, relayed to Meta's realtime transcription
 // (lib/speech/realtime.ts). The browser names the session (?id=, a UUID it
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
   try {
     events = await openSession(id, req.signal, incident ? incidentKeywords(incident) : []);
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 503 });
+    return Response.json({ error: errorMessage(err) }, { status: 503 });
   }
   const encoder = new TextEncoder();
   const body = events.pipeThrough(

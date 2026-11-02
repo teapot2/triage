@@ -46,6 +46,7 @@ import {
   type Template,
   type TemplateSection,
 } from "@/lib/investigation/postmortem/template";
+import { errorMessage } from "@/lib/errors";
 
 type Reply = { template: Template; isDefault: boolean };
 // A request's outcome: the server kept it, turned it down with problems to
@@ -69,7 +70,6 @@ const builtInLabels: Record<BuiltInSection, string> = {
   actions: "Action items",
 };
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const rowKey = (s: TemplateSection) => (s.kind === "builtin" ? s.key : s.id);
 const rowLabel = (s: TemplateSection) => (s.kind === "builtin" ? builtInLabels[s.key] : s.name);
 
@@ -102,7 +102,7 @@ export function PostmortemTemplateSettings() {
         setData((await res.json()) as Reply);
       })
       .catch((err) => {
-        if (!ctrl.signal.aborted) setLoadError(message(err));
+        if (!ctrl.signal.aborted) setLoadError(errorMessage(err));
       });
     return () => ctrl.abort();
   }, [attempt]);
@@ -134,7 +134,7 @@ export function PostmortemTemplateSettings() {
       toast.error(`Couldn't save the template: ${body.error ?? `HTTP ${res.status}`}`);
       return "failed";
     } catch (err) {
-      toast.error(`Couldn't save the template: ${message(err)}`);
+      toast.error(`Couldn't save the template: ${errorMessage(err)}`);
       return "failed";
     } finally {
       setSaving(false);

@@ -19,6 +19,7 @@ import {
 import type { Dataset, ExportFormat, ExportSubject } from "@/lib/export/dataset";
 import { downloadRows, downloadUrl } from "@/lib/export/download";
 import { formatInfo } from "@/lib/export/serialize";
+import { errorMessage } from "@/lib/errors";
 
 // What one Export button offers: a server export, fetched as a plain link
 // (/api/export/<id>, registered in lib/export/exports.ts), or rows the page
@@ -40,7 +41,7 @@ function exportOf(source: ExportSource, format: ExportFormat) {
       try {
         downloadRows(source.dataset as Dataset<unknown>, [...source.rows], source.subject, format);
       } catch (err) {
-        toast.error(`Couldn't export ${source.dataset.name}`, { description: err instanceof Error ? err.message : String(err) });
+        toast.error(`Couldn't export ${source.dataset.name}`, { description: errorMessage(err) });
       }
     },
   };

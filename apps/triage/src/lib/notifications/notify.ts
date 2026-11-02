@@ -5,6 +5,7 @@ import type { Incident } from "../investigation/schema";
 import { readNotificationSettings } from "../models/settings";
 import { slackMessage } from "./slack";
 import { type Delivery, eventOf, type MessageKind, messageKinds, type PublicNotificationSettings } from "./types";
+import { errorMessage } from "../errors";
 
 // Sends a Slack message when something happens to an incident, once per
 // event, and keeps a log of the attempts for Settings. A failed send is
@@ -124,7 +125,7 @@ async function post(url: string, body: string): Promise<Attempt> {
     // Rate limited or Slack's own trouble may pass in a second; a 404 won't.
     return { error: `${res.status} ${reply.slice(0, 200)}`.trim(), retry: res.status === 429 || res.status >= 500 };
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err), retry: true };
+    return { error: errorMessage(err), retry: true };
   }
 }
 

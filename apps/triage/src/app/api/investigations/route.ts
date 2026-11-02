@@ -5,6 +5,7 @@ import { createLiveIncident, createRangeIncident, createScenarioIncident, runInv
 import { createLiveSource, shopfrontDir } from "@/lib/investigation/live/live-source";
 import { LIVE_ID } from "@/lib/investigation/options";
 import { createScenarioSource, getScenario } from "@/lib/investigation/scenarios";
+import { errorMessage } from "@/lib/errors";
 
 // A full run is ~10-25 model steps, plus the fix and its sandbox proof;
 // give it room.
@@ -45,7 +46,7 @@ export async function POST(req: Request) {
       after(() => runInvestigation(incident, source, { appDir: shopfrontDir }));
       return Response.json({ id: incident.id }, { status: 202 });
     } catch (err) {
-      return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 409 });
+      return Response.json({ error: errorMessage(err) }, { status: 409 });
     }
   }
 

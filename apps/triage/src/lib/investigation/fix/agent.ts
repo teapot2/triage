@@ -1,12 +1,14 @@
-import { type ModelMessage, ToolLoopAgent, tool } from "ai";
+import { type LanguageModel, type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, wakeProvider } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import { providers } from "../../models/providers";
 import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { addUsage, fuller, noTokens, onEachCall } from "../../models/usage";
+import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { notify } from "../../notifications/notify";
+import { runAgentLoop } from "../agent-loop";
+import type { Stage } from "../fanout/run";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
 import type { TelemetrySource } from "../source";
@@ -132,11 +134,16 @@ export async function runFixStage(
   recorder: InvestigationRecorder,
   source: TelemetrySource,
   appDir: string,
-  opts: { feedback?: DeniedFix[] } = {},
+  opts: {
+    feedback?: DeniedFix[];
+    // Tests: a model other than Settings' one, and a scripted model to call.
+    stage?: Stage;
+    languageModel?: LanguageModel;
+  } = {},
 ) {
   const feedback = opts.feedback ?? [];
   const startedAt = new Date().toISOString();
-  const stage = await stageModel("fix");
+  const stage = opts.stage ?? (await stageModel("fix"));
   let fixRun: FixRun = {
     status: "writing",
     attempt: 0,
@@ -276,22 +283,21 @@ export async function runFixStage(
   let steps = 0;
   let retries = 0;
   const tokens = noTokens();
+  // A fix proven or declined, or no point going on.
+  const settled = () => accepted !== undefined || declined !== undefined || halted || fixRun.attempt >= MAX_SUBMISSIONS;
   // One tool call at a time, unlike the other stages: two submit_fix calls
   // in one turn would both pass the attempt check and prove in the sandbox
   // at once. Meta is asked for one call per response; other providers may
   // still send several, which then run in turn.
   const agent = new ToolLoopAgent({
-    model: languageModel(stage, { onRetry: () => retries++ }),
+    model: opts.languageModel ?? languageModel(stage, { onRetry: () => retries++ }),
     providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id), { parallel: false }),
     ...callSettings(),
     toolCallConcurrency: 1,
     ...onEachCall((call) => setFixRun({ context: fuller(fixRun.context, call) })),
     instructions,
     tools,
-    stopWhen: [
-      () => steps >= MAX_STEPS,
-      () => accepted !== undefined || declined !== undefined || halted || fixRun.attempt >= MAX_SUBMISSIONS,
-    ],
+    stopWhen: [() => steps >= MAX_STEPS, settled],
     prepareStep: () => {
       steps += 1;
       return {};
@@ -315,16 +321,17 @@ export async function runFixStage(
     if (feedback.length) {
       console.log(`[triage] fix stage rerun for ${recorder.incident.id} with the reviewer's feedback:\n${feedbackBlock(feedback)}`);
     }
-    for (
-      let attempt = 0;
-      attempt <= MAX_NUDGES && !accepted && !declined && !halted && steps < MAX_STEPS && fixRun.attempt < MAX_SUBMISSIONS;
-      attempt++
-    ) {
-      if (attempt > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.generate({ messages, abortSignal: budget });
-      messages.push(...result.responseMessages);
-      addUsage(tokens, result.usage);
-    }
+    await runAgentLoop({
+      agent,
+      messages,
+      abortSignal: budget,
+      steps: () => steps,
+      maxSteps: MAX_STEPS,
+      maxNudges: MAX_NUDGES,
+      nudge: NUDGE,
+      done: settled,
+      tokens,
+    });
   } catch (err) {
     console.error("[triage] fix stage failed", recorder.incident.id, err);
     lastProblems = [modelErrorText(err, stage.provider)];

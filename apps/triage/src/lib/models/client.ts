@@ -5,6 +5,7 @@ import { policyFor, RunTimeoutError, STALL_MS } from "./policy";
 import { type ProviderId, providers } from "./providers";
 import type { Endpoint, StageModel } from "./settings";
 import type { StageId } from "./stages";
+import { errorMessage } from "../errors";
 
 // A chat model for one provider and model ID, ready for the AI SDK.
 //
@@ -54,7 +55,7 @@ export function modelErrorText(err: unknown, provider?: ProviderId): string {
   for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
     if (e instanceof ModelCallError || e instanceof RunTimeoutError) return e.message;
   }
-  const message = (err instanceof Error ? err.message : String(err)).split("\n")[0];
+  const message = errorMessage(err).split("\n")[0];
   const stream = STREAM_TIMEOUT.exec(message);
   if (stream) {
     const who = provider ? providers[provider].label : "The model";
@@ -72,7 +73,7 @@ export function isTransientFailure(err: unknown): boolean {
   for (let e: unknown = err, depth = 0; e instanceof Error && depth < 5; e = e.cause, depth++) {
     if (e instanceof ModelCallError || e instanceof RunTimeoutError) return true;
   }
-  return STREAM_TIMEOUT.test(err instanceof Error ? err.message : String(err));
+  return STREAM_TIMEOUT.test(errorMessage(err));
 }
 
 // Provider options to pass with every call to languageModel(s), for Meta's

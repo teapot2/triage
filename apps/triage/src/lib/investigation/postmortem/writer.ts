@@ -1,13 +1,15 @@
-import { type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
+import { type LanguageModel, type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
 import { readTemplate, stageModel, stageProblem } from "../../models/settings";
-import { addUsage, fuller, noTokens, onEachCall, type TokenCounts } from "../../models/usage";
+import { fuller, noTokens, onEachCall, type TokenCounts } from "../../models/usage";
+import { runAgentLoop } from "../agent-loop";
 import { knownEvidenceIds } from "../ask/rules";
 import { gradeHypothesis, gradeLabels } from "../confidence-grade";
 import { cite, incidentBlock } from "../context";
+import type { Stage } from "../fanout/run";
 import { dataChangeOf } from "../fix/data-change";
 import { rollupLabels, type VerdictOutcome, verdictOutcome } from "../outcome";
 import { evidenceId, type Incident, type Postmortem, type PostmortemDraft, postmortemSchema } from "../schema";
@@ -350,8 +352,12 @@ class DraftStream {
 
 // Writes the postmortem of an incident whose record is status writing (the
 // route saves it so). Never throws: failures land on the record, with the
-// draft as far as it got.
-export async function writePostmortem(incidentId: string): Promise<void> {
+// draft as far as it got. `opts` is for tests: a model other than
+// Settings' one, and a scripted model to call.
+export async function writePostmortem(
+  incidentId: string,
+  opts: { stage?: Stage; languageModel?: LanguageModel } = {},
+): Promise<void> {
   const finish = (startedAt: string, patch: Partial<Postmortem>) =>
     patchIncident(incidentId, (i) =>
       i.postmortem?.status === "writing" && i.postmortem.startedAt === startedAt
@@ -385,7 +391,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
         ? { ...i, postmortem: { ...i.postmortem, template, draft: live.draft } }
         : i,
     );
-    const stage = await stageModel("postmortem");
+    const stage = opts.stage ?? (await stageModel("postmortem"));
     provider = stage.provider;
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);
@@ -398,7 +404,7 @@ export async function writePostmortem(incidentId: string): Promise<void> {
     let lastProblems: string[] = [];
     let stepsUsed = 0;
     const agent = new ToolLoopAgent({
-      model: languageModel(stage, { onRetry: () => retries++ }),
+      model: opts.languageModel ?? languageModel(stage, { onRetry: () => retries++ }),
       providerOptions: modelOptions(stage, cacheKey("postmortem", incidentId)),
       ...callSettings({ stream: true }),
       ...onEachCall((call) => (context = fuller(context, call))),
@@ -428,42 +434,49 @@ export async function writePostmortem(incidentId: string): Promise<void> {
 
     const messages: ModelMessage[] = [{ role: "user", content: prompt(incident, outcome) }];
     const budget = runBudget("postmortem");
-    for (let pass = 0; pass <= MAX_NUDGES && !accepted && stepsUsed < MAX_STEPS; pass++) {
-      if (pass > 0) messages.push({ role: "user", content: NUDGE });
-      const result = await agent.stream({ messages, abortSignal: budget });
-      for await (const part of result.fullStream) {
-        switch (part.type) {
-          case "reasoning-start":
-            live.think("", true);
-            break;
-          case "reasoning-delta":
-            live.think(part.text);
-            break;
-          case "tool-input-start":
-            if (part.toolName === "submit_postmortem") live.begin(part.id);
-            break;
-          case "tool-input-delta":
-            await live.append(part.id, part.delta);
-            break;
-          case "tool-call":
-            if (part.toolName === "submit_postmortem") await live.whole(part.toolCallId, part.input);
-            break;
-          case "tool-error":
-            // A submission whose fields aren't in the tool's shape never
-            // reaches its checks; the model is told and submits again.
-            if (part.toolName === "submit_postmortem") live.reject(["a field wasn't in the shape the form asks for"]);
-            break;
-          case "error":
-            throw part.error;
-          // Cut off by the budget or the stall limit: fails like an error.
-          case "abort":
-            throw budget.aborted ? budget.reason : new Error(part.reason ?? "The postmortem was cut off.");
+    await runAgentLoop({
+      agent,
+      messages,
+      abortSignal: budget,
+      steps: () => stepsUsed,
+      maxSteps: MAX_STEPS,
+      maxNudges: MAX_NUDGES,
+      nudge: NUDGE,
+      done: () => accepted !== undefined,
+      tokens,
+      // The submission streams into the draft as it's written.
+      read: async (result) => {
+        for await (const part of result.fullStream) {
+          switch (part.type) {
+            case "reasoning-start":
+              live.think("", true);
+              break;
+            case "reasoning-delta":
+              live.think(part.text);
+              break;
+            case "tool-input-start":
+              if (part.toolName === "submit_postmortem") live.begin(part.id);
+              break;
+            case "tool-input-delta":
+              await live.append(part.id, part.delta);
+              break;
+            case "tool-call":
+              if (part.toolName === "submit_postmortem") await live.whole(part.toolCallId, part.input);
+              break;
+            case "tool-error":
+              // A submission whose fields aren't in the tool's shape never
+              // reaches its checks; the model is told and submits again.
+              if (part.toolName === "submit_postmortem") live.reject(["a field wasn't in the shape the form asks for"]);
+              break;
+            case "error":
+              throw part.error;
+            // Cut off by the budget or the stall limit: fails like an error.
+            case "abort":
+              throw budget.aborted ? budget.reason : new Error(part.reason ?? "The postmortem was cut off.");
+          }
         }
-      }
-      messages.push(...(await result.responseMessages));
-      const usage = await result.totalUsage;
-      addUsage(tokens, usage);
-    }
+      },
+    });
 
     await live.close();
     if (accepted) {

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { Incident } from "../schema";
 import { patchIncident } from "../store";
 import { startVerification, verificationRefusal } from "../verify";
+import { errorMessage } from "../../errors";
 
 // After Stage 5: notices that the fix's PR was merged, records when, and
 // starts verifying the fix from that moment. There's no background poll:
@@ -56,7 +57,7 @@ export async function checkPrMerged(incident: Incident): Promise<void> {
     }
     // The loop runs on its own; a refusal it raises before saving is logged.
     void startVerification(saved.id, { after: "fix", since: mergedAt }).catch((err: unknown) =>
-      logOnce(incident.id, `couldn't verify the merged fix: ${err instanceof Error ? err.message : String(err)}`),
+      logOnce(incident.id, `couldn't verify the merged fix: ${errorMessage(err)}`),
     );
   } catch (err) {
     // gh missing, not signed in, no network, or a timeout: try again on a
