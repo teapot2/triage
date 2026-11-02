@@ -16,6 +16,8 @@ export const toolNameSchema = z.enum([
   "read_source",
   "git_log",
   "deploy_history",
+  // Meta's built-in search, run on its side (Fix and Ask only).
+  "web_search",
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -91,6 +93,19 @@ export const evidenceSchema = z.discriminatedUnion("kind", [
     author: z.string(),
     message: z.string(),
     files: z.array(z.string()),
+    // From deploy_history only: what the record was (a deploy, a config
+    // change, a rollback) and the branch it was deployed from. The mitigation
+    // proposer reads both; older records have neither.
+    deployKind: z.enum(["deploy", "config", "rollback"]).optional(),
+    branch: z.string().optional(),
+  }),
+  // A page the model cited after searching the web: the URL is all Meta
+  // returns of it, with the page's title when it has one.
+  z.object({
+    ...evidenceBase,
+    kind: z.literal("web"),
+    url: z.url(),
+    title: z.string().optional(),
   }),
 ]);
 export type Evidence = z.infer<typeof evidenceSchema>;
@@ -205,6 +220,9 @@ export const fixSchema = z.object({
   // The model's own claim; dataChange is what Triage worked out.
   touchesData: z.boolean(),
   dataChange: dataChangeSchema.optional(),
+  // The web pages the fix stage cited while writing it, as evidence on the
+  // incident.
+  sourceIds: z.array(z.string()).optional(),
 });
 export type Fix = z.infer<typeof fixSchema>;
 
@@ -230,6 +248,9 @@ export type Recovery = z.infer<typeof recoverySchema>;
 export const mitigationSchema = z.object({
   kind: z.enum(["flag_off", "rollback"]),
   target: z.string().describe("The flag name, or the deploy's sha"),
+  // A rollback's release branch, when the deploy record named one: the fix
+  // PR targets it, since the fix was proven against that release's code.
+  branch: z.string().optional(),
   title: z.string(),
   why: claimSchema,
   steps: z.array(z.string()),
@@ -327,6 +348,8 @@ export const fixRunSchema = z.object({
   // Model calls retried after a 429, 5xx, timeout or network error
   // (models/fetch.ts). Absent on records from before they were counted.
   modelRetries: z.number().int().optional(),
+  // Web searches Meta ran for the stage, billed apart from tokens.
+  webSearches: z.number().int().optional(),
   context: contextSchema.optional(),
   error: z.string().optional(),
 });
@@ -463,6 +486,10 @@ export const questionSchema = z.object({
   // evidence_only: no telemetry source to rebuild (bundled examples), so the
   // answer comes from the recorded evidence without tools.
   mode: z.enum(["tools", "evidence_only"]),
+  // Whether the answer may search the web: the composer's switch, on Meta's
+  // API only. Missing on questions from before it existed (off).
+  webSearch: z.boolean().optional(),
+  webSearches: z.number().int().optional(),
   provider: z.string().optional(),
   model: z.string(),
   reasoningEffort: reasoningEffortSchema.optional(),
@@ -632,7 +659,37 @@ export const uptimeEpisodeSchema = z.object({
 });
 export type UptimeEpisode = z.infer<typeof uptimeEpisodeSchema>;
 
-export const incidentSchema = z.object({
+// A stage's model as a run was asked to use it, safe for the browser
+// (models/settings.ts checks the provider when a re-run starts).
+export const stageChoiceSchema = z.object({
+  provider: z.string(),
+  model: z.string().trim().min(1).max(200),
+  effort: reasoningEffortSchema.optional(),
+});
+export type StageChoice = z.infer<typeof stageChoiceSchema>;
+
+// The models a re-run was started with. `lead` only when it checks its
+// hypotheses in parallel; `fix` and `postmortem` go with the run, so the fix
+// written after a deny and a postmortem written once it's promoted use them.
+export const runModelsSchema = z.object({
+  investigate: stageChoiceSchema,
+  lead: stageChoiceSchema.optional(),
+  fix: stageChoiceSchema.optional(),
+  postmortem: stageChoiceSchema.optional(),
+});
+export type RunModels = z.infer<typeof runModelsSchema>;
+
+// What a live investigation read that can't be read again later: the
+// database checks, run once as it started, and the Shopfront source as it
+// stood (saved beside the incident, live/run-snapshot.ts), with the commit
+// git_log reads history from. A re-run reads these instead of the present.
+export const runSnapshotSchema = z.object({
+  takenAt: timestamp,
+  gitFrom: z.string().optional(),
+});
+export type RunSnapshot = z.infer<typeof runSnapshotSchema>;
+
+const incidentBaseSchema = z.object({
   id: z.string(),
   title: z.string(),
   service: z.string(),
@@ -684,8 +741,49 @@ export const incidentSchema = z.object({
   reopenings: z.array(reopeningSchema).optional(),
   // The uptime check that opened it. Missing on every other incident.
   uptime: uptimeEpisodeSchema.optional(),
+  // The models a re-run was started with, on a run that was one (now or
+  // before it was promoted). Missing on a first run: its records say.
+  models: runModelsSchema.optional(),
 });
-export type Incident =z.infer<typeof incidentSchema>;
+
+// The fields that make one investigation run: the investigation itself and
+// what came of it (mitigation, fix, postmortem). A re-run has its own; the
+// incident's (its alert, questions, verification, resolution) are shared.
+export const runFields = [
+  "status",
+  "steps",
+  "thoughts",
+  "evidence",
+  "report",
+  "mitigation",
+  "fix",
+  "validation",
+  "fixRun",
+  "approval",
+  "fixAttempts",
+  "run",
+  "postmortem",
+  "models",
+] as const;
+
+// Another run of the incident's investigation on the same telemetry, with
+// other models: a re-run, or the first run after a re-run was promoted over
+// it. Numbered in the order started, the first run being 1.
+export const rerunSchema = incidentBaseSchema
+  .pick(Object.fromEntries(runFields.map((f) => [f, true])) as { [K in (typeof runFields)[number]]: true })
+  .extend({ number: z.number().int().min(1) });
+export type Rerun = z.infer<typeof rerunSchema>;
+
+export const incidentSchema = incidentBaseSchema.extend({
+  // Which run the incident's own fields hold. Missing: 1, the first.
+  runNumber: z.number().int().min(1).optional(),
+  // The incident's other runs, in the order started.
+  reruns: z.array(rerunSchema).optional(),
+  // A live run's snapshot, for re-runs. Missing on every other incident,
+  // and on live ones from before snapshots.
+  snapshot: runSnapshotSchema.optional(),
+});
+export type Incident = z.infer<typeof incidentSchema>;
 
 // Verifier: every evidence ID cited in the report must exist. Returns the
 // IDs that do not, so the UI can strike the claims that cite them.

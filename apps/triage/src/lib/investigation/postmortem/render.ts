@@ -291,6 +291,8 @@ export function evidenceLine(e: Evidence): string {
         ? `Config change · ${flag} · ${firstLine(e.message)}`
         : `Deploy · ${e.sha.slice(0, 7)} · ${firstLine(e.message)}`;
     }
+    case "web":
+      return `Web · [${e.title ?? e.url}](${e.url})`;
   }
 }
 

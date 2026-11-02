@@ -52,25 +52,34 @@ export function recovered(incident: Incident, now: string, example = false): Inc
   }
   if (example) return next;
 
-  if (incident.status === "investigating") {
-    edit({
-      status: "failed",
-      run: incident.run && {
-        ...incident.run,
-        finishedAt: now,
-        error: `${RESTARTED} before the investigation finished`,
-      },
-    });
-  }
-  const fixRun = incident.fixRun;
-  if (fixRun && (fixRun.status === "writing" || fixRun.status === "testing")) {
-    edit({ fixRun: { ...fixRun, status: "failed", finishedAt: now, error: `${RESTARTED} while the fix was being written and tested` } });
+  const own = cutOffRun(incident, now);
+  if (own) edit(own);
+  // Re-runs, the same way.
+  if (incident.reruns?.some((r) => cutOffRun(r, now))) {
+    edit({ reruns: incident.reruns.map((r) => ({ ...r, ...cutOffRun(r, now) })) });
   }
   const approval = incident.approval;
   if (approval?.prState === "opening") {
     edit({ approval: { ...approval, prState: "failed", prError: `${RESTARTED} while the PR was being opened` } });
   }
   return next;
+}
+
+// A run's investigation and fix marked as cut off where they claim to be
+// running, or undefined if neither does.
+function cutOffRun(r: Pick<Incident, "status" | "run" | "fixRun">, now: string): Partial<Incident> | undefined {
+  let patch: Partial<Incident> | undefined;
+  if (r.status === "investigating") {
+    patch = {
+      status: "failed",
+      run: r.run && { ...r.run, finishedAt: now, error: `${RESTARTED} before the investigation finished` },
+    };
+  }
+  const fixRun = r.fixRun;
+  if (fixRun && (fixRun.status === "writing" || fixRun.status === "testing")) {
+    patch = { ...patch, fixRun: { ...fixRun, status: "failed", finishedAt: now, error: `${RESTARTED} while the fix was being written and tested` } };
+  }
+  return patch;
 }
 
 // The incident with every question still answering marked as failed, or

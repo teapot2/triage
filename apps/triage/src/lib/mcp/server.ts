@@ -111,11 +111,11 @@ export function createTriageMcpServer({ baseUrl }: { baseUrl: string }): McpServ
     "get_evidence",
     {
       title: "Get evidence",
-      description: `Evidence items in full: log lines, spans with their attributes, metric series, database rows, source code and commits, each with the tool call that found it. Pick items by ID or by kind; with neither, the evidence the report cites. At most ${MAX_EVIDENCE} items per call.`,
+      description: `Evidence items in full: log lines, spans with their attributes, metric series, database rows, source code, commits and web pages, each with the tool call that found it. Pick items by ID or by kind; with neither, the evidence the report cites. At most ${MAX_EVIDENCE} items per call.`,
       inputSchema: {
         incident_id: incidentId,
         ids: z.array(z.string().regex(/^ev_[a-z0-9_]+$/)).max(MAX_EVIDENCE).optional().describe("Evidence IDs, e.g. [\"ev_log_3\"]"),
-        kind: z.enum(["log", "span", "metric", "db", "source", "commit"]).optional(),
+        kind: z.enum(["log", "span", "metric", "db", "source", "commit", "web"]).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

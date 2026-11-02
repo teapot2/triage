@@ -846,5 +846,460 @@ const priceGap: Incident = {
 };
 priceGap.mitigation = proposeMitigation(priceGap.report!, priceGap.evidence, priceGap.service, "2026-10-24T15:21:30Z");
 
-// Hand-written examples shown alongside real runs.
-export const exampleIncidents = [poolLeak, controlRun, priceGap].map((i) => incidentSchema.parse(i));
+// The third fault (FF_LIVE_RATINGS), cut down from a real watch-opened run
+// on Nov 2 (Muse Spark 1.3, high effort): its steps, evidence, patch and
+// sandbox results, trimmed to the ones the diagnosis rests on. One finding
+// is left out: the run's slow-query list was topped by Triage's own copy of
+// the reviews table into a fix sandbox, which it read as the store's.
+const liveRatingsPatch = `--- a/src/lib/ratings.ts
++++ b/src/lib/ratings.ts
+@@ -1,4 +1,4 @@
+-import { eq, inArray } from "drizzle-orm";
++import { inArray, sql } from "drizzle-orm";
+ import { db } from "@/db/client";
+ import { products, reviews } from "@/db/schema";
+ import { isEnabled } from "@/lib/flags";
+@@ -22,12 +22,20 @@ export async function getListingRatings(productIds: number[]): Promise<Map<numbe
+     return ratings;
+   }
+
+-  for (const id of productIds) {
+-    const rows = await db.select({ rating: reviews.rating }).from(reviews).where(eq(reviews.productId, id));
+-    const total = rows.reduce((sum, r) => sum + r.rating, 0);
+-    ratings.set(id, {
+-      ratingTenths: rows.length ? Math.round((total / rows.length) * 10) : 0,
+-      reviewCount: rows.length,
++  const rows = await db
++    .select({
++      productId: reviews.productId,
++      reviewCount: sql<number>\`count(*)::int\`,
++      avgRating: sql<number | null>\`avg(\${reviews.rating})::float\`,
++    })
++    .from(reviews)
++    .where(inArray(reviews.productId, productIds))
++    .groupBy(reviews.productId);
++  for (const id of productIds) ratings.set(id, { ratingTenths: 0, reviewCount: 0 });
++  for (const row of rows) {
++    ratings.set(row.productId, {
++      ratingTenths: row.avgRating == null ? 0 : Math.round(row.avgRating * 10),
++      reviewCount: Number(row.reviewCount),
+     });
+   }
+   return ratings;
+--- /dev/null
++++ b/src/lib/ratings.test.ts
+@@ -0,0 +1,47 @@
++import { describe, it, expect, afterAll } from "vitest";
++import { inArray } from "drizzle-orm";
++import { db, pool, queriesIssued, rowsFetched } from "@/db/client";
++import { products, reviews } from "@/db/schema";
++import { setFlag } from "@/lib/flags";
++import { getListingRatings } from "@/lib/ratings";
++
++describe("getListingRatings", () => {
++  afterAll(async () => {
++    await pool.end();
++  });
++
++  it("averages live ratings with a single aggregated query", async () => {
++    setFlag("FF_LIVE_RATINGS", true);
++    const suffix = \`\${Date.now()}-\${Math.floor(Math.random() * 1000000)}\`;
++    const names = [0, 1, 2].map((i) => \`test-rating-\${suffix}-\${i}\`);
++    let ids: number[] = [];
++    try {
++      const inserted = await db
++        .insert(products)
++        .values(names.map((name) => ({ name, priceCents: 100 })))
++        .returning({ id: products.id });
++      ids = inserted.map((r) => r.id);
++      await db.insert(reviews).values([
++        { productId: ids[0], rating: 5 },
++        { productId: ids[0], rating: 5 },
++        { productId: ids[0], rating: 4 },
++        { productId: ids[1], rating: 3 },
++      ]);
++      const queriesBefore = queriesIssued();
++      const rowsBefore = rowsFetched();
++      const ratings = await getListingRatings(ids);
++      const queriesAfter = queriesIssued();
++      const rowsAfter = rowsFetched();
++      expect(ratings.get(ids[0])).toEqual({ ratingTenths: 47, reviewCount: 3 });
++      expect(ratings.get(ids[1])).toEqual({ ratingTenths: 30, reviewCount: 1 });
++      expect(ratings.get(ids[2])).toEqual({ ratingTenths: 0, reviewCount: 0 });
++      expect(queriesAfter - queriesBefore).toBe(1);
++      expect(rowsAfter - rowsBefore).toBeLessThanOrEqual(ids.length);
++    } finally {
++      setFlag("FF_LIVE_RATINGS", false);
++      if (ids.length > 0) {
++        await db.delete(products).where(inArray(products.id, ids));
++      }
++    }
++  });
++});
+`;
+
+// p95 of GET / from 23:57, a minute apart, as the run measured it: the
+// rollout was already slowing the page when the window opens.
+const liveRatingsP95 = [
+  3128.8, 2123.2, 963.8, 739.5, 1842.5, 1887.3, 1820.5, 2396.5, 1275.1, 2245.7, 1929.1, 1719.6, 1700.1, 2035.1, 1556.4, 1571.3,
+  1123.4, 1799.0, 978.9, 1454.9, 1214.6, 1409.4, 890.9, 1529.1, 2116.8, 1898.7, 1424.0, 974.0, 1116.5, 2129.9,
+];
+const liveRatingsTest = "averages live ratings with a single aggregated query";
+
+const liveRatings: Incident = {
+  id: "inc_live_ratings",
+  title: "More than 3 requests slower than 1500 ms on GET /",
+  service: "shopfront",
+  severity: "sev3",
+  status: "awaiting_approval",
+  detectedAt: "2026-11-02T00:26:33Z",
+  openedBy: "watch",
+  trigger: {
+    metric: "http.server.request.duration.p95{route=/}",
+    unit: "ms",
+    threshold: 1500,
+    observed: 2129.9,
+    series: series("2026-11-01T23:57:00Z", liveRatingsP95),
+    rule: { id: "page-latency", name: "Page latency", description: "more than 3 requests slower than 1500 ms on each page" },
+    route: "/",
+  },
+  steps: [
+    {
+      id: "step_1",
+      tool: "query_traces",
+      input: { service: "shopfront", route: "/", minDurationMs: 1500, limit: 10, windowMinutes: 30 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:37Z",
+      durationMs: 81,
+      summary: "10 home page requests over 1.5 s in 30 minutes, the slowest 3.1 s",
+      evidenceIds: ["ev_span_home"],
+    },
+    {
+      id: "step_2",
+      tool: "query_metrics",
+      input: { metrics: ["http.server.request.duration.p95{route=/}"], windowMinutes: 30 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:39Z",
+      durationMs: 15,
+      summary: "Home page p95 between 0.7 and 3.1 s for the last half hour",
+      evidenceIds: ["ev_metric_p95"],
+    },
+    {
+      id: "step_3",
+      tool: "query_logs",
+      input: { service: "shopfront", minLevel: "warn", windowMinutes: 30 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:39Z",
+      durationMs: 12,
+      summary: "49 slow-request warnings on GET /, no errors",
+      evidenceIds: ["ev_log_slow"],
+    },
+    {
+      id: "step_4",
+      tool: "query_metrics",
+      input: { metrics: ["http.server.request.rate"], windowMinutes: 30 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:43Z",
+      durationMs: 73,
+      summary: "About 1 request a second, no spike",
+      evidenceIds: ["ev_metric_rate"],
+    },
+    {
+      id: "step_5",
+      tool: "query_metrics",
+      input: { metrics: ["db.client.connection.count{state=used}"], windowMinutes: 30 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:43Z",
+      durationMs: 69,
+      summary: "1 of 10 database connections in use, at most 2",
+      evidenceIds: ["ev_metric_pool"],
+    },
+    {
+      id: "step_6",
+      tool: "db_diagnostics",
+      input: { check: "locks" },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:43Z",
+      durationMs: 26,
+      summary: "No blocked queries",
+      evidenceIds: ["ev_db_locks"],
+    },
+    {
+      id: "step_7",
+      tool: "git_log",
+      input: { path: "src/lib/ratings.ts", limit: 5 },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:47Z",
+      durationMs: 40,
+      summary: "e5ac370 added live ratings behind FF_LIVE_RATINGS",
+      evidenceIds: ["ev_commit_ratings"],
+    },
+    {
+      id: "step_8",
+      tool: "read_source",
+      input: { path: "src/lib/ratings.ts" },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:48Z",
+      durationMs: 26,
+      summary: "Live ratings load every review of each listed product, one query per product",
+      evidenceIds: ["ev_source_ratings"],
+    },
+    {
+      id: "step_9",
+      tool: "read_source",
+      input: { path: "src/db/seed.ts" },
+      status: "completed",
+      startedAt: "2026-11-02T00:26:53Z",
+      durationMs: 53,
+      summary: "The store holds 50,000 reviews per product",
+      evidenceIds: ["ev_source_seed"],
+    },
+  ],
+  evidence: [
+    {
+      id: "ev_span_home",
+      kind: "span",
+      tool: "query_traces",
+      summary: "shopfront GET / 3129 ms ok at 23:57",
+      observedAt: "2026-11-01T23:57:31Z",
+      service: "shopfront",
+      traceId: "66772b008c4debaedd518a4fb45daba6",
+      name: "GET /",
+      durationMs: 3128.8,
+      status: "ok",
+      attributes: { "http.response.status_code": 200, "url.path": "/", "db.client.connection.wait_time_ms": 55.8, "db.queries": 4 },
+    },
+    {
+      id: "ev_metric_p95",
+      kind: "metric",
+      tool: "query_metrics",
+      summary: "http.server.request.duration.p95{route=/}: 1842.5 -> 2129.9 ms (peak 3128.8 at 23:57)",
+      metric: "http.server.request.duration.p95{route=/}",
+      unit: "ms",
+      baseline: 1842.5,
+      observed: 2129.9,
+      series: series("2026-11-01T23:57:00Z", liveRatingsP95),
+    },
+    {
+      id: "ev_log_slow",
+      kind: "log",
+      tool: "query_logs",
+      summary: "49x warn 'slow request' on GET / (23:56 to 00:26)",
+      observedAt: "2026-11-02T00:26:17Z",
+      service: "shopfront",
+      level: "warn",
+      message:
+        'slow request {"http.request.method":"GET","http.route":"/","http.response.status_code":<n>,"url.path":"/","duration_ms":<n>}',
+      count: 49,
+      traceId: "1888b6497c361c114f2e2dd872ab2340",
+    },
+    {
+      id: "ev_metric_rate",
+      kind: "metric",
+      tool: "query_metrics",
+      summary: "http.server.request.rate: 0.98 -> 1.21 req/s (peak 1.98 at 00:04)",
+      metric: "http.server.request.rate",
+      unit: "req/s",
+      baseline: 0.98,
+      observed: 1.21,
+      series: series(
+        "2026-11-01T23:57:00Z",
+        [
+          1.03, 1.3, 0.98, 0.85, 0.9, 1.17, 0.98, 1.98, 0.85, 0.82, 1.33, 0.6, 0.98, 1.37, 1, 1.32, 0.97, 1.2, 0.72, 1.32, 1.03, 1.23,
+          0.88, 1.15, 1.2, 1.05, 0.83, 1.22, 0.85, 1.21,
+        ],
+      ),
+    },
+    {
+      id: "ev_metric_pool",
+      kind: "metric",
+      tool: "query_metrics",
+      summary: "db.client.connection.count{state=used}: 1 of a 10-connection pool (peak 2)",
+      metric: "db.client.connection.count{state=used}",
+      unit: "connections",
+      baseline: 1,
+      observed: 1,
+      series: series(
+        "2026-11-01T23:57:00Z",
+        [1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 0, 1, 2, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1],
+      ),
+    },
+    {
+      id: "ev_db_locks",
+      kind: "db",
+      tool: "db_diagnostics",
+      summary: "locks: no rows",
+      query:
+        "SELECT pid, pg_blocking_pids(pid)::text AS blocked_by, left(query, 60) AS query FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0",
+      rows: [],
+    },
+    {
+      id: "ev_commit_ratings",
+      kind: "commit",
+      tool: "git_log",
+      summary: "e5ac370 'feat(shopfront): live ratings from the reviews table, behind FF_LIVE_RATINGS' by teapot2 at 05:14",
+      observedAt: "2026-11-01T05:14:19Z",
+      sha: "e5ac370",
+      author: "teapot2",
+      message: "feat(shopfront): live ratings from the reviews table, behind FF_LIVE_RATINGS",
+      files: ["src/lib/ratings.ts"],
+    },
+    {
+      id: "ev_source_ratings",
+      kind: "source",
+      tool: "read_source",
+      summary: "getListingRatings loads every review of each product and averages them in JavaScript",
+      file: "src/lib/ratings.ts",
+      startLine: 12,
+      code: `export async function getListingRatings(productIds: number[]): Promise<Map<number, ListingRating>> {
+  const ratings = new Map<number, ListingRating>();
+  if (productIds.length === 0) return ratings;
+
+  if (!isEnabled("FF_LIVE_RATINGS")) {
+    const rows = await db
+      .select({ id: products.id, ratingTenths: products.ratingTenths, reviewCount: products.reviewCount })
+      .from(products)
+      .where(inArray(products.id, productIds));
+    for (const { id, ...rating } of rows) ratings.set(id, rating);
+    return ratings;
+  }
+
+  for (const id of productIds) {
+    const rows = await db.select({ rating: reviews.rating }).from(reviews).where(eq(reviews.productId, id));
+    const total = rows.reduce((sum, r) => sum + r.rating, 0);
+    ratings.set(id, {
+      ratingTenths: rows.length ? Math.round((total / rows.length) * 10) : 0,
+      reviewCount: rows.length,
+    });
+  }
+  return ratings;
+}`,
+    },
+    {
+      id: "ev_source_seed",
+      kind: "source",
+      tool: "read_source",
+      summary: "The seed writes 50,000 reviews for each product",
+      file: "src/db/seed.ts",
+      startLine: 7,
+      code: `// Reviews written for each product. Stands in for a busy store's review
+// history: years of orders, each one a chance of a review.
+const REVIEWS_PER_PRODUCT = 50_000;`,
+    },
+  ],
+  report: {
+    summary:
+      "The home page has been slow since live ratings went on: for every listed product, getListingRatings loads all 50,000 of its reviews and averages them in JavaScript, one query per product.",
+    servicesQueried: ["shopfront", "postgres"],
+    hypotheses: [
+      {
+        id: "h_live_ratings",
+        title: "Live ratings load every review, one product at a time",
+        confidence: 0.85,
+        status: "leading",
+        causalChain: {
+          symptom: {
+            text: "GET / p95 around 2.1 s, with 49 slow requests in half an hour and traces up to 3.1 s.",
+            evidenceIds: ["ev_metric_p95", "ev_log_slow", "ev_span_home"],
+          },
+          propagation: {
+            text: "The home page's listings call getListingRatings, which with FF_LIVE_RATINGS on runs one reviews query per product and pulls every row into the server to average.",
+            evidenceIds: ["ev_source_ratings", "ev_span_home"],
+          },
+          rootCause: {
+            text: "Commit e5ac370 added live ratings as a per-product loop over the reviews table, which holds 50,000 reviews per product.",
+            evidenceIds: ["ev_commit_ratings", "ev_source_ratings", "ev_source_seed"],
+          },
+        },
+      },
+      {
+        id: "h_pool",
+        title: "Connection pool exhaustion",
+        confidence: 0.05,
+        status: "rejected",
+        causalChain: {
+          symptom: { text: "GET / p95 around 2.1 s.", evidenceIds: ["ev_metric_p95"] },
+          propagation: {
+            text: "A full pool would leave requests waiting for a connection, but at most 2 of 10 were in use.",
+            evidenceIds: ["ev_metric_pool"],
+          },
+          rootCause: { text: "Nothing holds connections: the pool stays nearly idle.", evidenceIds: ["ev_metric_pool"] },
+        },
+      },
+      {
+        id: "h_traffic",
+        title: "Traffic spike",
+        confidence: 0.05,
+        status: "rejected",
+        causalChain: {
+          symptom: { text: "GET / p95 around 2.1 s.", evidenceIds: ["ev_metric_p95"] },
+          propagation: { text: "More traffic would load the server, but the rate held near 1 request a second.", evidenceIds: ["ev_metric_rate"] },
+          rootCause: { text: "No surge in the window.", evidenceIds: ["ev_metric_rate"] },
+        },
+      },
+      {
+        id: "h_locks",
+        title: "Lock contention",
+        confidence: 0.05,
+        status: "rejected",
+        causalChain: {
+          symptom: { text: "GET / p95 around 2.1 s.", evidenceIds: ["ev_metric_p95"] },
+          propagation: { text: "Blocked queries would show in the lock check, which found none.", evidenceIds: ["ev_db_locks"] },
+          rootCause: { text: "No query is waiting on another.", evidenceIds: ["ev_db_locks"] },
+        },
+      },
+    ],
+    verdict: { kind: "root_cause", hypothesisId: "h_live_ratings" },
+  },
+  fix: {
+    summary:
+      "Replace the per-product review scan with one grouped AVG/COUNT query, so listings no longer fetch every review row.",
+    patch: liveRatingsPatch,
+    files: ["src/lib/ratings.ts", "src/lib/ratings.test.ts"],
+    regressionTest: { file: "src/lib/ratings.test.ts", name: liveRatingsTest },
+    risk: "low",
+    touchesData: false,
+  },
+  validation: [
+    {
+      label: "Original code",
+      ref: "original",
+      command: "pnpm vitest run src/lib/ratings.test.ts",
+      exitCode: 1,
+      durationMs: 1229,
+      tests: [{ name: liveRatingsTest, status: "failed", durationMs: 39, error: "AssertionError: expected 3 to be 1 // Object.is equality" }],
+      output: ` FAIL  src/lib/ratings.test.ts > getListingRatings > ${liveRatingsTest}\nAssertionError: expected 3 to be 1 // Object.is equality\n\n- Expected\n+ Received\n\n- 1\n+ 3\n\n Test Files  1 failed (1)\n      Tests  1 failed (1)\n\nexit code 1`,
+    },
+    {
+      label: "Patched code",
+      ref: "patched",
+      command: "pnpm vitest run src/lib/ratings.test.ts",
+      exitCode: 0,
+      durationMs: 1187,
+      tests: [{ name: liveRatingsTest, status: "passed", durationMs: 37 }],
+      output: ` ✓ src/lib/ratings.test.ts > getListingRatings > ${liveRatingsTest} 37ms\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n\nexit code 0`,
+    },
+    {
+      label: "Patched code: typecheck",
+      ref: "patched",
+      command: "pnpm tsc --noEmit",
+      exitCode: 0,
+      durationMs: 4385,
+      tests: [],
+      output: "No type errors.\n\nexit code 0",
+    },
+  ],
+  approval: {
+    state: "pending",
+    requestedAt: "2026-11-02T00:28:02Z",
+  },
+};
+liveRatings.mitigation = proposeMitigation(
+  liveRatings.report!,
+  liveRatings.evidence,
+  liveRatings.service,
+  "2026-11-02T00:27:10Z",
+);
+
+// Examples shown alongside real runs: three by hand, one cut from a run.
+export const exampleIncidents = [poolLeak, controlRun, priceGap, liveRatings].map((i) => incidentSchema.parse(i));

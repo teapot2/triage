@@ -3,8 +3,7 @@
 import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { cn } from "@/lib/utils";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";import { cn } from "@/lib/utils";
 
 // The pieces of Settings' lists: a section heading, group headings inside a
 // list, and rows that open in place to an editor. A row's status is a
@@ -50,11 +49,13 @@ export function ListGroup({ label, note }: { label: string; note?: string }) {
 // editor holds a draft.
 //
 // `summary` is the row's current value, in fixed-width columns the caller
-// sizes so they line up from row to row. It sits before the status from sm
-// up and under the subtitle below that, and hides while the row is open,
+// sizes so they line up from row to row. It sits before the status once the
+// row itself is wide enough (a container query: beside Settings' menu the
+// list is narrower than the window suggests) and under the subtitle below
+// that, and hides while the row is open,
 // where the editor shows the same values. The open subtitle wraps instead
-// of truncating, and the editor sits in an inset panel so it reads as the
-// row's own.
+// of truncating, and the editor sits directly in the row, aligned with its
+// title, with no card of its own.
 export function DisclosureRow({
   title,
   tag,
@@ -68,7 +69,7 @@ export function DisclosureRow({
 }: {
   title: string;
   tag?: string;
-  subtitle: ReactNode;
+  subtitle?: ReactNode;
   summary?: ReactNode;
   status?: ReactNode;
   unsaved?: boolean;
@@ -77,11 +78,11 @@ export function DisclosureRow({
   children: ReactNode;
 }) {
   return (
-    <Collapsible open={open} onOpenChange={onOpenChange} className="group/row">
+    <Collapsible open={open} onOpenChange={onOpenChange} className="group/row @container">
       <CollapsibleTrigger
         className={cn(
           "grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-2 px-4 py-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset",
-          summary && "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:gap-x-6",
+          summary && "@2xl:grid-cols-[minmax(0,1fr)_auto_auto_auto] @2xl:gap-x-6",
         )}
       >
         <span className="flex min-w-0 flex-col gap-0.5">
@@ -93,16 +94,18 @@ export function DisclosureRow({
               </Badge>
             )}
           </span>
-          <span className="truncate text-muted-foreground text-xs group-data-[state=open]/row:whitespace-normal">
-            {subtitle}
-          </span>
+          {subtitle && (
+            <span className="truncate text-muted-foreground text-xs group-data-[state=open]/row:whitespace-normal">
+              {subtitle}
+            </span>
+          )}
         </span>
         {summary && (
-          <span className="col-start-1 row-start-2 flex items-center gap-4 group-data-[state=open]/row:hidden sm:col-start-2 sm:row-start-1">
+          <span className="col-start-1 row-start-2 flex items-center gap-4 group-data-[state=open]/row:hidden @2xl:col-start-2 @2xl:row-start-1">
             {summary}
           </span>
         )}
-        <span className={cn("flex items-center justify-end gap-3", summary && "sm:min-w-28")}>
+        <span className={cn("flex items-center justify-end gap-3", summary && "@2xl:min-w-28")}>
           {unsaved && !open && <span className="text-muted-foreground text-xs">Unsaved</span>}
           {status}
         </span>
@@ -112,7 +115,7 @@ export function DisclosureRow({
         />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mx-4 mb-4 flex flex-col gap-3 rounded-lg border bg-muted/30 p-4">{children}</div>
+        <div className="flex flex-col gap-3 px-4 pt-1 pb-4">{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

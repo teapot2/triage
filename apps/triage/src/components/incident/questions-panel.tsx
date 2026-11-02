@@ -15,6 +15,7 @@ import {
   CornerDownRightIcon,
   EllipsisIcon,
   GitCommitHorizontalIcon,
+  GlobeIcon,
   ImageIcon,
   LoaderCircleIcon,
   type LucideIcon,
@@ -54,6 +55,7 @@ import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shr
 import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
+import { searchSummary, WEB_SEARCH } from "@/lib/investigation/web-search";
 import { contextLimit, contextShare } from "@/lib/models/context";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { effortLabels, type ReasoningEffort } from "@/lib/models/stages";
@@ -105,6 +107,8 @@ export interface QueuedQuestion {
   key: string;
   text: string;
   image?: Attachment;
+  // The web search switch as it was when sent; absent where Ask has none.
+  webSearch?: boolean;
 }
 
 export interface Ask {
@@ -124,6 +128,10 @@ export interface Ask {
   error: string | undefined;
   draft: string;
   setDraft: (text: string) => void;
+  // Whether the next question may search the web: undefined when Ask isn't
+  // on Meta's API, the one with the search, so there's no switch.
+  webSearch: boolean | undefined;
+  setWebSearch: (on: boolean) => void;
   // The screenshot attached to the draft, and whether one is being shrunk.
   image: Attachment | undefined;
   attaching: boolean;
@@ -165,19 +173,23 @@ function questionRequest(question: QueuedQuestion): RequestInit {
     return {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: question.text }),
+      body: JSON.stringify({ text: question.text, webSearch: question.webSearch }),
     };
   }
   const form = new FormData();
   form.append("text", question.text);
+  if (question.webSearch !== undefined) form.append("webSearch", String(question.webSearch));
   form.append("image", question.image.blob, `screenshot.${question.image.mediaType.split("/")[1]}`);
   form.append("width", String(question.image.width));
   form.append("height", String(question.image.height));
   return { method: "POST", body: form };
 }
 
-export function useAskQuestion(incident: Incident): Ask {
+// webSearch: the composer's switch to start with, Settings' choice, or
+// undefined for none.
+export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): Ask {
   const router = useRouter();
+  const [webSearch, setWebSearch] = useState(webSearchDefault);
   const [live, setLive] = useState<LiveQuestion>();
   const [queue, setQueue] = useState<QueuedQuestion[]>([]);
   const [paused, setPaused] = useState(false);
@@ -331,7 +343,7 @@ export function useAskQuestion(incident: Incident): Ask {
     (text: string, image?: Attachment) => {
       const trimmed = text.trim();
       if (!trimmed && !image) return;
-      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image };
+      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image, webSearch };
       if (waiting || paused || queue.length > 0 || busy.current) {
         setQueue((q) => [...q, question]);
         setDraft("");
@@ -341,7 +353,7 @@ export function useAskQuestion(incident: Incident): Ask {
         void ask(question, false);
       }
     },
-    [waiting, paused, queue.length, ask],
+    [waiting, paused, queue.length, ask, webSearch],
   );
 
   const unqueue = useCallback(
@@ -376,6 +388,8 @@ export function useAskQuestion(incident: Incident): Ask {
     error,
     draft,
     setDraft,
+    webSearch,
+    setWebSearch,
     image,
     attaching,
     attach,
@@ -456,6 +470,7 @@ interface QuestionView {
   // What the model wrote between tool calls, each with when.
   thoughts: { key: string; at: string; text: string }[];
   mode?: Question["mode"];
+  webSearches?: number;
   model?: string;
   provider?: string;
   reasoningEffort?: ReasoningEffort;
@@ -487,6 +502,7 @@ function savedView(q: Question, key: string, incidentId: string): QuestionView {
       return text ? [{ key: t.id, at: t.startedAt, text }] : [];
     }),
     mode: q.mode,
+    webSearches: q.webSearches,
     model: q.model,
     provider: q.provider,
     reasoningEffort: q.reasoningEffort,
@@ -519,7 +535,7 @@ function liveView(live: LiveQuestion): QuestionView {
         status: part.state === "output-available" ? "completed" : part.state === "output-error" ? "error" : "running",
         startedAt: new Date(start).toISOString(),
         durationMs: t?.end !== undefined ? t.end - start : undefined,
-        summary: output?.summary,
+        summary: tool.data === WEB_SEARCH ? searchSummary(part.output) : output?.summary,
         evidenceIds: output?.evidence?.map((e) => e.id) ?? [],
         error: part.state === "output-error" ? part.errorText : undefined,
       });
@@ -1127,6 +1143,7 @@ function ReplyDetails({ view }: { view: QuestionView }) {
   }
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
   if (view.via === "mcp") rows.push(["Asked from", "A coding agent, over MCP"]);
+  if (view.webSearches) rows.push(["Web searches", view.webSearches]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
   return (
     <Popover>
@@ -1488,6 +1505,27 @@ function Composer({
           </TooltipTrigger>
           <TooltipContent>Attach a screenshot · or paste or drop one</TooltipContent>
         </Tooltip>
+        {ask.webSearch !== undefined && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={disabled}
+                aria-label="Search the web"
+                aria-pressed={ask.webSearch}
+                className="text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+                onClick={() => ask.setWebSearch(!ask.webSearch)}
+              >
+                <GlobeIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {ask.webSearch ? "Web search on · may look up a library's docs and cite them" : "Web search off"}
+            </TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

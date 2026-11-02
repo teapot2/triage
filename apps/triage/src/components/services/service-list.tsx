@@ -146,7 +146,9 @@ function ServiceRows({ services }: { services: ServiceRow[] }) {
             )}
           </span>
           <span className="text-muted-foreground text-xs tabular-nums">
-            {total === 0 ? "No incidents yet" : `${open > 0 ? `${open} open` : "No open incidents"} · ${total} total`}
+            {/* The dot already says whether any are open; the words only
+                count them, and say nothing for a service with none. */}
+            {total === 0 ? "" : open > 0 ? `${open} open · ${total} total` : `${total} ${total === 1 ? "incident" : "incidents"}`}
           </span>
           {latest && (
             <Link

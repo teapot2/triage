@@ -47,7 +47,8 @@ export interface Expected {
   // Each inner list is one point the diagnosis must make, in any of these
   // words (case-insensitive).
   mustMention: string[][];
-  mitigation?: { kind: "flag_off"; target: string };
+  // The flag to turn off, or the sha to roll back.
+  mitigation?: { kind: "flag_off" | "rollback"; target: string };
 }
 
 const levelRank = { debug: 0, info: 1, warn: 2, error: 3 } as const;

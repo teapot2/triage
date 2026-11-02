@@ -49,6 +49,8 @@ export interface LiveLog {
   time: number;
   level: "debug" | "info" | "warn" | "error";
   body: string;
+  // The record's structured fields, shown after the body.
+  attributes?: Record<string, string | number | boolean>;
   traceId?: string;
 }
 

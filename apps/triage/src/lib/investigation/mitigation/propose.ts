@@ -6,6 +6,9 @@ const flagCheck = /isEnabled\(\s*["'`](FF_[A-Z0-9_]+)["'`]\s*\)/;
 
 const isDeploy = (e: Evidence): e is Commit => e.kind === "commit" && e.tool === "deploy_history";
 const isConfig = (e: Commit) => e.sha.startsWith("config:");
+// A deploy that can be rolled back: a code deploy, not a flag flip and not a
+// rollback (its sha is the commit it already undid).
+const isRollbackable = (e: Commit) => !isConfig(e) && e.deployKind !== "rollback";
 // Connections still checked out: turning the flag off stops new leaks but
 // frees none of these, so the flag-off also recycles them. Only a pool
 // metric well above its baseline shows connections being held; database
@@ -19,7 +22,7 @@ const isPoolEvidence = (e: Evidence) =>
 
 const recycleStep = "Recycle pooled connections held longer than 5 s (what a restart would do)";
 
-type Candidate = { kind: Mitigation["kind"]; target: string; from: Evidence; turnedOn?: boolean };
+type Candidate = { kind: Mitigation["kind"]; target: string; from: Evidence; turnedOn?: boolean; branch?: string };
 
 // The leading hypothesis' causal chain, as the evidence items it cites (the
 // set the alert chart's deploy markers come from). A deploy counts when the
@@ -46,7 +49,7 @@ function candidate(items: Evidence[], deploys: Commit[], evidence: Evidence[], a
     const flag = e.kind === "source" ? flagCheck.exec(e.code)?.[1] : undefined;
     if (flag) return { kind: "flag_off", target: flag, from: e };
   }
-  const deploy = deploys.find((e) => !isConfig(e));
+  const deploy = deploys.find(isRollbackable);
   if (!deploy) return undefined;
   // Code shipped dark and switched on later: the diagnosis may blame the
   // deploy, but turning the flag back off is the smaller, safer step, so a
@@ -60,7 +63,7 @@ function candidate(items: Evidence[], deploys: Commit[], evidence: Evidence[], a
     .filter((e) => isConfig(e) && e.message.includes("turned on") && at(e) >= at(deploy) && at(e) <= until)
     .sort((a, b) => at(a) - at(b))[0];
   if (later) return { kind: "flag_off", target: later.sha.slice("config:".length), from: later, turnedOn: true };
-  return { kind: "rollback", target: deploy.sha, from: deploy };
+  return { kind: "rollback", target: deploy.sha, from: deploy, branch: deploy.branch };
 }
 
 const templates = {
@@ -72,7 +75,7 @@ const templates = {
   }),
   rollback: (sha: string, service: string) => ({
     title: `Roll back ${service} to the deploy before ${sha}`,
-    steps: [`Redeploy ${service} at the deploy before ${sha}`],
+    steps: [`Roll back ${sha} on ${service}`],
     undo: `Redeploy ${sha}`,
     risk: "low" as const,
   }),
@@ -105,6 +108,7 @@ export function proposeMitigation(
   return {
     kind: c.kind,
     target: c.target,
+    ...(c.branch ? { branch: c.branch } : {}),
     ...t,
     steps: pool.length ? [...t.steps, recycleStep] : t.steps,
     why: { text: why(c, service, pool.length > 0), evidenceIds: [c.from.id, ...pool.map((e) => e.id)] },

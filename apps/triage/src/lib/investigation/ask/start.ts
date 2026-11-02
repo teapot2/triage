@@ -1,4 +1,4 @@
-import { stageModel, stageProblem } from "../../models/settings";
+import { stageModel, stageProblem, webSearchOn } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import type { Incident, Question } from "../schema";
 import { sourceKind } from "../source-kind";
@@ -21,12 +21,15 @@ class Refused extends Error {}
 export async function startQuestion(
   id: string,
   text: string,
-  opts: { image?: QuestionImage; via?: Question["via"] } = {},
+  opts: { image?: QuestionImage; webSearch?: boolean; via?: Question["via"] } = {},
 ): Promise<StartedQuestion> {
   if (!(await getIncident(id))) return { ok: false, status: 404, error: `unknown incident: ${id}` };
   const stage = await stageModel("ask");
   const problem = stageProblem(stage);
   if (problem) return { ok: false, status: 409, error: problem };
+  // Only Meta's API has the search; elsewhere the question is asked without.
+  // Without a choice, Settings decides.
+  const webSearch = stage.provider === "meta" && (opts.webSearch ?? (await webSearchOn()));
 
   let question: Question | undefined;
   let incident: Incident;
@@ -55,6 +58,7 @@ export async function startQuestion(
         steps: [],
         evidence: [],
         mode: sourceKind(i) ? "tools" : "evidence_only",
+        webSearch,
         provider: stage.provider,
         model: stage.model,
         reasoningEffort: recordedEffort(stage),

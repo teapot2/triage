@@ -22,6 +22,8 @@ import { defaultProfile, normalizeProfile, type Profile } from "@/lib/traffic-pr
 
 const HISTORY_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 10_000;
+// A load balancer checks a store behind it around the clock.
+const HEALTH_PROBE_MS = 10_000;
 // Past this many unanswered requests, or visits under way, new visitors
 // stay away instead of piling on.
 const MAX_IN_FLIGHT = 60;
@@ -47,6 +49,7 @@ type Second = {
 type Traffic = {
   profile: Profile;
   timer: ReturnType<typeof setTimeout> | null;
+  probe: ReturnType<typeof setInterval> | null;
   // Bumped on every start and stop, so visits from an earlier run stop
   // after their current request.
   run: number;
@@ -63,6 +66,7 @@ type Traffic = {
 const initial: Traffic = {
   profile: defaultProfile,
   timer: null,
+  probe: null,
   run: 0,
   origin: "",
   catalog: [],
@@ -300,6 +304,21 @@ async function request(step: Step, userAgent: string) {
   }
 }
 
+// The health check a load balancer sends. Not counted with the visits: it
+// isn't a customer. A failed probe is the store's to log, not the checker's.
+async function probeHealth() {
+  try {
+    const res = await fetch(`${state.origin}/api/health`, {
+      headers: { "user-agent": "ELB-HealthChecker/2.0" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    await res.arrayBuffer();
+  } catch {
+    // nothing to record
+  }
+}
+
 async function visit(run: number) {
   const { userAgent, steps } = planVisit();
   state.visits++;
@@ -365,11 +384,15 @@ export function startTraffic(origin: string, catalog: CatalogItem[]) {
   state.catalog = catalog;
   measureVisits();
   scheduleNext(state.run);
+  state.probe = setInterval(probeHealth, HEALTH_PROBE_MS);
+  state.probe.unref();
 }
 
 export function stopTraffic() {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
+  if (state.probe) clearInterval(state.probe);
+  state.probe = null;
   state.run++;
   state.rushUntil = 0;
 }
@@ -411,6 +434,7 @@ export function trafficSnapshot() {
   const ratio = (n: number) => (requests === 0 ? null : n / requests);
   return {
     running: state.timer !== null,
+    requestTimeoutMs: REQUEST_TIMEOUT_MS,
     profile: state.profile,
     visits: state.visits,
     rush: Date.now() < state.rushUntil,

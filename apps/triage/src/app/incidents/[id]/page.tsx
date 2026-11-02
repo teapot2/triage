@@ -6,6 +6,7 @@ import { IncidentView } from "@/components/incident/incident-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { checkPrMerged } from "@/lib/investigation/fix/pr-merge";
 import { getIncident } from "@/lib/investigation/store";
+import { stageModel, webSearchOn } from "@/lib/models/settings";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -35,7 +36,10 @@ async function Incident({ params }: Props) {
   if (approval?.prState === "opened" && !approval.prMergedAt && incident.status !== "resolved") {
     after(() => checkPrMerged(incident));
   }
-  return <IncidentView incident={incident} />;
+  // The Ask composer's web search switch starts as Settings has it, and
+  // shows only while Ask runs on Meta's API, the one with the search.
+  const webSearch = (await stageModel("ask")).provider === "meta" ? await webSearchOn() : undefined;
+  return <IncidentView incident={incident} webSearch={webSearch} />;
 }
 
 // The page's own frame (IncidentHeader, then IncidentReport's section menu

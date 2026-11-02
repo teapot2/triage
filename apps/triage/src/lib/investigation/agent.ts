@@ -9,6 +9,7 @@ import { runAgentLoop } from "./agent-loop";
 import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
+import { takeRunSnapshot } from "./live/run-snapshot";
 import { liveService } from "../live/types";
 import { proposeMitigation } from "./mitigation/propose";
 import { readTelemetry, RETENTION_MS } from "./live/otlp-files";
@@ -20,6 +21,7 @@ import type { Incident, Thought } from "./schema";
 import type { MetricSeries, TelemetrySource } from "./source";
 import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
+import { beforeAnswer, type Part } from "./web-search";
 import { describeRule, matchesTarget, readRules, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
 
 const MAX_STEPS = 30;
@@ -260,18 +262,21 @@ async function newIncident(source: TelemetrySource, alert: MetricSeries, a: NewI
 // text when the call ends, before the tool calls it asked for run. The SDK's
 // callId is shared by every call in one generate(), so each thought gets its
 // own id; an agent's calls run one at a time, so the open one is the last.
+// A call that searched the web answers after its last search; only the text
+// before it is thinking aloud.
 export function recordThoughts(recorder: ThoughtRecorder, kind: Thought["reasoningKind"]) {
   let open: string | undefined;
-  const joined = (content: ReadonlyArray<{ type: string; text?: string }>, type: string) =>
+  const joined = (content: readonly Part[], type: string) =>
     content.flatMap((p) => (p.type === type && p.text?.trim() ? [p.text.trim()] : [])).join("\n\n") || undefined;
   return {
     onLanguageModelCallStart: () => {
       open = `th_${crypto.randomUUID().slice(0, 8)}`;
       recorder.startThought(open);
     },
-    onLanguageModelCallEnd: ({ content }: { content: ReadonlyArray<{ type: string; text?: string }> }) => {
+    onLanguageModelCallEnd: ({ content }: { content: readonly Part[] }) => {
       if (!open) return;
-      recorder.endThought(open, { reasoning: joined(content, "reasoning"), reasoningKind: kind, text: joined(content, "text") });
+      const text = joined(beforeAnswer(content), "text");
+      recorder.endThought(open, { reasoning: joined(content, "reasoning"), reasoningKind: kind, text });
       open = undefined;
     },
   };
@@ -301,10 +306,20 @@ export async function runInvestigation(
     fanout?: { lead: Stage } | false;
     // Tests: a scripted model in place of each provider's.
     languageModel?: (s: Stage) => LanguageModel;
+    // A re-run of an incident (rerun.ts): its own fix model, the source as
+    // the first run saw it (`baseDir`, copied over the app in the sandbox),
+    // and no notification. A re-run takes no snapshot of its own.
+    rerun?: { fix?: Stage; baseDir?: string };
   } = {},
 ): Promise<Incident> {
   const recorder = new InvestigationRecorder(incident, opts.save ?? saveIncident);
   const tools = createInvestigationTools(source, recorder);
+  // A live run saves what a re-run couldn't read again (live/run-snapshot.ts)
+  // as it starts, alongside the investigation.
+  const snapshotting =
+    opts.appDir && !opts.rerun
+      ? takeRunSnapshot(incident.id, source).then((snapshot) => snapshot && recorder.update({ snapshot }))
+      : undefined;
 
   // The investigate stage's model as configured in Settings now, recorded
   // on the run. A stage that can't run (no key, no URL) fails the run, and
@@ -317,6 +332,7 @@ export async function runInvestigation(
   const problem = stageProblem(stage) ?? (lead && stageProblem(lead));
   if (problem) {
     recorder.update({ status: "failed", run: { ...recorder.incident.run!, finishedAt: new Date().toISOString(), error: problem } });
+    await snapshotting;
     await recorder.flush();
     return recorder.incident;
   }
@@ -414,8 +430,11 @@ export async function runInvestigation(
   }
   recorder.dropUnfinishedThoughts();
   if (opts.appDir && recorder.incident.status === "diagnosed" && recorder.report?.verdict.kind === "root_cause") {
-    await runFixStage(recorder, source, opts.appDir);
+    await runFixStage(recorder, source, opts.appDir, {
+      ...(opts.rerun && { stage: opts.rerun.fix, baseDir: opts.rerun.baseDir, notify: false }),
+    });
   }
+  await snapshotting;
   await recorder.flush();
   return recorder.incident;
 }

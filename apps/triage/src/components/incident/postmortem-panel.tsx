@@ -10,6 +10,7 @@ import {
   LoaderCircleIcon,
   RotateCcwIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -24,12 +25,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { postmortemActions } from "@/lib/export/datasets/postmortem";
 import { downloadText } from "@/lib/export/download";
 import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
 import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
 import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
+import { defaultTemplate, sectionLabel, type Template } from "@/lib/investigation/postmortem/template";
 import type { DraftContent, Incident } from "@/lib/investigation/schema";
 import { modelLabel } from "@/lib/models/labels";
 import { ContextMeter } from "./context-meter";
@@ -223,14 +226,15 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
           <FileTextIcon className="size-3.5" />
           Postmortem
         </span>
-        <p className="text-sm leading-relaxed">
-          Triage writes a blameless postmortem from this incident&apos;s record: a summary, the impact, a timeline,
-          whether the diagnosis held, the contributing factors, lessons and action items, with every claim cited to its evidence. Copy it as
-          Markdown or download it for your team&apos;s docs.
-        </p>
-        <WriteButton refusal={refusal} sending={sending} onClick={write}>
-          Write the postmortem
-        </WriteButton>
+        <TemplateSections />
+        <div className="flex items-center gap-2">
+          <WriteButton refusal={refusal} sending={sending} onClick={write}>
+            Write the postmortem
+          </WriteButton>
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/settings?section=postmortems">Edit sections</Link>
+          </Button>
+        </div>
       </div>
     );
   }
@@ -327,6 +331,44 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
 // Write, Write again and Try again: disabled with the reason on hover while
 // the server would refuse, a spinner while the request is out. Ghost and
 // icon-only (Write again), with its name on hover instead.
+// What a postmortem written now would hold: the saved template's sections,
+// in order, which say more than a paragraph about it and stay true when the
+// template changes. Read from Settings' route, since the incident only
+// carries a template once a write has started.
+function TemplateSections() {
+  const [template, setTemplate] = useState<Template>();
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetch("/api/settings/postmortem", { signal: ctrl.signal })
+      .then(async (res) => (res.ok ? setTemplate(((await res.json()) as { template: Template }).template) : setTemplate(defaultTemplate)))
+      .catch(() => {
+        if (!ctrl.signal.aborted) setTemplate(defaultTemplate);
+      });
+    return () => ctrl.abort();
+  }, []);
+  if (!template) {
+    return (
+      <div className="grid w-full gap-x-6 gap-y-1.5 sm:grid-cols-2" aria-busy="true">
+        {defaultTemplate.sections.map((s) => (
+          <Skeleton key={sectionKey(s)} className="h-5 w-40" />
+        ))}
+      </div>
+    );
+  }
+  // Two columns from small screens up, filled top to bottom so the order
+  // reads down each one.
+  return (
+    <ol className="w-full gap-x-6 text-sm sm:columns-2">
+      {template.sections.map((s, i) => (
+        <li key={sectionKey(s)} className="flex break-inside-avoid gap-2 py-0.5">
+          <span className="w-4 shrink-0 text-right text-muted-foreground tabular-nums">{i + 1}</span>
+          {sectionLabel(s)}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function WriteButton({
   refusal,
   sending,

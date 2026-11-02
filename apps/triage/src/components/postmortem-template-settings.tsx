@@ -40,9 +40,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   type BuiltInSection,
+  builtInLabels,
   builtInSections,
   type CustomSection,
   keptBuiltIns,
+  sectionLabel,
   type Template,
   type TemplateSection,
 } from "@/lib/investigation/postmortem/template";
@@ -59,19 +61,8 @@ const nameMax = 60;
 const instructionsMax = 500;
 const sectionsMax = 20;
 
-const builtInLabels: Record<BuiltInSection, string> = {
-  summary: "Summary",
-  impact: "Impact",
-  timeline: "Timeline",
-  outcome: "How the diagnosis held up",
-  factors: "Contributing factors",
-  lessons: "Lessons (what went well and what didn't)",
-  lucky: "Where we got lucky",
-  actions: "Action items",
-};
-
 const rowKey = (s: TemplateSection) => (s.kind === "builtin" ? s.key : s.id);
-const rowLabel = (s: TemplateSection) => (s.kind === "builtin" ? builtInLabels[s.key] : s.name);
+const rowLabel = sectionLabel;
 
 // The Postmortems section of Settings: the sections Triage writes in a
 // postmortem, in order. A person reorders and removes them, adds back the

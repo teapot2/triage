@@ -171,4 +171,10 @@ describe("live-ratings scenario", () => {
     const errors = await source.queryMetric({ name: "http.server.error_ratio", windowMinutes: 45 });
     assert.ok(errors!.points.every((p) => p.value === 0));
   });
+
+  it("leaves the sandbox's own table copy out of the slow queries", async () => {
+    const { rows } = await source.dbDiagnostics("slow_queries");
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every((r) => !String(r.query).includes("json_agg")));
+  });
 });

@@ -24,6 +24,19 @@ export type Template = z.infer<typeof templateSchema>;
 
 export const defaultTemplate: Template = { sections: builtInSections.map((key) => ({ kind: "builtin" as const, key })) };
 
+export const builtInLabels: Record<BuiltInSection, string> = {
+  summary: "Summary",
+  impact: "Impact",
+  timeline: "Timeline",
+  outcome: "How the diagnosis held up",
+  factors: "Contributing factors",
+  lessons: "Lessons (what went well and what didn't)",
+  lucky: "Where we got lucky",
+  actions: "Action items",
+};
+
+export const sectionLabel = (s: TemplateSection) => (s.kind === "builtin" ? builtInLabels[s.key] : s.name);
+
 export type CustomSection = Extract<TemplateSection, { kind: "custom" }>;
 
 // An id for a custom section from its name: lowercase, runs of anything but

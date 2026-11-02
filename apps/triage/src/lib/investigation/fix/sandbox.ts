@@ -22,10 +22,13 @@ const RUN_TIMEOUT_MS = 90_000;
 // store and show.
 const OUTPUT_LIMIT = 6_000;
 
-export async function createSandbox(appDir: string, name: string): Promise<string> {
+// `baseDir`, when given, is copied over the app's files: the source as a
+// re-run's first run read it.
+export async function createSandbox(appDir: string, name: string, baseDir?: string): Promise<string> {
   const dir = path.join(root, name);
   await rm(dir, { recursive: true, force: true });
   await cp(appDir, dir, { recursive: true, filter: (src) => src === appDir || !skip(path.relative(appDir, src)) });
+  if (baseDir) await cp(baseDir, dir, { recursive: true, force: true });
   // A real node_modules folder whose entries link to the app's, so tools
   // that write caches there (vitest, vite) write into the sandbox.
   await mkdir(path.join(dir, "node_modules"));

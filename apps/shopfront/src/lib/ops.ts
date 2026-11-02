@@ -1,6 +1,7 @@
 import { pool } from "@/db/client";
 import { heldFor, STUCK_AFTER_MS } from "@/db/pool-watch";
 import { flagStates, type FeatureFlag } from "@/lib/flags";
+import { currentRelease, releases } from "@/lib/releases";
 import { trafficSnapshot } from "@/lib/traffic";
 
 // The demo controls are for local runs and demos. In a production build they
@@ -12,15 +13,20 @@ export const opsEnabled = () => process.env.NODE_ENV !== "production" || process
 // with the other demo controls, not in lib/flags.ts: the store's own code
 // reads like any team's, so Triage, which reads that code, has to find the
 // bug the way it would in a real app. Triage can't read this file.
-const faults: Record<FeatureFlag, { label: string; description: string }> = {
+// `effect` is what the operator will see; `description` is how it happens.
+const faults: Record<FeatureFlag, { label: string; effect: string; description: string }> = {
   FF_STOCK_DIRECT_QUERY: {
     label: "Connection pool leak",
+    effect:
+      "About ten views of the Cast Iron Teapot fill the pool. After that every database-backed page waits 3 s and fails.",
     description:
       "getStockLevel switches to a direct query that keeps its pooled connection when a product has no stock row. " +
       "About ten views of such a product use up the pool, then every database-backed page times out after 3 s.",
   },
   FF_LIST_PRICES: {
     label: "Price list gap",
+    effect:
+      "The product API answers 500 for four products: the Cast Iron Teapot and the three new arrivals. Everything else stays up.",
     description:
       "Product pages, the product API and the cart read prices from product_prices, which syncListPrices fills with an " +
       "inner join on stock_levels. The Cast Iron Teapot and the three new arrivals have no stock row, so no price row, " +
@@ -28,6 +34,8 @@ const faults: Record<FeatureFlag, { label: string; description: string }> = {
   },
   FF_LIVE_RATINGS: {
     label: "Live ratings loop",
+    effect:
+      "Listings and GET /api/products slow from about 20 ms to about a second. No errors, and the pool stays nearly empty.",
     description:
       "Listings and GET /api/products work out each product's rating with one query per product that fetches every one " +
       "of its review rows (REVIEWS_PER_PRODUCT in the seed), then average them in JavaScript. GET /api/products goes from " +
@@ -36,12 +44,32 @@ const faults: Record<FeatureFlag, { label: string; description: string }> = {
   },
 };
 
-// Everything /ops shows. In-memory only, no database query: it has to answer
-// while the pool is jammed.
-export function opsState() {
+// What each release does to the store, keyed by the patch's name in
+// releases/. Same split as the flags: `effect` is what the operator will
+// see, `description` is how it happens. A release without an entry here
+// still deploys; it just shows no effect.
+const releaseFaults: Partial<Record<string, { label: string; effect: string; description: string }>> = {
+  "formatted-price": {
+    label: "Formatted price",
+    effect:
+      "Every GET /api/products/[id] answers 500 within a second of the deploy. Product pages, listings and the pool are unaffected.",
+    description:
+      "The commit adds formatPrice (src/lib/money.ts), which formats cents with Intl.NumberFormat in the currency named " +
+      "by STORE_CURRENCY, and has GET /api/products/[id] return `price` next to priceCents. Nobody set STORE_CURRENCY, so " +
+      "the currency is undefined and the constructor throws TypeError: Currency code is required with currency style on " +
+      "every call. The fix is a rollback, or a default currency. Rolling back stops the errors at once.",
+  },
+};
+
+// Everything /ops shows. No database query: it has to answer while the pool
+// is jammed. The releases come from git the first time and are then kept in
+// memory until a deploy or rollback.
+export async function opsState() {
   const held = heldFor();
   return {
     flags: flagStates().map((f) => ({ ...f, ...faults[f.name] })),
+    release: currentRelease(),
+    releases: (await releases()).map((r) => ({ ...r, label: r.name, effect: "", description: "", ...releaseFaults[r.name] })),
     pool: {
       max: pool.options.max ?? 10,
       checkedOut: pool.totalCount - pool.idleCount,
@@ -55,4 +83,4 @@ export function opsState() {
   };
 }
 
-export type OpsState = ReturnType<typeof opsState>;
+export type OpsState = Awaited<ReturnType<typeof opsState>>;

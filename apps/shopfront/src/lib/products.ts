@@ -3,10 +3,13 @@ import { cache } from "react";
 import { db } from "@/db/client";
 import { products } from "@/db/schema";
 
-// Parses a route's id segment; anything but a positive integer is no product.
+// Parses a route's id segment: digits only. Number() on its own would also
+// take a sign, an exponent, a radix prefix or stray whitespace, so "12 " and
+// "1e2" would find products. Anything else is no product.
 export const parseProductId = (raw: string) => {
+  if (!/^[1-9]\d*$/.test(raw)) return null;
   const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) ? id : null;
 };
 
 // Cached per request, so the page and its metadata share one query.

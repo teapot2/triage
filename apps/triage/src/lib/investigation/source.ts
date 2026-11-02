@@ -56,12 +56,16 @@ export interface CommitRecord {
 
 export interface DeployRecord {
   service: string;
+  // The commit deployed; on a rollback, the commit rolled back.
   sha: string;
   deployedAt: string;
   // A runtime config change (e.g. a flag flipped) rather than a code deploy;
-  // `message` says what changed, since there is no commit to look up.
-  kind?: "deploy" | "config";
+  // `message` says what changed, since there is no commit to look up. A
+  // rollback undid `sha`, so it is nothing to roll back again.
+  kind?: "deploy" | "config" | "rollback";
   message?: string;
+  // The branch the deploy came from, when the pipeline says.
+  branch?: string;
 }
 
 export interface SourceDescription {

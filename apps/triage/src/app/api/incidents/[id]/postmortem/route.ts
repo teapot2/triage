@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { nextPostmortem, postmortemRefusal } from "@/lib/investigation/postmortem/rules";
 import { writePostmortem } from "@/lib/investigation/postmortem/writer";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
-import { readTemplate, stageModel, stageProblem } from "@/lib/models/settings";
+import { readTemplate, runStageModel, stageProblem } from "@/lib/models/settings";
 
 class Refused extends Error {}
 
@@ -11,8 +11,10 @@ class Refused extends Error {}
 // after the response, and the incident shows it ready or failed.
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!(await getIncident(id))) return Response.json({ error: `unknown incident: ${id}` }, { status: 404 });
-  const stage = await stageModel("postmortem");
+  const incident = await getIncident(id);
+  if (!incident) return Response.json({ error: `unknown incident: ${id}` }, { status: 404 });
+  // A promoted re-run's own model, else Settings'.
+  const stage = await runStageModel("postmortem", incident.models?.postmortem);
   const problem = stageProblem(stage);
   if (problem) return Response.json({ error: problem }, { status: 409 });
 

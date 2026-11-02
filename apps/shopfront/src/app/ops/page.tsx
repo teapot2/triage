@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Ops", robots: { index: false } };
 
-export default function OpsPage() {
+export default async function OpsPage() {
   if (!opsEnabled()) notFound();
-  return <OpsPanel initial={opsState()} triageUrl={process.env.TRIAGE_URL ?? "http://localhost:3000"} />;
+  return <OpsPanel initial={await opsState()} triageUrl={process.env.TRIAGE_URL ?? "http://localhost:3000"} />;
 }

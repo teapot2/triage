@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { MAX_LINES, MAX_PER_LINE } from "./cart-rules";
+import { logger } from "./logger";
 
 // The cart lives in a cookie: product ids and quantities only, so prices
 // and names always come fresh from the database. No accounts, nothing
@@ -31,8 +32,13 @@ export function parseCart(raw: string | undefined): CartLine[] {
   }
 }
 
+// A cookie that holds nothing usable is dropped and logged: it means a
+// client sent something this app never wrote.
 export async function readCart() {
-  return parseCart((await cookies()).get(COOKIE)?.value);
+  const raw = (await cookies()).get(COOKIE)?.value;
+  const lines = parseCart(raw);
+  if (raw && raw !== "[]" && lines.length === 0) logger.warn("cart: unreadable cookie dropped", { "cart.cookie_length": raw.length });
+  return lines;
 }
 
 // Only from Server Actions (cookies can't be set while rendering).

@@ -106,6 +106,22 @@ describe("grade", () => {
     assert.equal(grade(report(right), flagOff("FF_STOCK_DIRECT_QUERY"), priceGap).hit, false);
   });
 
+  it("grades a rollback expectation on the sha", () => {
+    const formattedPrice: Expected = {
+      verdict: "root_cause",
+      rootCauseFiles: ["src/lib/money.ts"],
+      mustMention: [["currency"]],
+      mitigation: { kind: "rollback", target: "9f3c2a1" },
+    };
+    const text = "formatPrice in src/lib/money.ts calls Intl.NumberFormat with style currency and no currency code";
+    const hit = grade(report(text), flagOff("9f3c2a1", "rollback"), formattedPrice);
+    assert.equal(hit.hit, true, hit.reasons.join("; "));
+    assert.ok(hit.reasons.includes("mitigation rollback 9f3c2a1"));
+    assert.deepEqual(grade(report(text), flagOff("FF_LIST_PRICES"), formattedPrice).reasons, [
+      "mitigation flag_off FF_LIST_PRICES, expected rollback 9f3c2a1",
+    ]);
+  });
+
   it("ignores the mitigation when none is expected", () => {
     assert.equal(grade(report(right), undefined, { ...priceGap, mitigation: undefined }).hit, true);
   });

@@ -38,6 +38,7 @@ const evidenceLabels: Record<EvidenceKind, string> = {
   db: "Database",
   source: "Source",
   commit: "Commit",
+  web: "Web page",
 };
 
 export function valueLabel(facet: Facet, value: string): string {
@@ -102,6 +103,8 @@ function evidenceText(e: Evidence): string {
       return `${e.summary} ${e.file} ${e.code}`;
     case "commit":
       return `${e.summary} ${e.sha} ${e.message} ${e.files.join(" ")}`;
+    case "web":
+      return `${e.summary} ${e.url}`;
   }
 }
 

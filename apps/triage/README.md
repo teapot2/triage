@@ -62,6 +62,15 @@ Beside the traffic rules, Watch can check public URLs from the outside, so a sit
 - **UI:** the Watch page's **Endpoints** section lists the checks with their status, last result and a strip of the last 20 results; **New endpoint**, and each check's page with its configuration in words, a response-time chart, the last 50 results, **Check now**, **Edit** and **Delete**. The sidebar row uses its second line for a check in trouble ("Google · slow, check 2 of 3", "Google · down 3 of 5 min") and lists the checks in its tooltip. An uptime incident's Overview shows the Endpoint check card: the URL, the rule in words, failing checks so far or the recovery time, and a link to the check.
 - **By hand:** `pnpm --filter @triage/web check:uptime google|shopfront` opens an uptime incident and investigates it without the loop: fabricated outages on a Google check (expect `inconclusive`), or real probes of Shopfront's health during the planted fault (expect a root cause). It needs `MODEL_API_KEY`.
 
+## Mitigation
+
+After a live run's root-cause verdict, `mitigation/propose.ts` proposes one fast, reversible step from the evidence the diagnosis cites, by rule and without a model call. A person approves or denies it on the incident's Mitigation card; `mitigation/decide.ts` runs it through the executor for the run's source (`mitigation/executors.ts`) and then watches the alert's metric until it recovers (see Verify). Two kinds:
+
+- **`flag_off`:** when the cited deploy history shows a flag turned on, when the blamed code checks one (`isEnabled("FF_X")`), or when a flag went on between the blamed deploy and the alert. On Shopfront the executor posts `{ action: "flag", name, enabled: false }` to its ops API and, when the diagnosis cites a full pool, recycles the held connections.
+- **`rollback`:** when the leading hypothesis cites a code deploy, a `deploy_history` record with a real sha rather than a `config:` flip or an earlier rollback, and no flag was turned on after it. On Shopfront the executor reads the ops state, posts `{ action: "rollback" }`, and Shopfront's release harness reverse-applies the deployed release's diff. It succeeds only when the answer's `release` is null and reports `rolled back <sha>`, naming the mitigation's sha too when another release was the one deployed; nothing deployed is a failure. The deploy record's branch is kept on the mitigation as `branch`, and the fix PR is opened against it (see Pull request).
+
+The live source turns Shopfront's `deploy: ...` warnings into deploy and rollback records (`deploy.sha`, `deploy.kind`, `deploy.branch`) beside the `ops: FF_X turned on|off` flag flips, and while a release is deployed (`GET /api/ops` says, read once per source) `git_log` reads history from the release's commit rather than HEAD, so the commit a deploy record names is there to read. The release harness's files (`src/lib/releases.ts`, `releases/`, `scripts/release.ts`) join the demo harness Triage never shows. On a recorded scenario or a bundled example the simulated executor changes nothing and replays the scenario's recorded recovery.
+
 ## Verify
 
 After the mitigation's recovery, `src/lib/investigation/verify.ts` checks that the fix worked: it keeps reading the alert's metric for a quiet window and resolves the incident, or reopens it when the metric climbs back. Nothing else sets `resolved` but this loop and a person.
@@ -194,7 +203,7 @@ Some bugs leave bad rows behind that a code fix alone doesn't repair: the price 
 
 Approving a proven fix opens a draft PR (`fix/pull-request.ts`, run after the approval response):
 
-1. Make a temporary git worktree on a new `triage/<incident>` branch, cut from the remote's default branch (or `TRIAGE_PR_BASE`).
+1. Make a temporary git worktree on a new `triage/<incident>` branch, cut from the remote's default branch (or `TRIAGE_PR_BASE`); when the mitigation rolled back a release, from that release's branch (`mitigation.branch`), since the fix was proven against the release's code.
 2. Apply the proven patch under the app's folder, commit, and push to `origin`.
 3. Run `gh pr create --draft` with the diagnosis and sandbox proof as the description.
 

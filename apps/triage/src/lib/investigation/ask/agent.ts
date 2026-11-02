@@ -16,6 +16,7 @@ import {
   modelErrorText,
   modelOptions,
   reasoningKind,
+  webSearchTools,
 } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
@@ -33,6 +34,16 @@ import type { TelemetrySource } from "../source";
 import { createInvestigationTools, forModel } from "../tools";
 import { type PromptText, splitTokens, toolsText } from "./context-parts";
 import { readQuestionImage } from "./images";
+import {
+  answerOf,
+  citedPages,
+  countSearches,
+  recordPages,
+  searchSummary,
+  WEB_SEARCH,
+  WEB_SEARCH_RULES,
+  withWebCitations,
+} from "../web-search";
 import { conversationHistory, knownEvidenceIds, parseCitations } from "./rules";
 
 // Stage "ask": a follow-up question on a finished incident, answered by a
@@ -57,19 +68,19 @@ const IMAGE_RULES = `
 - Check what it shows against the evidence and cite those IDs. If its service, times or numbers don't match the incident, say so plainly.
 - If you can't read it (blurry, cropped, not a chart or an error), say what you can't make out.`;
 
-function instructions(mode: Question["mode"], image: boolean): string {
+function instructions(mode: Question["mode"], image: boolean, web: boolean): string {
   const tools =
     mode === "tools"
       ? `- Use the tools only when the question is about the system and the recorded evidence does not answer it. Prefer evidence that could disprove a claim: to say why something was ruled out, say what was checked and what it showed.
 - If the tools find nothing in the window, say so instead of guessing.
 - db_diagnostics and read_source read the system as it is now, not at alert time: say "now" when you cite them.
 - Every tool is read-only. If the question asks you to change something, point at the incident's mitigation or fix instead.`
-      : `- You have no tools for this incident: answer from the recorded evidence below. If it does not answer the question, say what is missing instead of guessing.`;
+      : `- You have no tools to read this incident's system: answer from the recorded evidence below. If it does not answer the question, say what is missing instead of guessing.`;
   return `You are Triage, an SRE. Triage watches the team's services, opens an incident when an alert crosses its limit, investigates it, and proposes a mitigation and a fix for a person to approve. You already investigated this incident and wrote the report below. A person on the team, reading the incident's page, sends a message: answer it, nothing more.
 
 Rules:
 - Cite every claim about the system or the incident with an evidence ID in square brackets, e.g. [ev_log_3]. Cite only IDs listed below or returned by a tool. Never invent one. Questions about this conversation, the report, the incident's page or Triage itself need no citations.
-${tools}${image ? IMAGE_RULES : ""}
+${tools}${web ? WEB_SEARCH_RULES : ""}${image ? IMAGE_RULES : ""}
 - A question about Triage or about something on the incident's page (a label, a status, a section) is on topic: answer it from the incident details below.
 - Thanks, an acknowledgement or a reaction (frustration included) is not a question: reply in a sentence, plainly, without asking them to clarify.
 - Only when you can't tell what the message means (stray keys, a fragment) say so in one sentence and ask what they mean. Don't investigate anything that isn't about the system.
@@ -156,7 +167,11 @@ async function answer(
     });
     const mode: Question["mode"] = source ? "tools" : "evidence_only";
     recorder.update({ mode });
-    const tools: ToolSet = source ? createInvestigationTools(source, recorder, { submit: false }) : {};
+    const tools: ToolSet = {
+      ...(source && createInvestigationTools(source, recorder, { submit: false })),
+      ...webSearchTools(stage, recorder.question.webSearch === true),
+    };
+    const web = WEB_SEARCH in tools;
 
     // The screenshot goes with this question only, after its text; the
     // provider client turns the part into input_image or image_url.
@@ -171,7 +186,7 @@ async function answer(
           { type: "file", mediaType: image.mediaType, data: image.bytes },
         ]
       : prompt;
-    const system = instructions(mode, image !== undefined);
+    const system = instructions(mode, image !== undefined, web);
     const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...sections };
 
     // As in the investigation: Meta's API only supports tool_choice "auto",
@@ -205,6 +220,7 @@ async function answer(
     const messages: ModelMessage[] = [{ role: "user", content }];
     const tokens = noTokens();
     let text = "";
+    let webSearches = 0;
     calledModel = true;
     const budget = runBudget("ask");
     await runAgentLoop({
@@ -242,7 +258,17 @@ async function answer(
           }
           writer.write(chunk);
           if (chunk.type === "text-delta") recorder.appendAnswer(chunk.delta);
-          else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
+          else if (chunk.type === "tool-input-start" && chunk.toolName === WEB_SEARCH) {
+            // Meta searches inside the model call, so the step goes on: the
+            // text before it was the model saying what it'll look up.
+            recorder.startStep(chunk.toolCallId, WEB_SEARCH, {});
+            madeToolCalls = true;
+            if (recorder.question.answer) recorder.update({ answer: "" });
+          } else if (chunk.type === "tool-output-available" && chunk.providerExecuted) {
+            recorder.completeStep(chunk.toolCallId, WEB_SEARCH, searchSummary(chunk.output), []);
+          } else if (chunk.type === "tool-output-error" && chunk.providerExecuted) {
+            recorder.failStep(chunk.toolCallId, chunk.errorText);
+          } else if (chunk.type === "tool-input-start" || chunk.type === "tool-input-available") {
             stepToolCalls = madeToolCalls = true;
             if (chunk.type === "tool-input-available") opts.onToolCall?.(chunk.toolName);
           } else if (chunk.type === "finish-step") {
@@ -257,7 +283,12 @@ async function answer(
           throw failure;
         }
         if (aborted) throw budget.aborted ? budget.reason : aborted;
-        text = (await result.steps).at(-1)?.text.trim() ?? "";
+        const steps = await result.steps;
+        webSearches += countSearches(steps);
+        // The pages the answer cites become its evidence, their IDs put in
+        // where Meta marked the words they back.
+        const answer = answerOf(steps.at(-1)?.content ?? []);
+        text = withWebCitations(answer.text, answer.citations, recordPages(recorder, citedPages(answer.citations))).trim();
         return text !== "" || !madeToolCalls;
       },
     });
@@ -271,6 +302,7 @@ async function answer(
       unknownIds,
       answeredAt: new Date().toISOString(),
       modelRetries: retries,
+      ...(webSearches && { webSearches }),
       ...tokens,
     });
     if (!text) writer.write({ type: "error", errorText: recorder.question.error! });

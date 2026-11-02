@@ -23,6 +23,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return product ? { title: product.name, description: product.description } : { title: "Product not found" };
 }
 
+// No loading.tsx for this route: it would stream the page shell before the
+// product lookup, and a missing product would then answer 200 with the
+// not-found view inside. Waiting for the lookup keeps the 404 a real one;
+// the buy box and related products still stream in after it.
 export default async function ProductPage({ params }: Props) {
   const id = parseProductId((await params).id);
   if (!id) notFound();

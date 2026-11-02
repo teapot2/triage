@@ -19,6 +19,9 @@ export { type StageId, stageIdSchema, stageIds } from "./stages";
 // fanout: whether investigations check their hypotheses in parallel, the
 // Lead stage proposing and merging them (lib/investigation/fanout). Missing
 // (off) on files saved before it existed.
+//
+// webSearch: whether the Fix stage, and Ask by default, may search the web
+// on Meta's API. Missing means on.
 
 // effort: Meta's reasoning effort for the stage. Missing on settings saved
 // before it existed, and on presets, which leave each stage its default.
@@ -38,6 +41,7 @@ const settingsSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).default({}),
   endpoints: z.partialRecord(providerIdSchema, endpointSchema).default({}),
   fanout: z.boolean().optional(),
+  webSearch: z.boolean().optional(),
   postmortemTemplate: templateSchema.optional(),
   notifications: z
     .object({
@@ -107,10 +111,42 @@ export async function stageModel(stage: StageId): Promise<Required<StageModel> &
   return { ...chosen, ...endpointOf(settings, chosen.provider) };
 }
 
+// A stage's model as a run chose it rather than Settings (a re-run, and its
+// fix and postmortem after), with its provider's endpoint; the stage's
+// default effort when it named none. Undefined for a provider Triage
+// doesn't know.
+export async function choiceModel(
+  stage: StageId,
+  choice: { provider: string; model: string; effort?: z.infer<typeof reasoningEffortSchema> },
+): Promise<(Required<StageModel> & Endpoint) | undefined> {
+  const provider = providerIdSchema.safeParse(choice.provider);
+  if (!provider.success) return undefined;
+  const settings = await read();
+  return {
+    provider: provider.data,
+    model: choice.model,
+    effort: choice.effort ?? defaultEffort[stage],
+    ...endpointOf(settings, provider.data),
+  };
+}
+
+// The run's own model for the stage when it chose one, else Settings'.
+export async function runStageModel(
+  stage: StageId,
+  choice: Parameters<typeof choiceModel>[1] | undefined,
+): Promise<Required<StageModel> & Endpoint> {
+  return (choice && (await choiceModel(stage, choice))) ?? stageModel(stage);
+}
+
 // The Lead's model when Settings has investigations fan out, else
 // undefined: the single agent.
 export async function fanoutLead(): Promise<(Required<StageModel> & Endpoint) | undefined> {
   return (await read()).fanout ? stageModel("lead") : undefined;
+}
+
+// Whether Fix searches the web, and Ask does unless the question says.
+export async function webSearchOn(): Promise<boolean> {
+  return (await read()).webSearch ?? true;
 }
 
 // Why an investigation can't start as configured: its stage's problem, or
@@ -145,6 +181,7 @@ export async function publicModelSettings() {
   return {
     stages,
     fanout,
+    webSearch: settings.webSearch ?? true,
     // The Lead counts only while it runs.
     openWeights: stageIds.every((id) => (id === "lead" && !fanout) || isOpenWeights(stages[id].model)),
     // Any running stage on Muse Spark Open: Settings then shows "Built with
@@ -176,6 +213,7 @@ export type PublicModelSettings = Awaited<ReturnType<typeof publicModelSettings>
 export const updateSchema = z.object({
   stages: z.partialRecord(stageIdSchema, stageModelSchema).optional(),
   fanout: z.boolean().optional(),
+  webSearch: z.boolean().optional(),
   // apiKey: a new key, "" to clear it, or absent to keep the saved one.
   endpoints: z.partialRecord(providerIdSchema, z.object({ baseUrl: z.url().or(z.literal("")).optional(), apiKey: z.string().max(500).optional() })).optional(),
 });
@@ -184,6 +222,7 @@ export async function updateModelSettings(update: z.infer<typeof updateSchema>) 
   const settings = await read();
   for (const [id, s] of Object.entries(update.stages ?? {}) as [StageId, StageModel][]) settings.stages[id] = s;
   if (update.fanout !== undefined) settings.fanout = update.fanout;
+  if (update.webSearch !== undefined) settings.webSearch = update.webSearch;
   for (const [id, e] of Object.entries(update.endpoints ?? {}) as [ProviderId, { baseUrl?: string; apiKey?: string }][]) {
     if (!providers[id].configurable) continue;
     const next = { ...settings.endpoints[id] };

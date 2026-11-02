@@ -90,6 +90,9 @@ export function applyEdits(
 
 export async function proveFix(opts: {
   appDir: string;
+  // Files to lay over the app's in the sandbox: a re-run's snapshot of the
+  // source as its first run read it.
+  baseDir?: string;
   name: string;
   edits: Edit[];
   test: RegressionTest;
@@ -104,7 +107,7 @@ export async function proveFix(opts: {
     );
   }
 
-  const dir = await createSandbox(appDir, name);
+  const dir = await createSandbox(appDir, name, opts.baseDir);
   const databases: SandboxDatabase[] = [];
   try {
     const before = new Map<string, string>();

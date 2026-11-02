@@ -23,7 +23,7 @@ export type UsageTotal = {
 
 export type IncidentUsage = UsageTotal & { stages: Partial<Record<StageId, UsageTotal>> };
 
-type UsageRecord = Partial<TokenCounts> & { provider?: string; model?: string; context?: TokenCounts };
+type UsageRecord = Partial<TokenCounts> & { provider?: string; model?: string; context?: TokenCounts; webSearches?: number };
 
 const counted = (r: UsageRecord) => (r.inputTokens ?? 0) + (r.outputTokens ?? 0) > 0;
 

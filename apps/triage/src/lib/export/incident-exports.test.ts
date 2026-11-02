@@ -66,9 +66,14 @@ describe("GET /api/export/incidents", () => {
       header,
       "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,confidence_grade,verdict_outcome,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
     );
-    // 15 saved and the 3 bundled examples, as the list shows them.
-    assert.equal(rows.length, 18);
-    for (const id of ["inc_pool_leak", "inc_control", "inc_price_gap"]) assert.ok(rows.some((r) => r.startsWith(`${id},`)), id);
+    // 15 saved and the 4 bundled examples, as the list shows them.
+    assert.equal(rows.length, 19);
+    for (const id of ["inc_pool_leak", "inc_control", "inc_price_gap", "inc_live_ratings"]) {
+      assert.ok(
+        rows.some((r) => r.startsWith(`${id},`)),
+        id,
+      );
+    }
   });
 
   it("fills an incident's times, diagnosis, fix and links", async () => {

@@ -1,5 +1,7 @@
+import { pipeline } from "node:stream/promises";
 import { Client } from "pg";
-import { shopfrontDatabaseUrl } from "../live/live-source";
+import { from as copyFrom, to as copyTo } from "pg-copy-streams";
+import { ownQuery, shopfrontDatabaseUrl } from "../live/live-source";
 import { exec, sandboxEnv, trim } from "./sandbox";
 
 // A throwaway copy of the app's database for one sandbox run, so a
@@ -59,7 +61,7 @@ async function withClient<T>(url: string, fn: (client: Client) => Promise<T>): P
 }
 
 // FORCE: a test that leaked connections may still hold some.
-const dropSql = (name: string) => `DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`;
+const dropSql = (name: string) => ownQuery(`DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`);
 
 export type SandboxDatabase = { name: string; url: string; drop: () => Promise<void> };
 
@@ -73,7 +75,7 @@ export async function createSandboxDatabase(
   // A copy left behind by a run that crashed goes first.
   await withClient(sourceUrl, async (c) => {
     await c.query(dropSql(name));
-    await c.query(`CREATE DATABASE ${ident(name)}`);
+    await c.query(ownQuery(`CREATE DATABASE ${ident(name)}`));
   });
   const drop = () => withClient(sourceUrl, (c) => c.query(dropSql(name))).then(() => undefined, () => undefined);
   try {
@@ -88,7 +90,13 @@ export async function createSandboxDatabase(
 }
 
 // Every row of every table the copy has, and where each sequence stands.
-// Rows travel as JSON, which every column type converts to and from.
+// Each table streams from a COPY out of the source into a COPY into the
+// copy, in Postgres' text format (pg_dump's), which every column type
+// converts to and from: the cheapest read Postgres has, and nothing is held
+// in memory. A column only one side has is left out: the copy's own default
+// fills it, and one the copy doesn't know is dropped. The source's
+// statements are tagged as Triage's own (ownQuery), so a big table's copy
+// never shows up as the app's slow query.
 async function copyData(sourceUrl: string, copyUrl: string) {
   await withClient(sourceUrl, (from) =>
     withClient(copyUrl, async (to) => {
@@ -96,35 +104,21 @@ async function copyData(sourceUrl: string, copyUrl: string) {
       // Foreign keys aren't checked while copying, so tables go in any order.
       await to.query("BEGIN");
       await to.query("SET LOCAL session_replication_role = replica");
-      const { rows: tables } = await to.query<{ schema: string; table: string; columns: string[] }>(
-        `SELECT c.table_schema AS schema, c.table_name AS table,
-                array_agg(c.column_name::text ORDER BY c.ordinal_position) AS columns
-           FROM information_schema.columns c
-           JOIN information_schema.tables t USING (table_schema, table_name)
-          WHERE t.table_type = 'BASE TABLE'
-            AND c.table_schema NOT IN ('pg_catalog', 'information_schema', $1)
-            AND c.is_generated = 'NEVER'
-          GROUP BY 1, 2`,
-        [MIGRATIONS_SCHEMA],
-      );
-      for (const { schema, table, columns } of tables) {
-        const qualified = `${ident(schema)}.${ident(table)}`;
-        // A table the app's migrations make but the database doesn't have.
-        const { rows: found } = await from.query("SELECT to_regclass($1) IS NOT NULL AS ok", [qualified]);
-        if (!found[0].ok) continue;
-        const { rows } = await from.query<{ data: string | null }>(`SELECT json_agg(t)::text AS data FROM ${qualified} t`);
-        if (!rows[0].data) continue;
-        const list = columns.map(ident).join(", ");
-        await to.query(
-          `INSERT INTO ${qualified} (${list}) OVERRIDING SYSTEM VALUE
-           SELECT ${list} FROM json_populate_recordset(NULL::${qualified}, $1::json)`,
-          [rows[0].data],
+      const { rows: tables } = await to.query<TableColumns>(`${columnsSql} AND c.is_generated = 'NEVER' GROUP BY 1, 2`, [
+        MIGRATIONS_SCHEMA,
+      ]);
+      const { rows: present } = await from.query<TableColumns>(ownQuery(`${columnsSql} GROUP BY 1, 2`), [MIGRATIONS_SCHEMA]);
+      for (const { schema, table, columns } of copyPlan(tables, present)) {
+        const target = `${ident(schema)}.${ident(table)} (${columns.map(ident).join(", ")})`;
+        await pipeline(
+          from.query(copyTo(ownQuery(`COPY ${target} TO STDOUT`))),
+          to.query(copyFrom(`COPY ${target} FROM STDIN`)),
         );
       }
       const { rows: sequences } = await from.query<{ name: string; value: string }>(
-        `SELECT format('%I.%I', schemaname, sequencename) AS name, last_value::text AS value
+        ownQuery(`SELECT format('%I.%I', schemaname, sequencename) AS name, last_value::text AS value
            FROM pg_sequences
-          WHERE last_value IS NOT NULL AND schemaname <> $1`,
+          WHERE last_value IS NOT NULL AND schemaname <> $1`),
         [MIGRATIONS_SCHEMA],
       );
       for (const { name, value } of sequences) {
@@ -134,4 +128,27 @@ async function copyData(sourceUrl: string, copyUrl: string) {
       await from.query("COMMIT");
     }),
   );
+}
+
+type TableColumns = { schema: string; table: string; columns: string[] };
+
+// Each base table's columns in order, outside the system schemas and
+// Drizzle's.
+const columnsSql = `SELECT c.table_schema AS schema, c.table_name AS table,
+         array_agg(c.column_name::text ORDER BY c.ordinal_position) AS columns
+    FROM information_schema.columns c
+    JOIN information_schema.tables t USING (table_schema, table_name)
+   WHERE t.table_type = 'BASE TABLE'
+     AND c.table_schema NOT IN ('pg_catalog', 'information_schema', $1)`;
+
+// What to copy: each of the copy's tables the source has too, with the
+// columns both have, in the copy's order. A table the app's migrations make
+// but the database doesn't have yet is skipped.
+export function copyPlan(copy: TableColumns[], source: TableColumns[]): TableColumns[] {
+  const sourceColumns = new Map(source.map((t) => [`${t.schema}.${t.table}`, new Set(t.columns)]));
+  return copy.flatMap(({ schema, table, columns }) => {
+    const has = sourceColumns.get(`${schema}.${table}`);
+    const shared = has ? columns.filter((c) => has.has(c)) : [];
+    return shared.length ? [{ schema, table, columns: shared }] : [];
+  });
 }

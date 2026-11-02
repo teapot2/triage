@@ -16,6 +16,7 @@ import type { Fix, FixAttempt, FixRun, SandboxRun } from "@/lib/investigation/sc
 import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { ContextMeter } from "./context-meter";
+import { Citations } from "./evidence";
 import { useIncident } from "./incident-export";
 import { HttpStatusBadge, TestResultBadge } from "./outcome-badges";
 
@@ -113,6 +114,17 @@ export function FixProgress({ fixRun, attempts }: { fixRun: FixRun; attempts?: F
   );
 }
 
+// What the fix changes and why, with the web pages the fix stage cited
+// while writing it.
+function FixSummary({ fix }: { fix: Fix }) {
+  return (
+    <p className="text-sm leading-relaxed">
+      {fix.summary}
+      {fix.sourceIds?.length ? <Citations ids={fix.sourceIds} className="ml-1 align-baseline" /> : null}
+    </p>
+  );
+}
+
 // The fixes a reviewer denied with feedback, oldest first, folded away: each
 // one's summary, the feedback it got, and its diff.
 export function EarlierAttempts({ attempts, className }: { attempts?: FixAttempt[]; className?: string }) {
@@ -140,7 +152,7 @@ export function EarlierAttempts({ attempts, className }: { attempts?: FixAttempt
                 </span>
                 {attempt.fixRun.model && <ContextMeter records={[{ ...attempt.fixRun, model: attempt.fixRun.model }]} />}
               </div>
-              <p className="text-sm leading-relaxed">{attempt.fix.summary}</p>
+              <FixSummary fix={attempt.fix} />
               {attempt.approval.reason && (
                 <p className="text-sm">
                   <span className="text-muted-foreground">Feedback: </span>
@@ -182,7 +194,7 @@ export function FixView({
           </span>
           {fixRun?.model && <ContextMeter records={[{ ...fixRun, model: fixRun.model }]} className="ml-1" />}
         </span>
-        <p className="text-sm leading-relaxed">{fix.summary}</p>
+        <FixSummary fix={fix} />
         <FixProof validation={validation} />
         {data.unproven.length > 0 && (
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground text-xs">

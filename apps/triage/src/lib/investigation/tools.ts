@@ -261,8 +261,15 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
         ]);
         const evidence: EvidenceDraft[] = deploys.map((d) => {
           const c = commits.find((x) => x.sha === d.sha);
-          const message = c?.message ?? d.message;
-          const what = d.kind === "config" ? `Config change on ${d.service}` : `Deployed ${d.sha} to ${d.service}`;
+          // A rollback's own message says what happened; the commit's would
+          // make it read like the deploy it undid.
+          const message = d.kind === "rollback" ? d.message : (c?.message ?? d.message);
+          const what =
+            d.kind === "config"
+              ? `Config change on ${d.service}`
+              : d.kind === "rollback"
+                ? `Rolled back ${d.sha} on ${d.service}`
+                : `Deployed ${d.sha} to ${d.service}`;
           return {
             kind: "commit",
             summary: `${what} at ${hhmm(d.deployedAt)}${message ? `: '${message}'` : ""}`,
@@ -271,6 +278,8 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
             author: c?.author ?? "unknown",
             message: message ?? "(commit not found)",
             files: c?.files ?? [],
+            deployKind: d.kind ?? "deploy",
+            ...(d.branch ? { branch: d.branch } : {}),
           };
         });
         return {
@@ -332,6 +341,8 @@ export function forModel(e: Evidence) {
       };
     case "commit":
       return { ...base, files: e.files };
+    case "web":
+      return { ...base, url: e.url };
   }
 }
 

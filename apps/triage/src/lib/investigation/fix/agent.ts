@@ -1,9 +1,17 @@
-import { type LanguageModel, type ModelMessage, ToolLoopAgent, tool } from "ai";
+import { type LanguageModel, type LanguageModelUsage, type ModelMessage, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
-import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions, wakeProvider } from "../../models/client";
+import {
+  cacheKey,
+  callSettings,
+  languageModel,
+  modelErrorText,
+  modelOptions,
+  wakeProvider,
+  webSearchTools,
+} from "../../models/client";
 import { runBudget } from "../../models/policy";
 import { providers } from "../../models/providers";
-import { stageModel, stageProblem } from "../../models/settings";
+import { stageModel, stageProblem, webSearchOn } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { notify } from "../../notifications/notify";
@@ -15,6 +23,7 @@ import type { TelemetrySource } from "../source";
 import { detectDataChange, isNewMigrationPath } from "./data-change";
 import { type DeniedFix, feedbackBlock, repeatsDenied } from "./feedback";
 import { applyEdits, proveFix } from "./prove";
+import { countSearches, type Part, recordPages, usedPages, WEB_SEARCH, WEB_SEARCH_RULES } from "../web-search";
 import { unifiedDiff } from "./sandbox";
 
 // Stage 3: after a root-cause verdict, the model writes a fix and a
@@ -136,9 +145,15 @@ export async function runFixStage(
   appDir: string,
   opts: {
     feedback?: DeniedFix[];
-    // Tests: a model other than Settings' one, and a scripted model to call.
+    // A model other than Settings' one: the run's own (a re-run's, or one
+    // promoted), or a test's.
     stage?: Stage;
+    // Tests: a scripted model to call.
     languageModel?: LanguageModel;
+    // A re-run's: the source as the first run saw it, copied over the app
+    // in the sandbox, and no message when its fix is proven.
+    baseDir?: string;
+    notify?: boolean;
   } = {},
 ) {
   const feedback = opts.feedback ?? [];
@@ -237,7 +252,7 @@ export async function runFixStage(
         if (outside.length) {
           return reject([`edits may only touch application files you can read; not: ${[...new Set(outside)].join(", ")}`]);
         }
-        const proof = await proveFix({ appDir, name: recorder.incident.id, edits: input.edits, test: input.test });
+        const proof = await proveFix({ appDir, baseDir: opts.baseDir, name: recorder.incident.id, edits: input.edits, test: input.test });
         lastRuns = proof.runs;
         if (!proof.ok && proof.setup) {
           halted = true;
@@ -278,13 +293,17 @@ export async function runFixStage(
         return { declined: true };
       },
     }),
+    ...webSearchTools(stage, await webSearchOn()),
   };
+  const web = WEB_SEARCH in tools;
 
   let steps = 0;
   let retries = 0;
   const tokens = noTokens();
   // A fix proven or declined, or no point going on.
   const settled = () => accepted !== undefined || declined !== undefined || halted || fixRun.attempt >= MAX_SUBMISSIONS;
+  // Every model call's output, for the web pages it cited.
+  const calls: { content: readonly Part[] }[] = [];
   // One tool call at a time, unlike the other stages: two submit_fix calls
   // in one turn would both pass the attempt check and prove in the sandbox
   // at once. Meta is asked for one call per response; other providers may
@@ -294,8 +313,11 @@ export async function runFixStage(
     providerOptions: modelOptions(stage, cacheKey("fix", recorder.incident.id), { parallel: false }),
     ...callSettings(),
     toolCallConcurrency: 1,
-    ...onEachCall((call) => setFixRun({ context: fuller(fixRun.context, call) })),
-    instructions,
+    ...onEachCall((call, step: { usage: LanguageModelUsage; content: readonly Part[] }) => {
+      setFixRun({ context: fuller(fixRun.context, call) });
+      calls.push(step);
+    }),
+    instructions: web ? `${instructions}\n\nLooking things up:${WEB_SEARCH_RULES}` : instructions,
     tools,
     stopWhen: [() => steps >= MAX_STEPS, settled],
     prepareStep: () => {
@@ -337,23 +359,29 @@ export async function runFixStage(
     lastProblems = [modelErrorText(err, stage.provider)];
   }
 
+  // The pages the fix stage cited or opened go on the incident as
+  // evidence, and on the fix, whose summary shows them.
+  const sourceIds = [...recordPages(recorder, usedPages(calls)).values()];
+  const webSearches = countSearches(calls);
   const finished = {
     finishedAt: new Date().toISOString(),
     wakingSince: undefined,
     modelSteps: steps,
     modelRetries: retries,
+    ...(webSearches && { webSearches }),
     ...tokens,
   };
   if (accepted) {
     fixRun = { ...fixRun, ...finished, status: "proven", error: undefined };
     recorder.update({
       ...accepted,
+      fix: { ...accepted.fix, ...(sourceIds.length && { sourceIds }) },
       fixRun,
       status: "awaiting_approval",
       approval: { state: "pending", requestedAt: new Date().toISOString() },
     });
     // Once it is saved: the message links to the page that shows the fix.
-    void recorder.flush().then(() => notify("fix_ready", recorder.incident));
+    if (opts.notify !== false) void recorder.flush().then(() => notify("fix_ready", recorder.incident));
   } else if (declined) {
     // The incident stays diagnosed: nothing to approve.
     fixRun = { ...fixRun, ...finished, status: "declined", declinedBecause: declined, error: undefined };

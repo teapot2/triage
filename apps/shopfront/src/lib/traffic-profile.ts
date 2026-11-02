@@ -49,12 +49,12 @@ export const profileFields: ProfileField[] = [
   { key: "productsMax", group: "Shoppers", label: "Most products", min: 1, max: 10, step: 1, help: "Products a shopper opens, at most." },
   { key: "searchPct", group: "Shoppers", label: "Search", unit: "%", min: 0, max: 100, step: 5, help: "Shoppers who search before browsing." },
   { key: "cartPct", group: "Shoppers", label: "Open the cart", unit: "%", min: 0, max: 100, step: 5, help: "Shoppers who look at their cart before leaving." },
-  { key: "pace", group: "Shoppers", label: "Pause between pages", unit: "×", min: 0.25, max: 4, step: 0.25, help: "Scales every visitor's reading time: below 1 is hurried, above 1 is leisurely." },
+  { key: "pace", group: "Shoppers", label: "Pause between pages", unit: "×", min: 0.2, max: 4, step: 0.1, help: "Scales every visitor's reading time: below 1 is hurried, above 1 is leisurely." },
 
-  { key: "stalePct", group: "Bad requests", label: "Stale links", unit: "%", min: 0, max: 30, step: 0.5, help: "Product links to an id that doesn't exist: 404 from the API." },
-  { key: "malformedPct", group: "Bad requests", label: "Mangled ids", unit: "%", min: 0, max: 30, step: 0.5, help: "Ids like \"undefined\" or \"12abc\": 400 from the API." },
-  { key: "oversizedPct", group: "Bad requests", label: "Oversized ids", unit: "%", min: 0, max: 30, step: 0.5, help: "Ids past the database's integer range. The API answers 500: real server errors on the watched route." },
-  { key: "abortPct", group: "Bad requests", label: "Abandoned requests", unit: "%", min: 0, max: 30, step: 0.5, help: "Visitors who give up on a request within half a second, as on a bad connection." },
+  { key: "stalePct", group: "Bad requests", label: "Stale links", unit: "%", min: 0, max: 30, step: 0.1, help: "Product links to an id that doesn't exist: 404 from the API." },
+  { key: "malformedPct", group: "Bad requests", label: "Mangled ids", unit: "%", min: 0, max: 30, step: 0.1, help: "Ids like \"undefined\" or \"12abc\": 400 from the API." },
+  { key: "oversizedPct", group: "Bad requests", label: "Oversized ids", unit: "%", min: 0, max: 30, step: 0.1, help: "Ids past the database's integer range. The API answers 500: real server errors on the watched route." },
+  { key: "abortPct", group: "Bad requests", label: "Abandoned requests", unit: "%", min: 0, max: 30, step: 0.1, help: "Visitors who give up on a request within half a second, as on a bad connection." },
 ];
 
 export const presets: { name: string; description: string; profile: Profile }[] = [
@@ -94,7 +94,7 @@ export const presets: { name: string; description: string; profile: Profile }[] 
     profile: {
       rps: 2, drift: 20, rushesPerHour: 4,
       shoppers: 25, readers: 55, app: 15, crawlers: 5,
-      productsMin: 1, productsMax: 2, searchPct: 10, cartPct: 30, pace: 1.25,
+      productsMin: 1, productsMax: 2, searchPct: 10, cartPct: 30, pace: 1.3,
       stalePct: 0.5, malformedPct: 0.2, oversizedPct: 0, abortPct: 0.5,
     },
   },

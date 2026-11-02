@@ -1,18 +1,17 @@
 "use client";
 
-import { LoaderCircleIcon } from "lucide-react";
+import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { toast } from "sonner";
 import { FormField } from "@/components/form-fields";
 import { StageRow, useModelList } from "@/components/model-stage-row";
 import { DisclosureFooter, DisclosureRow, ListGroup, SettingsSectionHeader } from "@/components/settings-list";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import type { PublicModelSettings } from "@/lib/models/settings";
 import { type StageId, stageIds, stageLabels } from "@/lib/models/stages";
 import { errorMessage } from "@/lib/errors";
@@ -23,6 +22,7 @@ export type StageModel = PublicModelSettings["stages"][keyof PublicModelSettings
 export type ModelUpdate = {
   stages?: Partial<Record<StageId, Omit<StageModel, "effort"> & Partial<Pick<StageModel, "effort">>>>;
   fanout?: boolean;
+  webSearch?: boolean;
   endpoints?: Partial<Record<Provider["id"], { baseUrl?: string; apiKey?: string }>>;
 };
 // Saves an update and resolves to an error message, or nothing on success.
@@ -41,6 +41,8 @@ export function ModelSettings() {
   const [attempt, setAttempt] = useState(0);
   // The stage or provider whose editor is open.
   const [open, setOpen] = useState<string>();
+  // The fold of providers no stage uses.
+  const [idleOpen, setIdleOpen] = useState(false);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -81,6 +83,19 @@ export function ModelSettings() {
           .filter((s) => settings.stages[s].provider === id && (s !== "lead" || settings.fanout))
           .map((s) => stageLabels[s].label)
       : [];
+  // The providers a stage runs on come first; every other one folds into a
+  // single row, still split into hosted and local inside it. A provider moves
+  // out of the fold as soon as a stage uses it, and a local server's status
+  // is only checked once the fold opens.
+  const inUse = (p: Provider) => usedBy(p.id).length > 0;
+  const shown = hosted.filter((p) => !inUse(p) && featured.includes(p.id));
+  const idleHosted = hosted.filter((p) => !inUse(p) && !featured.includes(p.id));
+  const idleLocal = configurable.filter((p) => !inUse(p));
+  const idle = [...idleHosted, ...idleLocal];
+  const hostedRow = (p: Provider) => <HostedProvider key={p.id} provider={p} usedBy={usedBy(p.id)} {...row(p.id)} />;
+  const endpointRow = (p: Provider) => (
+    <EndpointProvider key={`${p.id}|${p.baseUrl}|${p.hasKey}`} provider={p} usedBy={usedBy(p.id)} onSave={save} {...row(p.id)} />
+  );
 
   return (
     <>
@@ -124,24 +139,27 @@ export function ModelSettings() {
           <div className="divide-y overflow-hidden rounded-lg border">
             <PresetRow providers={settings.providers} onSave={save} />
             <ListGroup label="Stages" />
-            {/* The fan-out switch sits under Investigate, the stage it
+            {/* The fan-out switch is in Investigate's editor, the stage it
                 changes, and the Lead only shows while it's on: off, the
                 Lead never runs, so its row would only be noise. */}
             {stageIds.flatMap((stage) => {
               if (stage === "lead" && !settings.fanout) return [];
-              const stageRow = (
+              const { provider, model, effort } = settings.stages[stage];
+              const fanout = stage === "investigate" ? settings.fanout : undefined;
+              const webSearch = stage === "fix" || stage === "ask" ? settings.webSearch : undefined;
+              return [
                 <StageRow
-                  key={`${stage}|${settings.stages[stage].provider}|${settings.stages[stage].model}|${settings.stages[stage].effort}`}
+                  key={`${stage}|${provider}|${model}|${effort}|${fanout}|${webSearch}`}
                   stage={stage}
                   saved={settings.stages[stage]}
+                  fanout={fanout}
+                  webSearch={webSearch}
+                  lead={stage === "investigate" ? settings.stages.lead : undefined}
                   providers={settings.providers}
                   onSave={save}
                   {...row(stage)}
-                />
-              );
-              return stage === "investigate"
-                ? [stageRow, <FanoutRow key="fanout" on={settings.fanout} onSave={save} />]
-                : [stageRow];
+                />,
+              ];
             })}
           </div>
         )}
@@ -155,60 +173,39 @@ export function ModelSettings() {
             description="Every provider speaks the OpenAI API."
           />
           <div className="divide-y overflow-hidden rounded-lg border">
-            <ListGroup label="Hosted" note="Keys come from apps/triage/.env.local when the server starts" />
-            {hosted.map((p) => (
-              <HostedProvider key={p.id} provider={p} usedBy={usedBy(p.id)} {...row(p.id)} />
-            ))}
-            <ListGroup label="Local and custom" note="Saved on the server; keys never reach the browser" />
-            {configurable.map((p) => (
-              <EndpointProvider
-                key={`${p.id}|${p.baseUrl}|${p.hasKey}`}
-                provider={p}
-                usedBy={usedBy(p.id)}
-                onSave={save}
-                {...row(p.id)}
-              />
-            ))}
+            <ListGroup label="In use" />
+            {hosted.filter(inUse).map(hostedRow)}
+            {configurable.filter(inUse).map(endpointRow)}
+            {shown.length > 0 && <ListGroup label="Also available" />}
+            {shown.map(hostedRow)}
+            {idle.length > 0 && (
+              <Collapsible open={idleOpen} onOpenChange={setIdleOpen} className="group/idle">
+                <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset">
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="font-medium text-sm">{idle.length} not in use</span>
+                    <span className="truncate text-muted-foreground text-xs">{idle.map((p) => p.label).join(", ")}</span>
+                  </span>
+                  <ChevronRightIcon
+                    className="size-4 shrink-0 text-muted-foreground transition-[rotate] duration-200 group-data-[state=open]/idle:rotate-90 motion-reduce:transition-none"
+                    aria-hidden
+                  />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="divide-y border-t">
+                  {idleHosted.length > 0 && (
+                    <ListGroup label="Hosted" note="Keys come from apps/triage/.env.local when the server starts" />
+                  )}
+                  {idleHosted.map(hostedRow)}
+                  {idleLocal.length > 0 && (
+                    <ListGroup label="Local and custom" note="Saved on the server; keys never reach the browser" />
+                  )}
+                  {idleLocal.map(endpointRow)}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
         </section>
       )}
     </>
-  );
-}
-
-// The Investigate stage's "Check hypotheses in parallel" switch. It saves
-// as it flips, like Settings' other switches, and goes back if the server
-// says no.
-function FanoutRow({ on, onSave }: { on: boolean; onSave: SaveModelSettings }) {
-  // The flip being saved, shown until the server's answer replaces `on`.
-  const [pending, setPending] = useState<boolean>();
-
-  async function toggle(next: boolean) {
-    setPending(next);
-    const err = await onSave({ fanout: next });
-    setPending(undefined);
-    if (err) toast.error(`Couldn't save: ${err}`);
-  }
-
-  return (
-    <div className="flex items-center justify-between gap-6 px-4 py-3">
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <label htmlFor="fanout" className="font-medium text-sm">
-          Check hypotheses in parallel
-        </label>
-        <span id="fanout-description" className="max-w-xl text-muted-foreground text-xs">
-          The Lead proposes up to three causes, the Investigate model checks each at once, and the Lead writes the
-          diagnosis from their findings. More model calls per run.
-        </span>
-      </div>
-      <Switch
-        id="fanout"
-        aria-describedby="fanout-description"
-        checked={pending ?? on}
-        disabled={pending !== undefined}
-        onCheckedChange={toggle}
-      />
-    </div>
   );
 }
 
@@ -286,6 +283,20 @@ function PresetRow({ providers, onSave }: { providers: Provider[]; onSave: SaveM
 const trimSlash = (url: string) => url.trim().replace(/\/+$/, "");
 
 const modelCount = (n: number) => `${n} ${n === 1 ? "model" : "models"}`;
+
+// Hosted providers kept out of the "not in use" fold even when no stage runs
+// on them: Baseten and Modal, the hackathon's sponsors.
+const featured: Provider["id"][] = ["baseten", "modal"];
+
+// A provider row's line: the stages it runs, which matter more on the list
+// than its URL (that's in the editor). One no stage runs says which of the
+// presets' open models it serves, or, in the "not in use" fold, which
+// already says so, nothing.
+function usedByProps(stages: string[], provider: Provider) {
+  if (stages.length > 0) return { subtitle: `Used by ${stages.join(", ")}` };
+  const serves = [provider.sparkOpen && "Spark Open", provider.glimmer && "Glimmer"].filter(Boolean);
+  return featured.includes(provider.id) && serves.length > 0 ? { subtitle: `Serves ${serves.join(" and ")}` } : {};
+}
 
 type Verify = { ok: true; models: string[] } | { ok: false; error: string };
 
@@ -370,19 +381,15 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
   return (
     <DisclosureRow
       title={provider.label}
-      tag={usedBy.join(" · ") || undefined}
-      subtitle={
-        <span className="font-mono">{needsUrl ? `Your deployment's URL, from ${provider.baseUrlEnv}` : provider.baseUrl}</span>
-      }
-      status={
-        ready ? (
-          <StatusBadge tone="success">Ready</StatusBadge>
-        ) : (
-          <StatusBadge tone="warning">{needsUrl ? "Needs URL" : "Needs key"}</StatusBadge>
-        )
-      }
+      {...usedByProps(usedBy, provider)}
+      status={ready ? undefined : <StatusBadge tone="warning">{needsUrl ? "Needs URL" : "Needs key"}</StatusBadge>}
       {...row}
     >
+      {provider.baseUrl && (
+        <FormField label="Base URL">
+          <span className="break-all font-mono text-sm">{provider.baseUrl}</span>
+        </FormField>
+      )}
       <FormField
         label={provider.baseUrlEnv ? "URL and API key" : "API key"}
         hint={
@@ -457,7 +464,8 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
   else if (list.loading) status = <StatusBadge tone="muted" loading>Checking</StatusBadge>;
   else if (list.unreachable) status = <StatusBadge tone="muted">{provider.local ? "Not running" : "Unreachable"}</StatusBadge>;
   else if (list.error) status = <StatusBadge tone="destructive">Error</StatusBadge>;
-  else status = <StatusBadge tone="success">{modelCount(list.models.length)}</StatusBadge>;
+  // Running: how many models it serves, as plain text rather than a badge.
+  else status = <span className="text-muted-foreground text-xs">{modelCount(list.models.length)}</span>;
 
   async function save() {
     setSaving(true);
@@ -503,8 +511,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
   return (
     <DisclosureRow
       title={label}
-      tag={usedBy.join(" · ") || undefined}
-      subtitle={configured ? <span className="font-mono">{provider.baseUrl}</span> : "Any OpenAI-compatible server"}
+      {...(configured || usedBy.length > 0 ? usedByProps(usedBy, provider) : { subtitle: "Any OpenAI-compatible server" })}
       status={status}
       unsaved={dirty}
       {...row}

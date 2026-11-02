@@ -5,7 +5,9 @@ import { proposeMitigation } from "./propose";
 
 const now = "2026-10-23T02:15:00.000Z";
 
-const deploy = (id: string, sha: string, message: string): Evidence => ({
+type Commit = Extract<Evidence, { kind: "commit" }>;
+
+const deploy = (id: string, sha: string, message: string, more: Partial<Commit> = {}): Evidence => ({
   id,
   kind: "commit",
   tool: "deploy_history",
@@ -15,6 +17,7 @@ const deploy = (id: string, sha: string, message: string): Evidence => ({
   author: "unknown",
   message,
   files: [],
+  ...more,
 });
 
 const flagOn = deploy("ev_commit_1", "config:FF_STOCK_DIRECT_QUERY", "ops: FF_STOCK_DIRECT_QUERY turned on");
@@ -86,6 +89,31 @@ describe("proposeMitigation", () => {
     assert.equal(m?.title, "Roll back shopfront to the deploy before a1b9c4e");
     assert.equal(m?.undo, "Redeploy a1b9c4e");
     assert.equal(m?.risk, "low");
+  });
+
+  it("rolls back a release, carrying its branch for the fix PR", () => {
+    const release = deploy("ev_commit_4", "9f3c2a1", "feat(shopfront): return a formatted price from the product API", {
+      deployKind: "deploy",
+      branch: "shopfront-release/formatted-price",
+    });
+    const m = propose([latency, release]);
+    assert.equal(m?.kind, "rollback");
+    assert.equal(m?.target, "9f3c2a1");
+    assert.equal(m?.branch, "shopfront-release/formatted-price");
+    assert.deepEqual(m?.steps, ["Roll back 9f3c2a1 on shopfront"]);
+    assert.deepEqual(m?.why.evidenceIds, ["ev_commit_4"]);
+    // A deploy record with no branch leaves the field off.
+    assert.equal(propose([latency, codeDeploy])?.branch, undefined);
+  });
+
+  it("never proposes rolling back a rollback", () => {
+    const rolledBack = deploy("ev_commit_5", "9f3c2a1", "deploy: rolled back 9f3c2a1", { deployKind: "rollback" });
+    assert.equal(propose([latency, rolledBack]), undefined);
+    // Nor when it sits beside the deploy it undid: the deploy is the target.
+    const release = deploy("ev_commit_4", "9f3c2a1", "feat: formatted price", { deployKind: "deploy", observedAt: "2026-10-23T01:50:00.000Z" });
+    const m = propose([latency, rolledBack, release]);
+    assert.equal(m?.kind, "rollback");
+    assert.deepEqual(m?.why.evidenceIds, ["ev_commit_4"]);
   });
 
   it("prefers a flag turned on after the blamed deploy, even when the chain cites only the deploy", () => {

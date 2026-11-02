@@ -76,11 +76,11 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
         <div className="flex min-w-0 flex-col gap-6">
           <Section title="Last check">
             {!rule.enabled ? (
-              <p className="text-muted-foreground text-sm">Paused, so the watch skips it. Resume it to judge it again.</p>
+              <p className="px-3 py-2 text-muted-foreground">Paused, so the watch skips it. Resume it to judge it again.</p>
             ) : watch?.enabled === false ? (
-              <p className="text-muted-foreground text-sm">The watch is paused. Resume it from the sidebar.</p>
+              <p className="px-3 py-2 text-muted-foreground">The watch is paused. Resume it from the sidebar.</p>
             ) : live?.summary ? (
-              <p className="text-sm">
+              <p className="px-3 py-2">
                 {sentence(live.summary)}
                 {live.status === "breaching" && live.checks && (
                   <span className="text-muted-foreground">
@@ -90,7 +90,7 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
                 )}
               </p>
             ) : (
-              <p className="text-muted-foreground text-sm">
+              <p className="px-3 py-2 text-muted-foreground">
                 {live ? "No traffic on the routes it covers in its window." : "Waiting for the watch's next check."}
               </p>
             )}
@@ -100,14 +100,14 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
 
           <Section title="Incidents it opened">
             {incidents.length === 0 ? (
-              <p className="text-muted-foreground text-sm">None yet.</p>
+              <p className="px-3 py-2 text-muted-foreground">None yet.</p>
             ) : (
-              <ul className="-mx-2 flex flex-col">
+              <ul className="divide-y">
                 {incidents.map((i) => (
                   <li key={i.id}>
                     <Link
                       href={`/incidents/${i.id}`}
-                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-muted/50"
+                      className="flex items-center gap-2 px-3 py-2 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50"
                     >
                       <StatusIcon status={i.status} />
                       <span className="min-w-0 flex-1 truncate">{i.title}</span>
@@ -150,11 +150,14 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
   );
 }
 
+// A title over a bordered box, like the Backtest beside it and the forms'
+// sections; what goes in the box brings its own padding, so lists can run
+// edge to edge.
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-3">
       <h2 className="font-medium text-sm">{title}</h2>
-      {children}
+      <div className="overflow-hidden rounded-lg border text-sm">{children}</div>
     </section>
   );
 }

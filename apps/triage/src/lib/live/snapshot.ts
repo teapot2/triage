@@ -198,6 +198,6 @@ export function summarize(input: SnapshotInput, service: string, window: LiveWin
       .sort((a, b) => a.time - b.time)
       .slice(-FEED_SIZE)
       .reverse()
-      .map(({ time, level, body, traceId }) => ({ time, level, body, traceId })),
+      .map(({ time, level, body, attributes, traceId }) => ({ time, level, body, attributes, traceId })),
   };
 }

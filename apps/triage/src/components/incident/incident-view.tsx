@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import { markSeen, recordView } from "@/hooks/use-seen";
 import { findUnknownEvidenceIds, type Incident } from "@/lib/investigation/schema";
+import { currentRun, isRunning, runView } from "@/lib/investigation/reruns";
 import { activityAt } from "@/lib/investigation/summary";
 import { citationOrder } from "./diagnosis-panel";
 import { EvidenceProvider } from "./evidence";
@@ -12,6 +13,7 @@ import { IncidentProvider } from "./incident-export";
 import { IncidentHeader } from "./incident-header";
 import { IncidentReport } from "./incident-report";
 import { useAskQuestion } from "./questions-panel";
+import { RunComparison, RunSwitcher, useShownRun } from "./run-switcher";
 
 // While the agent works, re-render from the server every couple of seconds;
 // it saves each step as it goes. Every second while a question is being
@@ -28,8 +30,13 @@ function useRefreshWhile(active: boolean, intervalMs = 2000) {
 
 // A summary header with the facts that matter, then the report: a section
 // menu beside one section at a time.
-export function IncidentView({ incident }: { incident: Incident }) {
-  const { report } = incident;
+export function IncidentView({ incident, webSearch }: { incident: Incident; webSearch?: boolean }) {
+  // The run on screen: the incident's own, another of its runs (read only:
+  // it acts on nothing until it's used), or all of them compared.
+  const shown = useShownRun(incident);
+  const view = (shown !== "compare" && runView(incident, shown)) || incident;
+  const readOnly = shown !== "compare" && shown !== currentRun(incident);
+  const { report } = view;
   // Also while the fix is being written and proven, after the verdict.
   const fixing = incident.fixRun?.status === "writing" || incident.fixRun?.status === "testing";
   // And while a mitigation runs and its recovery is watched.
@@ -48,37 +55,43 @@ export function IncidentView({ incident }: { incident: Incident }) {
       incident.approval?.prState === "opening" ||
       answering ||
       writingPostmortem ||
-      verifying,
+      verifying ||
+      (incident.reruns ?? []).some(isRunning),
     answering ? 1000 : 2000,
   );
   // This tab's own question streams here, above the sections, so switching
   // sections mid-answer keeps the stream.
-  const ask = useAskQuestion(incident);
+  const ask = useAskQuestion(incident, webSearch);
   // Whatever happened up to now has been seen; a run that finishes while
   // this page is open is seen as the refresh brings it in.
   const latest = activityAt(incident);
   useEffect(() => markSeen(incident.id, latest), [incident.id, latest]);
   useEffect(() => recordView(incident.id), [incident.id]);
   const unknownEvidenceIds = useMemo(
-    () => (report ? findUnknownEvidenceIds(report, incident.evidence) : []),
-    [report, incident.evidence],
+    () => (report ? findUnknownEvidenceIds(report, view.evidence) : []),
+    [report, view.evidence],
   );
   const order = useMemo(() => (report ? citationOrder(report) : []), [report]);
   // A chip in an answer opens the same panel as one in the report: the
   // investigation's evidence, then each question's, in the order asked.
   const evidence = useMemo(
-    () => [...incident.evidence, ...(incident.questions ?? []).flatMap((q) => q.evidence)],
-    [incident.evidence, incident.questions],
+    () => [...view.evidence, ...(view.questions ?? []).flatMap((q) => q.evidence)],
+    [view.evidence, view.questions],
   );
 
   return (
     <IncidentProvider incident={incident}>
       <EvidenceProvider evidence={evidence} order={order}>
         <IncidentCommands incident={incident} />
-        <IncidentHeader incident={incident} />
+        <IncidentHeader incident={incident} view={view} />
         {/* A container, so the report lays out by its own width. */}
         <div className="@container mx-auto w-full max-w-6xl px-4 pt-5 pb-8 sm:px-6">
-          <IncidentReport incident={incident} unknownEvidenceIds={unknownEvidenceIds} cited={order} ask={ask} />
+          {(incident.reruns?.length ?? 0) > 0 && <RunSwitcher incident={incident} shown={shown} />}
+          {shown === "compare" ? (
+            <RunComparison incident={incident} />
+          ) : (
+            <IncidentReport incident={view} unknownEvidenceIds={unknownEvidenceIds} cited={order} ask={ask} readOnly={readOnly} />
+          )}
         </div>
       </EvidenceProvider>
     </IncidentProvider>

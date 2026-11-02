@@ -289,6 +289,8 @@ function evidenceBody(e: Evidence): string {
       const files = e.files.length ? `\n\nFiles: ${e.files.map((f) => `\`${f}\``).join(", ")}` : "";
       return `${label}\n\n${fence(e.message)}${files}`;
     }
+    case "web":
+      return `${e.title ? `${e.title}: ` : ""}${e.url}`;
   }
 }
 

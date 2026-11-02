@@ -8,6 +8,7 @@ import {
   DatabaseIcon,
   FileCodeIcon,
   GitCommitHorizontalIcon,
+  GlobeIcon,
   LoaderCircleIcon,
   type LucideIcon,
   RocketIcon,
@@ -48,6 +49,7 @@ const toolIcons: Record<ToolName, LucideIcon> = {
   deploy_history: RocketIcon,
   git_log: GitCommitHorizontalIcon,
   read_source: FileCodeIcon,
+  web_search: GlobeIcon,
 };
 
 const statusIcons = {
@@ -67,7 +69,7 @@ const highlightFlash = "animate-highlight-flash motion-reduce:animate-none";
 const highlightBg = "bg-foreground/10 hover:bg-foreground/10";
 
 // The phases an investigation moves through, by the tool used.
-type Phase = "metrics" | "logs" | "database" | "changes" | "code";
+type Phase = "metrics" | "logs" | "database" | "changes" | "code" | "web";
 
 const phaseOf: Record<ToolName, Phase> = {
   query_metrics: "metrics",
@@ -77,6 +79,7 @@ const phaseOf: Record<ToolName, Phase> = {
   deploy_history: "changes",
   git_log: "changes",
   read_source: "code",
+  web_search: "web",
 };
 
 const phaseLabels: Record<Phase, string> = {
@@ -85,6 +88,7 @@ const phaseLabels: Record<Phase, string> = {
   database: "Database",
   changes: "What changed",
   code: "Code",
+  web: "The web",
 };
 
 interface PhaseGroup {

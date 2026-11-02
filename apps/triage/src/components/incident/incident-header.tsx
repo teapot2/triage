@@ -1,6 +1,16 @@
 "use client";
 
-import { CheckCheckIcon, CheckIcon, EllipsisIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, ShieldIcon, XIcon } from "lucide-react";
+import {
+  CheckCheckIcon,
+  CheckIcon,
+  EllipsisIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+  ShieldCheckIcon,
+  ShieldIcon,
+  XIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
@@ -15,14 +25,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useNow } from "@/hooks/use-now";
+import { rerunBlocker } from "@/lib/investigation/reruns";
 import { incidentUsage } from "@/lib/investigation/cost";
 import type { Incident } from "@/lib/investigation/schema";
+import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { Timestamp } from "@/components/timestamp";
 import { THIS_INCIDENT } from "./incident-commands";
 import { incidentExports } from "./incident-export";
 import { MetricBadges } from "./outcome-badges";
+import { RerunDialog } from "./rerun-dialog";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 import { UsageLine } from "./usage-line";
 import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
@@ -41,7 +56,8 @@ export function noRerunReason(incident: Pick<Incident, "run" | "fixRun">): NoRer
 // The incident at a glance: the title, then one line with its state, where
 // and when, and how far past the limit. Once it scrolls away, a compact bar
 // keeps the title, status and approval in view.
-export function IncidentHeader({ incident }: { incident: Incident }) {
+// `view` is the run on screen, which a re-run starts from.
+export function IncidentHeader({ incident, view = incident }: { incident: Incident; view?: Incident }) {
   const { trigger, fix, approval, mitigation, verification } = incident;
   const mitigated = mitigation?.state === "applied";
   const recovered = mitigated && mitigation.recovery?.status === "recovered";
@@ -133,9 +149,23 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
     </div>
   );
   const headerMenu = menuFor(true);
-  const headerActions = (approvalActions || headerMenu) && (
+  // Investigating again with other models: in the header only, not the
+  // sticky bar, since it's not a decision the incident waits on.
+  const [rerunning, setRerunning] = useState(false);
+  // The clock only decides whether live telemetry has rolled out; it starts
+  // at 0 to hydrate, then runs.
+  const now = useNow(0);
+  const rerunBlocked = rerunBlocker(incident, now);
+  useRegisterCommands(
+    "incident-rerun",
+    rerunBlocked
+      ? []
+      : [{ id: "rerun", group: THIS_INCIDENT, label: "Re-run with other models", icon: RefreshCwIcon, keywords: "again compare model", run: () => setRerunning(true) }],
+  );
+  const headerActions = (
     <div className="flex items-center gap-2">
       {approvalActions}
+      <RerunButton blocked={rerunBlocked} onClick={() => setRerunning(true)} />
       {headerMenu}
     </div>
   );
@@ -183,6 +213,7 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
           </div>
         </div>
       </StickyHeader>
+      {!rerunBlocked && <RerunDialog incident={incident} view={view} open={rerunning} onOpenChange={setRerunning} />}
       <ReopenDialog
         open={reopeningOpen}
         onOpenChange={setReopeningOpen}
@@ -213,6 +244,27 @@ export function IncidentHeader({ incident }: { incident: Incident }) {
         </>
       )}
     </>
+  );
+}
+
+// Opens the re-run dialog; when the incident can't be investigated again,
+// it looks disabled and says why in a popover instead.
+function RerunButton({ blocked, onClick }: { blocked?: string; onClick: () => void }) {
+  const button = (
+    <Button variant="outline" size="sm" aria-disabled={Boolean(blocked)} className={cn(blocked && "text-muted-foreground")} onClick={blocked ? undefined : onClick}>
+      <RefreshCwIcon />
+      Re-run
+    </Button>
+  );
+  if (!blocked) return button;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>{button}</PopoverTrigger>
+      <PopoverContent align="end" className="w-72 text-sm">
+        <p className="font-medium">Can&apos;t re-run this incident</p>
+        <p className="mt-1 text-muted-foreground">{blocked}</p>
+      </PopoverContent>
+    </Popover>
   );
 }
 

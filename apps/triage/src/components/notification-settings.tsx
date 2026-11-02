@@ -37,6 +37,9 @@ const kindLabels: Record<Delivery["kind"], string> = {
   test: "Test",
 };
 
+// Deliveries listed before "Show more".
+const DELIVERIES_SHOWN = 5;
+
 // The Notifications section of Settings: one Slack incoming webhook, a test
 // message, which of three events send one, and the latest delivery attempts
 // with Slack's answer when one failed. Saved on the server, which sends the
@@ -56,6 +59,8 @@ export function NotificationSettings() {
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
+  // The rest of the delivery log, which is history rather than a setting.
+  const [showAll, setShowAll] = useState(false);
   const now = useNow(0);
   const input = useRef<HTMLInputElement>(null);
   const replaceButton = useRef<HTMLButtonElement>(null);
@@ -364,9 +369,20 @@ export function NotificationSettings() {
                 <p className="px-4 py-3 text-muted-foreground text-sm">Nothing sent yet.</p>
               ) : (
                 <ul className="divide-y">
-                  {data.deliveries.map((d) => (
+                  {(showAll ? data.deliveries : data.deliveries.slice(0, DELIVERIES_SHOWN)).map((d) => (
                     <DeliveryRow key={`${d.at}|${d.kind}|${d.incidentId ?? ""}`} delivery={d} now={now} />
                   ))}
+                  {!showAll && data.deliveries.length > DELIVERIES_SHOWN && (
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => setShowAll(true)}
+                        className="w-full px-4 py-2.5 text-left text-muted-foreground text-sm outline-none transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:bg-muted/50 focus-visible:text-foreground"
+                      >
+                        Show {data.deliveries.length - DELIVERIES_SHOWN} more
+                      </button>
+                    </li>
+                  )}
                 </ul>
               )}
             </>
@@ -394,7 +410,8 @@ function DeliveryRow({ delivery: d, now }: { delivery: Delivery; now: number }) 
         )}
         <span className="ml-auto flex items-center gap-3 text-muted-foreground text-xs">
           <Timestamp date={d.at}>{formatAgo(d.at, now)}</Timestamp>
-          {d.ok ? <StatusBadge tone="success">Sent</StatusBadge> : <StatusBadge tone="destructive">Failed</StatusBadge>}
+          {/* Sent is the usual case, so only a failure gets a badge. */}
+          {!d.ok && <StatusBadge tone="destructive">Failed</StatusBadge>}
         </span>
       </div>
       {!d.ok && d.error && <p className="break-words font-mono text-destructive text-xs">{d.error}</p>}

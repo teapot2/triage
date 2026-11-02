@@ -1,5 +1,7 @@
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAI, openai } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import type { ToolSet } from "ai";
+import { WEB_SEARCH } from "../investigation/web-search";
 import { ModelCallError, type RetryOptions, retryingFetch } from "./fetch";
 import { policyFor, RunTimeoutError, STALL_MS } from "./policy";
 import { type ProviderId, providers } from "./providers";
@@ -117,6 +119,14 @@ export function modelOptions(
     },
   };
 }
+
+// Meta's built-in web search, for a stage on Meta's API with it on; none
+// on other providers, whose APIs don't have it. Meta runs each search
+// itself, inside the model call, and bills it apart from tokens
+// (pricing.ts). The benchmark runs only the investigation, which never has
+// it, so its results stay repeatable.
+export const webSearchTools = (s: Pick<StageModel, "provider">, on: boolean): ToolSet =>
+  on && s.provider === "meta" ? { [WEB_SEARCH]: openai.tools.webSearch() } : {};
 
 // The prompt cache key for a stage's calls on one incident.
 export const cacheKey = (stage: StageId, incidentId: string) => ({ key: `triage:${stage}:${incidentId}` });

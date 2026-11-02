@@ -5,6 +5,7 @@ import {
   DatabaseIcon,
   FileCodeIcon,
   GitCommitHorizontalIcon,
+  GlobeIcon,
   type LucideIcon,
   ScrollTextIcon,
   WaypointsIcon,
@@ -57,6 +58,7 @@ export const evidenceIcons: Record<EvidenceKind, LucideIcon> = {
   db: DatabaseIcon,
   source: FileCodeIcon,
   commit: GitCommitHorizontalIcon,
+  web: GlobeIcon,
 };
 
 interface EvidenceContextValue {
@@ -430,6 +432,14 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
             </ul>
           </Field>
         </>
+      );
+    case "web":
+      return (
+        <Field label="Page">
+          <a href={evidence.url} target="_blank" rel="noreferrer" className="break-all underline underline-offset-2">
+            {evidence.url}
+          </a>
+        </Field>
       );
   }
 }

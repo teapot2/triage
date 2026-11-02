@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { isDemo } from "@/lib/investigation/demo";
 import { facetCounts, filterIncidents } from "@/lib/investigation/filter";
 import { investigationOptions } from "@/lib/investigation/options";
+import { otherRuns, runModelsLabel } from "@/lib/investigation/reruns";
 import type { Incident } from "@/lib/investigation/schema";
 import { sortIncidents, startedAt } from "@/lib/investigation/sort";
 import { isExample, listIncidents } from "@/lib/investigation/store";
@@ -83,6 +84,32 @@ async function IncidentList({ searchParams }: Props) {
   );
 }
 
+// The incident's other runs (re-runs with other models, or the first run
+// once a re-run was promoted), each a branch under the incident's row.
+function RunRows({ incident }: { incident: Incident }) {
+  const runs = otherRuns(incident);
+  if (runs.length === 0) return null;
+  return (
+    <ul className="-mt-1.5 pb-2">
+      {runs.map((r) => (
+        <li key={r.number}>
+          <Link
+            href={`/incidents/${incident.id}?run=${r.number}`}
+            className="flex items-center gap-2 py-1 pr-4 pl-7 text-muted-foreground text-xs transition-colors hover:bg-muted/40 hover:text-foreground"
+          >
+            {/* The branch: a corner from the incident's row to this one. */}
+            <span aria-hidden className="-mt-3 h-4 w-3 shrink-0 self-start rounded-bl-md border-muted-foreground/50 border-b border-l" />
+            <StatusIcon status={r.status} className="size-3 shrink-0" />
+            <span className="shrink-0 text-foreground">Run {r.number}</span>
+            <span className="truncate font-mono">{runModelsLabel(r)}</span>
+            <span className="hidden shrink-0 sm:inline">· {statusLabel[r.status]}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // Replacing the skeleton, rows fade up one after another; the stagger caps
 // at ten rows so a long list doesn't keep the bottom waiting.
 function IncidentRows({ incidents }: { incidents: Incident[] }) {
@@ -128,6 +155,7 @@ function IncidentRows({ incidents }: { incidents: Incident[] }) {
               <Timestamp date={startedAt(incident)} />
             </span>
           </Link>
+          <RunRows incident={incident} />
         </li>
       ))}
     </ul>

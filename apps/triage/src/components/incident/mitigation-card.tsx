@@ -73,13 +73,15 @@ export function mitigationMarker(mitigation: Mitigation | undefined): ChartMarke
 
 // The fast, reversible step before the fix: what it does and why (cited),
 // then the approval, its progress, and whether the alert's metric came back.
-export function MitigationCard({ incident, className }: { incident: Incident; className?: string }) {
+// `readOnly` on another of the incident's runs than its own: what it would
+// propose, with no way to approve it.
+export function MitigationCard({ incident, readOnly = false, className }: { incident: Incident; readOnly?: boolean; className?: string }) {
   const mitigation = incident.mitigation!;
   const { state, decide, error } = useMitigationDecision(incident.id, mitigation.state);
   const [confirming, setConfirming] = useState(false);
   useRegisterCommands(
     "incident-mitigation",
-    state === "proposed"
+    state === "proposed" && !readOnly
       ? [
           {
             id: "approve-mitigation",
@@ -121,7 +123,10 @@ export function MitigationCard({ incident, className }: { incident: Incident; cl
       <p className="text-muted-foreground text-xs">To undo: {mitigation.undo}</p>
 
       <div className="mt-1 flex flex-col gap-1.5">
-        {state === "proposed" && (
+        {state === "proposed" && readOnly && (
+          <p className="text-muted-foreground text-xs">Proposed by this run. Use the run to approve it.</p>
+        )}
+        {state === "proposed" && !readOnly && (
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => setConfirming(true)}>
               Approve mitigation

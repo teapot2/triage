@@ -9,13 +9,21 @@ export interface Executor {
 
 const shopfrontUrl = process.env.SHOPFRONT_URL ?? "http://localhost:3001";
 
-type OpsState = { flags: { name: string; enabled: boolean }[]; released?: number };
+type OpsState = {
+  flags: { name: string; enabled: boolean }[];
+  released?: number;
+  // The release the harness has deployed into the store, null when none.
+  release?: { sha: string; branch?: string } | null;
+};
 
-async function ops(body: object): Promise<OpsState> {
+// The ops API's state: read with no body, changed with an action.
+async function ops(body?: object): Promise<OpsState> {
   const url = `${shopfrontUrl}/api/ops`;
   let res: Response;
   try {
-    res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    res = body
+      ? await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      : await fetch(url);
   } catch {
     throw new Error(`Couldn't reach Shopfront at ${url}`);
   }
@@ -29,7 +37,7 @@ async function ops(body: object): Promise<OpsState> {
 export const shopfrontOps: Executor = {
   async apply(incident) {
     const m = incident.mitigation!;
-    if (m.kind === "rollback") throw new Error("no deploy pipeline on this source");
+    if (m.kind === "rollback") return rollback(m.target);
     const state = await ops({ action: "flag", name: m.target, enabled: false });
     if (state.flags.find((f) => f.name === m.target)?.enabled !== false) {
       throw new Error(`Shopfront didn't turn ${m.target} off`);
@@ -39,6 +47,18 @@ export const shopfrontOps: Executor = {
     return { output: `${m.target} off; ${released} held connection${released === 1 ? "" : "s"} released` };
   },
 };
+
+// The harness reverse-applies whatever release is deployed, so the state is
+// read first: to name what was rolled back, and to say so when it isn't the
+// release the mitigation blamed (the store still went back to the code
+// before it, so that's not a failure).
+async function rollback(target: string): Promise<{ output: string }> {
+  const deployed = (await ops()).release;
+  if (!deployed) throw new Error("Nothing is deployed on Shopfront to roll back");
+  const after = await ops({ action: "rollback" });
+  if (after.release) throw new Error(`Shopfront still has ${after.release.sha} deployed`);
+  return { output: deployed.sha === target ? `rolled back ${deployed.sha}` : `rolled back ${deployed.sha}; the mitigation named ${target}` };
+}
 
 // Scenario replays and the bundled examples: nothing to change, so the
 // scenario's recorded recovery stands in, re-timed to follow the trigger's

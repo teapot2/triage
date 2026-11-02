@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
+import { SectionMenu, selectSection } from "@/components/section-menu";
 import { Button } from "@/components/ui/button";
 import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Incident } from "@/lib/investigation/schema";
@@ -51,11 +52,15 @@ export function IncidentReport({
   unknownEvidenceIds,
   cited,
   ask,
+  readOnly = false,
 }: {
   incident: Incident;
   unknownEvidenceIds: string[];
   cited: string[];
   ask: Ask;
+  // Another of the incident's runs than its own: nothing on it can be acted
+  // on, and the incident's questions and postmortem aren't its.
+  readOnly?: boolean;
 }) {
   const { report, fix, validation, steps, evidence, trigger, run, mitigation, fixAttempts, verification } = incident;
   const running = incident.status === "investigating";
@@ -85,13 +90,13 @@ export function IncidentReport({
   // incident a beat later).
   const savedQuestions = incident.questions ?? [];
   const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
-  if (report) {
+  if (report && !readOnly) {
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
     sections.push({ id: "ask", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
   // The postmortem, once a report names something wrong.
   const postmortem = incident.postmortem;
-  if (hasPostmortem(incident)) sections.push({ id: "postmortem", label: "Postmortem", icon: FileTextIcon });
+  if (hasPostmortem(incident) && !readOnly) sections.push({ id: "postmortem", label: "Postmortem", icon: FileTextIcon });
   const factors = postmortem?.status === "ready" ? (postmortem.contributingFactors?.length ?? 0) : 0;
 
   // The open section lives in the URL (?section=fix), so it can be linked
@@ -106,13 +111,11 @@ export function IncidentReport({
     sections.find((s) => s.id === fallback) ??
     sections[0];
   const setSelected = (id: SectionId) => {
-    if (id === current.id) return;
-    const params = new URLSearchParams(searchParams.toString());
-    if (id === fallback) params.delete("section");
-    else params.set("section", id);
-    const query = params.toString();
-    window.history.pushState(null, "", query ? `?${query}` : window.location.pathname);
+    if (id !== current.id) selectSection(searchParams, id, fallback);
   };
+  // A spinner in place of the icon while that section is still working.
+  const busy = (id: SectionId) =>
+    (id === "investigation" && running) || (id === "ask" && answering) || (id === "postmortem" && postmortem?.status === "writing");
 
   const content: Record<SectionId, () => ReactNode> = {
     overview: () => (
@@ -161,7 +164,7 @@ export function IncidentReport({
         )}
 
         {mitigation && (
-          <MitigationCard incident={incident} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+          <MitigationCard incident={incident} readOnly={readOnly} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
         )}
 
         {/* Without an applied mitigation to sit under (after a merged fix,
@@ -231,51 +234,17 @@ export function IncidentReport({
     // The menu sits beside the section only while the report itself is wide
     // enough (a container query, not the window): the docked evidence panel
     // takes room, and then the menu becomes a row on top.
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[11rem_minmax(0,1fr)] @2xl:gap-10">
-      <nav aria-label="Report sections" className="@2xl:sticky @2xl:top-18 @2xl:self-start">
-        <ul className="-mx-1 flex gap-1 overflow-x-auto pb-1 @2xl:mx-0 @2xl:flex-col @2xl:overflow-visible @2xl:pb-0">
-          {sections.map((s) => {
-            const Icon = s.icon;
-            const active = s.id === current.id;
-            return (
-              <li key={s.id} className="shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSelected(s.id)}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors",
-                    active
-                      ? "bg-muted font-medium text-foreground"
-                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-                  )}
-                >
-                  {(s.id === "investigation" && running) ||
-                  (s.id === "ask" && answering) ||
-                  (s.id === "postmortem" && postmortem?.status === "writing") ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <Icon className="size-4" />
-                  )}
-                  {s.label}
-                  {/* None yet says nothing worth a "0". */}
-                  {s.count ? (
-                    <span className="ml-auto pl-2 font-mono text-muted-foreground text-xs tabular-nums">{s.count}</span>
-                  ) : null}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
-
-      <section key={current.id} className="flex flex-col gap-5 fade-in-0 slide-in-from-bottom-1 animate-in duration-200 ease-out motion-reduce:animate-none">
-        {/* The menu's highlight already names the section on screen; the
-            heading stays for screen readers, who move between sections by it. */}
-        <h2 className="sr-only">{current.label}</h2>
-        {content[current.id]()}
-      </section>
-    </div>
+    <SectionMenu
+      label="Report sections"
+      sections={sections.map(({ icon: Icon, ...s }) => ({
+        ...s,
+        icon: busy(s.id) ? <LoaderCircleIcon className="animate-spin" /> : <Icon />,
+      }))}
+      current={current.id}
+      onSelect={setSelected}
+    >
+      {content[current.id]()}
+    </SectionMenu>
   );
 }
 

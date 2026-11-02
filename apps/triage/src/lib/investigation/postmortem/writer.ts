@@ -3,7 +3,7 @@ import { z } from "zod";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
-import { readTemplate, stageModel, stageProblem } from "../../models/settings";
+import { readTemplate, runStageModel, stageProblem } from "../../models/settings";
 import { fuller, noTokens, onEachCall, type TokenCounts } from "../../models/usage";
 import { runAgentLoop } from "../agent-loop";
 import { knownEvidenceIds } from "../ask/rules";
@@ -391,7 +391,7 @@ export async function writePostmortem(
         ? { ...i, postmortem: { ...i.postmortem, template, draft: live.draft } }
         : i,
     );
-    const stage = opts.stage ?? (await stageModel("postmortem"));
+    const stage = opts.stage ?? (await runStageModel("postmortem", incident.models?.postmortem));
     provider = stage.provider;
     const problem = stageProblem(stage);
     if (problem) throw new Error(problem);

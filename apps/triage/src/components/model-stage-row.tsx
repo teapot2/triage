@@ -1,8 +1,9 @@
 "use client";
 
 import { CheckIcon, LoaderCircleIcon } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { FormField } from "@/components/form-fields";
+import { FanoutExplainer } from "@/components/fanout-explainer";
 import { formatDuration } from "@/components/incident/format";
 import type { ModelUpdate, Provider, SaveModelSettings, StageModel } from "@/components/model-settings";
 import { ModelPicker } from "@/components/model-picker";
@@ -12,6 +13,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ProviderId } from "@/lib/models/providers";
 import { defaultEffort, effortLabels, effortsFor, type ReasoningEffort, type StageId, stageLabels } from "@/lib/models/stages";
@@ -74,10 +76,16 @@ export function useModelList(provider: Provider | undefined) {
 // Save and Test model. The parent keys
 // the row by its saved value, so a save or preset resets the draft, and owns
 // `open`. Test model calls the draft model once, saved or not, and may incur
-// charges; its result shows in the editor.
+// charges; its result shows in the editor. Investigate's row also carries
+// "Check hypotheses in parallel" (`fanout`), the switch that changes how it
+// runs, drafted and saved with the rest; Fix's and Ask's carry "Search the
+// web" (`webSearch`) the same way, one setting for both, shown on Meta's API.
 export function StageRow({
   stage,
   saved,
+  fanout,
+  webSearch,
+  lead,
   providers,
   onSave,
   open,
@@ -85,6 +93,10 @@ export function StageRow({
 }: {
   stage: StageId;
   saved: StageModel;
+  fanout?: boolean;
+  webSearch?: boolean;
+  // The Lead's saved model, for the fan-out explainer.
+  lead?: StageModel;
   providers: Provider[];
   onSave: SaveModelSettings;
   open: boolean;
@@ -93,6 +105,8 @@ export function StageRow({
   const { label, description } = stageLabels[stage];
   const id = useId();
   const [draft, setDraft] = useState<StageModel>(saved);
+  const [draftFanout, setDraftFanout] = useState(fanout);
+  const [draftWebSearch, setDraftWebSearch] = useState(webSearch);
   // Whether the draft model was entered as a custom ID, on purpose, for a
   // model the provider leaves out of its list.
   const [custom, setCustom] = useState(false);
@@ -119,7 +133,12 @@ export function StageRow({
   const meta = draft.provider === "meta";
   const efforts = effortsFor(model);
   const effort = efforts.includes(draft.effort) ? draft.effort : efforts[efforts.length - 1];
-  const dirty = draft.provider !== saved.provider || model !== saved.model || (meta && effort !== saved.effort);
+  const dirty =
+    draft.provider !== saved.provider ||
+    model !== saved.model ||
+    (meta && effort !== saved.effort) ||
+    draftFanout !== fanout ||
+    draftWebSearch !== webSearch;
   const missingKey = provider?.keyEnv && !provider.hasKey ? provider.keyEnv : undefined;
   const savedLabel = providers.find((p) => p.id === saved.provider)?.label ?? saved.provider;
   // A list to pick from: loaded, and not empty. Without one, any ID goes.
@@ -149,10 +168,12 @@ export function StageRow({
   if (draft.provider !== saved.provider) status = undefined;
   else if (missingKey) status = <StatusBadge tone="warning">Needs key</StatusBadge>;
   else if (list.loading) status = <StatusBadge tone="muted" loading>Checking</StatusBadge>;
-  else if (list.unreachable) status = <StatusBadge tone="muted">{provider?.local ? "Not running" : "Unreachable"}</StatusBadge>;
+  else if (list.unreachable) status = <StatusBadge tone="warning">{provider?.local ? "Not running" : "Unreachable"}</StatusBadge>;
   else if (list.error) status = <StatusBadge tone="destructive">Error</StatusBadge>;
   else if (!list.models.includes(saved.model)) status = <StatusBadge tone="warning">Not found</StatusBadge>;
-  else status = <StatusBadge tone="success">Ready</StatusBadge>;
+  // Ready says nothing: a badge only where something needs looking at, so
+  // that one stands out.
+  else status = undefined;
 
   // A model ID rarely carries over to another provider, so start the new one
   // empty. The exceptions: going back to the saved provider restores its
@@ -174,7 +195,11 @@ export function StageRow({
     if (modelError) return;
     setSaving(true);
     setSaveError(undefined);
-    const update: ModelUpdate = { stages: { [stage]: { provider: draft.provider, model, effort } } };
+    const update: ModelUpdate = {
+      stages: { [stage]: { provider: draft.provider, model, effort } },
+      ...(draftFanout !== undefined && { fanout: draftFanout }),
+      ...(draftWebSearch !== undefined && { webSearch: draftWebSearch }),
+    };
     const err = await onSave(update);
     setSaving(false);
     if (err) setSaveError(err);
@@ -183,6 +208,8 @@ export function StageRow({
 
   function cancel() {
     setDraft(saved);
+    setDraftFanout(fanout);
+    setDraftWebSearch(webSearch);
     setCustom(false);
     setTried(false);
     setSaveError(undefined);
@@ -208,6 +235,7 @@ export function StageRow({
   return (
     <DisclosureRow
       title={label}
+      tag={fanout ? "Parallel" : webSearch && saved.provider === "meta" ? "Web search" : undefined}
       subtitle={description}
       summary={
         <>
@@ -217,15 +245,13 @@ export function StageRow({
             </span>
             <span className="truncate text-muted-foreground text-xs">{savedLabel}</span>
           </span>
-          {/* Effort only applies on Meta's API; the column keeps its width
-              either way so the rows line up. */}
+          {/* Effort only applies on Meta's API; elsewhere the column stays
+              empty, keeping its width so the rows line up. */}
           <span className="w-16 text-xs">
-            {saved.provider === "meta" ? (
+            {saved.provider === "meta" && (
               <Badge variant="secondary" className="font-normal">
                 {effortLabels[saved.effort]}
               </Badge>
-            ) : (
-              <span className="text-muted-foreground">—</span>
             )}
           </span>
         </>
@@ -282,6 +308,19 @@ export function StageRow({
           </FormField>
         )}
       </div>
+      {draftFanout !== undefined && (
+        <EditorSwitch id={`${id}-fanout`} label="Check hypotheses in parallel" checked={draftFanout} onChange={setDraftFanout}>
+          The Lead proposes up to three causes, the Investigate model checks each at once, and the Lead writes the
+          diagnosis from their findings. More model calls per run.{" "}
+          {lead && <FanoutExplainer lanes={draft} lead={lead} />}
+        </EditorSwitch>
+      )}
+      {draftWebSearch !== undefined && meta && (
+        <EditorSwitch id={`${id}-web-search`} label="Search the web" checked={draftWebSearch} onChange={setDraftWebSearch}>
+          Fix and Ask can look up how a library is documented to behave and cite the pages, at $2.50 per 1,000
+          searches. One setting for both; Ask can also turn it off per question.
+        </EditorSwitch>
+      )}
       {missingKey && (
         <Alert variant="warning">
           <AlertDescription>
@@ -337,5 +376,35 @@ export function StageRow({
         </div>
       </DisclosureFooter>
     </DisclosureRow>
+  );
+}
+
+// A switch in a stage's editor, drafted with the rest: a label, what it does
+// beneath, the switch on the right.
+function EditorSwitch({
+  id,
+  label,
+  checked,
+  onChange,
+  children,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-6">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <label htmlFor={id} className="font-medium text-sm">
+          {label}
+        </label>
+        <span id={`${id}-description`} className="max-w-xl text-muted-foreground text-xs">
+          {children}
+        </span>
+      </div>
+      <Switch id={id} aria-describedby={`${id}-description`} checked={checked} onCheckedChange={onChange} />
+    </div>
   );
 }

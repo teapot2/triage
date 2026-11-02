@@ -30,6 +30,17 @@ export const shopfrontDir = path.resolve(
 export const shopfrontDatabaseUrl =
   process.env.SHOPFRONT_DATABASE_URL ?? "postgres://triage:triage@localhost:5433/shopfront";
 
+// Triage's own statements on the watched database end in this comment, so
+// db_diagnostics can leave them out: pg_stat_statements keeps the text it
+// first saw for a statement, comments and all. Postgres groups statements by
+// their parse tree, not their text, so only ones the app never runs (the
+// sandbox's copy, these diagnostics) may carry it; a tagged BEGIN would hide
+// the app's own BEGINs.
+const ownQueryTag = "/* triage */";
+export const ownQuery = (sql: string) => `${sql} ${ownQueryTag}`;
+// The connections Triage opens to the watched database.
+export const triageApplicationNames = ["triage", "triage-sandbox"] as const;
+
 // The alert the live run starts from: the same one the pool-leak scenario fires.
 export const liveAlert = {
   route: "/api/products/[id]",
@@ -175,6 +186,9 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
   }
   const allLogs = [...logs, ...exceptionLogs];
   const since = (minutes: number) => now - minutes * MINUTE;
+  // Looked up on the first git_log, not here: most reads of the source (the
+  // watch, the recovery) never ask for history.
+  const release = once(() => fetchRelease());
 
   const description: SourceDescription = {
     id: "live:shopfront",
@@ -244,27 +258,85 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
 
     listSourceFiles,
 
-    gitLog,
+    // History from the deployed release when one is on the store, so the
+    // commit the deploy history names is there to read; HEAD's otherwise.
+    async gitLog(q) {
+      return gitLog({ ...q, from: (await release())?.sha });
+    },
 
-    // No deploy pipeline yet; the changes that land on the running store
-    // are the /ops flag flips, which Shopfront logs as "ops: ..." warnings.
     async deployHistory({ service, sinceMinutes }) {
       if (service && service !== "shopfront") return [];
-      return logs
-        .filter((l) => l.service === "shopfront" && l.level === "warn" && l.body.startsWith("ops: "))
-        .filter((l) => l.time >= since(sinceMinutes))
-        .sort((a, b) => b.time - a.time)
-        .map(
-          (l): DeployRecord => ({
-            service: "shopfront",
-            sha: l.attributes["flag.name"] ? `config:${l.attributes["flag.name"]}` : "config",
-            deployedAt: new Date(l.time).toISOString(),
-            kind: "config",
-            message: l.body,
-          }),
-        );
+      return deployRecords(logs.filter((l) => l.time >= since(sinceMinutes)));
     },
   };
+}
+
+// What changed on the running store, newest first, from what Shopfront logs
+// as warnings: a release deployed or rolled back by its release harness
+// ("deploy: ...") and the /ops flag flips ("ops: ..."), which stand in for
+// the config pushes a real flag system logs.
+export function deployRecords(logs: LogRow[]): DeployRecord[] {
+  return logs
+    .filter((l) => l.service === "shopfront" && l.level === "warn" && (l.body.startsWith("ops: ") || l.body.startsWith("deploy: ")))
+    .sort((a, b) => b.time - a.time)
+    .map((l): DeployRecord => {
+      const deployedAt = new Date(l.time).toISOString();
+      if (l.body.startsWith("ops: ")) {
+        return {
+          service: "shopfront",
+          sha: l.attributes["flag.name"] ? `config:${l.attributes["flag.name"]}` : "config",
+          deployedAt,
+          kind: "config",
+          message: l.body,
+        };
+      }
+      const a = l.attributes;
+      const rollback = a["deploy.kind"] === "rollback";
+      return {
+        service: "shopfront",
+        sha: String(a["deploy.sha"] ?? "unknown"),
+        deployedAt,
+        kind: rollback ? "rollback" : "deploy",
+        message: rollback ? l.body : String(a["deploy.message"] ?? l.body.slice("deploy: ".length)),
+        ...(typeof a["deploy.branch"] === "string" && a["deploy.branch"] ? { branch: a["deploy.branch"] } : {}),
+      };
+    });
+}
+
+// --- the deployed release --------------------------------------------------
+
+export const shopfrontUrl = process.env.SHOPFRONT_URL ?? "http://localhost:3001";
+
+// A release Shopfront's harness has deployed into the running store, as its
+// ops API reports it.
+export interface Release {
+  name: string;
+  sha: string;
+  branch: string;
+  message: string;
+  deployedAt: string;
+  // HEAD's short sha, what the store ran before the release.
+  previous: string;
+}
+
+// The release deployed right now, or undefined when none is (or the ops API
+// is off, unreachable, or slow): the source then reads as if there were no
+// release harness. Read once per source, so one investigation sees one
+// release throughout.
+export async function fetchRelease(fetchImpl: typeof fetch = fetch, url = `${shopfrontUrl}/api/ops`): Promise<Release | undefined> {
+  try {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return undefined;
+    const { release } = (await res.json()) as { release?: Release | null };
+    return release && typeof release.sha === "string" && release.sha ? release : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function once<T>(f: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | undefined;
+  return () => (pending ??= f());
 }
 
 // --- metrics ---------------------------------------------------------------
@@ -499,18 +571,22 @@ function queryRecord(s: SpanRow): SpanRecord {
 
 // --- database, source, git ---------------------------------------------------
 
-const dbQueries: Record<DbCheck, string> = {
-  activity:
-    "SELECT pid, application_name, state, to_char(now() - state_change, 'HH24:MI:SS') AS in_state_for, left(query, 60) AS last_query FROM pg_stat_activity WHERE datname = 'shopfront' AND pid <> pg_backend_pid() ORDER BY state_change",
+const triageConnections = triageApplicationNames.map((n) => `'${n}'`).join(", ");
+
+export const dbQueries: Record<DbCheck, string> = {
+  // Triage's own connections (these diagnostics, the sandbox copying the
+  // database) aren't the app's.
+  activity: `SELECT pid, application_name, state, to_char(now() - state_change, 'HH24:MI:SS') AS in_state_for, left(query, 60) AS last_query FROM pg_stat_activity WHERE datname = 'shopfront' AND pid <> pg_backend_pid() AND application_name NOT IN (${triageConnections}) ORDER BY state_change`,
   locks:
     "SELECT pid, pg_blocking_pids(pid)::text AS blocked_by, left(query, 60) AS query FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0",
   // Only this database's statements: the sandbox proves fixes in throwaway
   // copies on the same server, and their test queries would otherwise crowd
-  // the app's own out of the top five. One-off statements (a seed, the
-  // sandbox's database copies) can't be what slows a route either, so the
-  // list keeps to statements run at least ten times.
-  slow_queries:
-    "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND query NOT LIKE '%pg_stat_statements%' AND query NOT ILIKE 'CREATE DATABASE%' AND query NOT ILIKE 'DROP DATABASE%' AND calls >= 10 ORDER BY total_exec_time DESC LIMIT 5",
+  // the app's own out of the top five. Nor Triage's own: copying a big table
+  // for every fix run would top the list and be cited as the app's slow
+  // query. One-off statements (a seed, creating and dropping the copies)
+  // can't be what slows a route either, so the list keeps to statements run
+  // at least ten times.
+  slow_queries: `SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND query NOT LIKE '%${ownQueryTag}%' AND query NOT LIKE '%pg_stat_statements%' AND query NOT ILIKE 'CREATE DATABASE%' AND query NOT ILIKE 'DROP DATABASE%' AND calls >= 10 ORDER BY total_exec_time DESC LIMIT 5`,
 };
 
 // Its own connection, not the app's pool: it has to work while the app's
@@ -520,7 +596,7 @@ async function dbDiagnostics(check: DbCheck): Promise<DbResult> {
   const client = new Client({ connectionString: shopfrontDatabaseUrl, connectionTimeoutMillis: 3000, application_name: "triage" });
   try {
     await client.connect();
-    const { rows } = await client.query(query);
+    const { rows } = await client.query(ownQuery(query));
     return { query, rows: rows.map(cells) };
   } catch (err) {
     const message = errorMessage(err);
@@ -563,6 +639,11 @@ export const harnessPaths = [
   "src/lib/traffic-profile.ts",
   "src/db/pool-watch.ts",
   "scripts/shoppers.ts",
+  // The release harness: what deploys a commit's diff into the running
+  // store and rolls it back.
+  "src/lib/releases.ts",
+  "releases/",
+  "scripts/release.ts",
 ];
 const isHarness = (rel: string) => harnessPaths.some((h) => (h.endsWith("/") ? rel.startsWith(h) : rel === h));
 
@@ -573,18 +654,31 @@ export async function listSourceFiles(): Promise<string[]> {
   return [...rootFiles, ...src, ...drizzle.filter((f) => f.endsWith(".sql"))].filter((f) => !isHarness(f)).sort();
 }
 
-const normalize = (p: string) => p.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/^apps\/shopfront\//, "");
+export const normalize = (p: string) => p.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/^apps\/shopfront\//, "");
 
 const run = promisify(execFile);
+
+export interface GitLogQuery {
+  path?: string;
+  limit: number;
+  // The commit to log from, when not HEAD: the deployed release's.
+  from?: string;
+}
+
+// The git command behind gitLog, as its arguments.
+export function gitLogArgs({ path: file, limit, from }: GitLogQuery): string[] {
+  const args = ["-C", shopfrontDir, "log", `-n${limit}`, "--name-only", "--format=%x1e%h%x1f%an%x1f%s%x1f%cI", "--relative"];
+  if (from) args.push(from);
+  args.push("--", file ? normalize(file) : ".", ...harnessPaths.map((h) => `:(exclude)${h}`));
+  return args;
+}
 
 // Real history when Shopfront is in a git checkout; none otherwise. Only
 // commits that touch Shopfront outside the harness: Triage's own commits
 // and the harness's would give the answer away.
-export async function gitLog({ path: file, limit }: { path?: string; limit: number }): Promise<CommitRecord[]> {
-  const args = ["-C", shopfrontDir, "log", `-n${limit}`, "--name-only", "--format=%x1e%h%x1f%an%x1f%s%x1f%cI", "--relative"];
-  args.push("--", file ? normalize(file) : ".", ...harnessPaths.map((h) => `:(exclude)${h}`));
+export async function gitLog(q: GitLogQuery): Promise<CommitRecord[]> {
   try {
-    const { stdout } = await run("git", args, { timeout: 5000 });
+    const { stdout } = await run("git", gitLogArgs(q), { timeout: 5000 });
     return stdout
       .split("\x1e")
       .filter((c) => c.trim())

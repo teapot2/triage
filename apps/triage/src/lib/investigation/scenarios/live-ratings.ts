@@ -357,12 +357,14 @@ export const liveRatings: Scenario = {
     },
     // As recorded: pg_stat_statements counts the whole server, so copying
     // and reseeding the reviews table outweigh the listings' many short
-    // reviews queries (7 ms each) in total time.
+    // reviews queries (7 ms each) in total time. The recording's top row,
+    // the fix sandbox reading the whole reviews table to copy it, is left
+    // out: live diagnostics no longer see Triage's own queries, and runs
+    // cited it as the store's slow query.
     slow_queries: {
       query:
         "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
       rows: [
-        { query: 'SELECT json_agg(t)::text AS data FROM "public"."reviews" t', calls: "8", mean_ms: "1464.48", max_ms: "1685.55" },
         { query: 'insert into "reviews" (product_id, rating, body, created_at)', calls: "1", mean_ms: "11616.27", max_ms: "11616.27" },
         { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4421.21", max_ms: "4421.21" },
         { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4410.70", max_ms: "4410.70" },

@@ -64,6 +64,7 @@ export function SpeechSettings() {
       <SettingsSectionHeader
         id="speech"
         title="Speech"
+        description="Saved in this browser."
       />
       <div className="divide-y rounded-lg border">
         <div className={rowClass}>

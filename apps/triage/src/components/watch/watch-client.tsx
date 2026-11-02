@@ -1,9 +1,10 @@
 "use client";
 
-import { HistoryIcon, LoaderCircleIcon } from "lucide-react";
+import { InfoIcon, LoaderCircleIcon } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Timestamp } from "@/components/timestamp";
 import { StatusBadge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RuleState, WatchState } from "@/lib/investigation/watch";
 import type { Backtest } from "@/lib/investigation/watch-judge";
 import type { WatchRule } from "@/lib/investigation/watch-rule-model";
@@ -139,57 +140,73 @@ function span(ms: number): string {
 }
 
 // What the replay found: whether the rule would have opened incidents, and
-// when, or why there's nothing to say.
+// when, or why there's nothing to say. Laid out like the forms' sections, a
+// title over a plain bordered box, with the incidents it would have opened as
+// rows under the verdict, like a rule's list of the ones it did. When the
+// telemetry is younger than 3 hours, the title says how far it reaches.
 export function BacktestResult({ backtest, checksToOpen }: { backtest: BacktestState; checksToOpen: number }) {
   const { loading, data, error } = backtest;
-  let body: ReactNode;
-  if (error) body = <p className="text-muted-foreground">Couldn&apos;t replay it: {error}</p>;
-  else if (!data) body = <p className="text-muted-foreground">Replaying the last 3 hours…</p>;
-  else if (data.judged === 0) body = <p>No traffic on the routes it covers, so nothing to judge it on.</p>;
+  let summary: ReactNode;
+  if (error) summary = <p className="text-muted-foreground">Couldn&apos;t replay it: {error}</p>;
+  else if (!data) summary = <p className="text-muted-foreground">Replaying the last 3 hours…</p>;
+  else if (data.judged === 0) summary = <p>No traffic on the routes it covers, so nothing to judge it on.</p>;
   else {
     const traffic = `${plural(data.judged, "check", "checks")} with traffic`;
-    body = (
-      <>
-        <p>
-          <span className="font-medium">
-            {data.fired.length === 0
-              ? "Wouldn't have opened an incident."
-              : `Would have opened ${plural(data.fired.length, "incident", "incidents")}.`}
-          </span>{" "}
-          <span className="text-muted-foreground">
-            {data.breaching === 0
-              ? `Within its limit in all ${traffic}.`
-              : data.fired.length === 0
-                ? `Over its limit in ${data.breaching.toLocaleString()} of ${traffic}, never ${plural(checksToOpen, "check", "checks")} in a row.`
-                : `Over its limit in ${data.breaching.toLocaleString()} of ${traffic}.`}
-          </span>
-        </p>
-        {data.fired.length > 0 && (
-          <ul className="flex flex-col gap-0.5 text-xs">
-            {data.fired.slice(-5).map((f) => (
-              <li key={f.at} className="flex flex-wrap gap-x-2">
-                <Timestamp date={f.at} className="font-mono text-muted-foreground tabular-nums" />
-                <span className="min-w-0 break-words">{f.summary ?? f.route}</span>
-              </li>
-            ))}
-            {data.fired.length > 5 && <li className="text-muted-foreground">and {data.fired.length - 5} earlier</li>}
-          </ul>
-        )}
-      </>
+    // The counts behind the verdict, on hover or focus: worth checking, not
+    // worth a line every time.
+    const detail =
+      data.breaching === 0
+        ? `Within its limit in all ${traffic}.`
+        : data.fired.length === 0
+          ? `Over its limit in ${data.breaching.toLocaleString()} of ${traffic}, never ${plural(checksToOpen, "check", "checks")} in a row.`
+          : `Over its limit in ${data.breaching.toLocaleString()} of ${traffic}.`;
+    summary = (
+      <p className="flex items-center gap-1.5 font-medium">
+        {data.fired.length === 0
+          ? "Wouldn't have opened an incident."
+          : `Would have opened ${plural(data.fired.length, "incident", "incidents")}.`}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={detail}
+              className="rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <InfoIcon className="size-3.5" aria-hidden />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{detail}</TooltipContent>
+        </Tooltip>
+      </p>
     );
   }
+  const fired = !error && data && data.judged > 0 ? data.fired : [];
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg border bg-muted/30 px-3 py-2.5 text-sm" aria-live="polite">
-      <div className="flex items-center gap-1.5 font-medium text-xs">
-        <HistoryIcon className="size-3.5 text-muted-foreground" aria-hidden />
-        Backtest · last 3 hours
-        {loading && <LoaderCircleIcon className="size-3 animate-spin text-muted-foreground" aria-label="Replaying" />}
+    <section className="flex flex-col gap-3" aria-live="polite">
+      <h2 className="flex items-center gap-1.5 font-medium text-sm">
+        Backtest
+        <span className="font-normal text-muted-foreground">
+          {data?.dataFrom ? `· only ${span(Date.parse(data.to) - Date.parse(data.dataFrom))} of telemetry` : "· last 3 hours"}
+        </span>
+        {loading && <LoaderCircleIcon className="size-3.5 animate-spin text-muted-foreground" aria-label="Replaying" />}
+      </h2>
+      <div className={cn("divide-y rounded-lg border text-sm transition-opacity", loading && data && "opacity-60")}>
+        <div className="px-3 py-2">{summary}</div>
+        {fired.length > 0 && (
+          <ul className="divide-y">
+            {fired
+              .slice(-5)
+              .reverse()
+              .map((f) => (
+                <li key={f.at} className="flex items-baseline gap-3 px-3 py-2">
+                  <span className="min-w-0 flex-1 break-words">{f.summary ?? f.route}</span>
+                  <Timestamp date={f.at} className="shrink-0 text-muted-foreground text-xs tabular-nums" />
+                </li>
+              ))}
+            {fired.length > 5 && <li className="px-3 py-2 text-muted-foreground text-xs leading-5">and {fired.length - 5} earlier</li>}
+          </ul>
+        )}
       </div>
-      <div className={cn("flex flex-col gap-1.5 transition-opacity", loading && data && "opacity-60")}>{body}</div>
-      <p className="text-muted-foreground text-xs">
-        The watch&apos;s 10-second checks replayed with this rule on its own.
-        {data?.dataFrom && ` Telemetry only reaches back ${span(Date.parse(data.to) - Date.parse(data.dataFrom))}.`}
-      </p>
-    </div>
+    </section>
   );
 }

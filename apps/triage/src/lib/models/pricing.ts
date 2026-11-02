@@ -29,10 +29,14 @@ export function priceFor(provider: string | undefined, model: string): Price | u
   return undefined;
 }
 
-// What one record's tokens cost, or undefined when its model has no price.
-// Records from before cached input was recorded are priced as all uncached.
+// Meta's web search, per search on top of the tokens: $2.50 per 1,000.
+const WEB_SEARCH_USD = 2.5 / 1000;
+
+// What one record's tokens and web searches cost, or undefined when its
+// model has no price. Records from before cached input was recorded are
+// priced as all uncached.
 export function costOf(
-  tokens: Partial<TokenCounts>,
+  tokens: Partial<TokenCounts> & { webSearches?: number },
   provider: string | undefined,
   model: string,
 ): number | undefined {
@@ -40,5 +44,6 @@ export function costOf(
   if (!price) return undefined;
   const input = tokens.inputTokens ?? 0;
   const cached = Math.min(tokens.cachedInputTokens ?? 0, input);
-  return ((input - cached) * price.input + cached * price.cachedInput + (tokens.outputTokens ?? 0) * price.output) / 1e6;
+  const searches = (tokens.webSearches ?? 0) * WEB_SEARCH_USD;
+  return ((input - cached) * price.input + cached * price.cachedInput + (tokens.outputTokens ?? 0) * price.output) / 1e6 + searches;
 }

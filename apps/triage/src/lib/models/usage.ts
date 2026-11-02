@@ -28,13 +28,15 @@ export function addUsage(total: TokenCounts, usage: LanguageModelUsage): void {
 export const fuller = (peak: TokenCounts | undefined, call: TokenCounts): TokenCounts =>
   peak && peak.inputTokens >= call.inputTokens ? peak : call;
 
-// An agent's onStepEnd, handing `record` each model call's own tokens.
-export function onEachCall(record: (call: TokenCounts) => void) {
+// An agent's onStepEnd, handing `record` each model call's own tokens, and
+// the call itself for a stage that reads its output (the fix stage's web
+// pages).
+export function onEachCall<S extends { usage: LanguageModelUsage }>(record: (call: TokenCounts, step: S) => void) {
   return {
-    onStepEnd: ({ usage }: { usage: LanguageModelUsage }) => {
+    onStepEnd: (step: S) => {
       const call = noTokens();
-      addUsage(call, usage);
-      record(call);
+      addUsage(call, step.usage);
+      record(call, step);
     },
   };
 }

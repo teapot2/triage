@@ -8,8 +8,9 @@ import { dataChangeOf } from "./data-change";
 
 // Stage 5: once a human approves a proven fix, open a pull request with the
 // patch and its regression test. Works in a temporary git worktree on a new
-// branch cut from the remote's base branch, so the checkout people work in
-// is never touched. Nothing merges: a person reviews and merges the PR.
+// branch cut from the remote's base branch (the rolled-back release's branch
+// when the mitigation was a rollback), so the checkout people work in is
+// never touched. Nothing merges: a person reviews and merges the PR.
 
 const run = promisify(execFile);
 
@@ -104,6 +105,15 @@ Opened by Triage, an AI SRE.
   return { title, body };
 }
 
+// The branch the PR is opened against, when the incident itself says: a
+// rolled-back release's branch, since the fix was proven against that
+// release's code and belongs on it, not on the default branch the release
+// hasn't reached. Undefined otherwise, for the remote's default branch.
+export function pullRequestBase(incident: Incident): string | undefined {
+  const m = incident.mitigation;
+  return m?.kind === "rollback" && m.branch ? m.branch : undefined;
+}
+
 export async function openPullRequest(incident: Incident, target: PullRequestTarget): Promise<string> {
   if (!incident.fix) throw new Error("no proven fix to open a PR for");
   const { title, body } = pullRequestText(incident);
@@ -118,8 +128,9 @@ export async function openPullRequest(incident: Incident, target: PullRequestTar
   // app-relative paths land in the right place.
   const prefix = (await git(target.appDir, ["rev-parse", "--show-prefix"])).replace(/\/$/, "");
 
-  // The remote's default branch, freshly fetched.
-  let base = process.env.TRIAGE_PR_BASE ?? "";
+  // The release branch when the fix is for a rolled-back release, else the
+  // remote's default branch (or TRIAGE_PR_BASE), freshly fetched.
+  let base = pullRequestBase(incident) ?? process.env.TRIAGE_PR_BASE ?? "";
   if (!base) {
     const head = await git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => "origin/main");
     base = head.replace(/^origin\//, "");

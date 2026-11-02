@@ -3,7 +3,7 @@ import { notify } from "../notifications/notify";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
 import { incidentToReopen, isOpen } from "./reopen";
-import { listIncidents, patchIncident } from "./store";
+import { isExample, listIncidents, patchIncident } from "./store";
 import { type EndpointState, startUptime, stopUptime, uptimeState } from "./uptime";
 import { reopened } from "./verify";
 import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
@@ -201,7 +201,9 @@ async function check() {
 // instead, without investigating again.
 async function open(rule: WatchRule, trip: { route: string; method: string }, summary?: string): Promise<boolean> {
   const now = new Date().toISOString();
-  const previous = incidentToReopen(await listIncidents(), { ruleId: rule.id, route: trip.route }, Date.parse(now));
+  // The bundled examples are never the live outage, though one carries a rule.
+  const runs = (await listIncidents()).filter((i) => !isExample(i.id));
+  const previous = incidentToReopen(runs, { ruleId: rule.id, route: trip.route }, Date.parse(now));
   if (previous) {
     // Already reopened (its verification saw the breach first): the episode
     // joins it as it is.

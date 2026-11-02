@@ -17,6 +17,12 @@ export interface StepRecorder {
   failStep(id: string, error: string): void;
 }
 
+// Evidence given IDs without a step of its own: the pages a web search
+// turned up, known once the model has cited them.
+export interface EvidenceRecorder {
+  recordEvidence(tool: ToolName, drafts: EvidenceDraft[]): Evidence[];
+}
+
 // What recordThoughts needs: a thought opened per model call, closed when
 // the call ends.
 export interface ThoughtRecorder {
@@ -30,7 +36,7 @@ type Step = Incident["steps"][number];
 // steps and queried services, and saves after every change so the UI can
 // follow along. Saves are serialized so a slow write never lands after a
 // newer one.
-export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
+export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, ThoughtRecorder {
   readonly queriedServices = new Set<string>();
   rejectedReports = 0;
   private counters = new Map<EvidenceKind, number>();
@@ -69,9 +75,14 @@ export class InvestigationRecorder implements StepRecorder, ThoughtRecorder {
   }
 
   completeStep(id: string, tool: ToolName, summary: string, drafts: EvidenceDraft[]): Evidence[] {
+    const evidence = this.recordEvidence(tool, drafts);
+    this.updateStep(id, (step) => completedStep(step, summary, evidence));
+    return evidence;
+  }
+
+  recordEvidence(tool: ToolName, drafts: EvidenceDraft[]): Evidence[] {
     const evidence = drafts.map((d) => assignId(this.counters, "ev_", d, tool));
     this.addEvidence(evidence);
-    this.updateStep(id, (step) => completedStep(step, summary, evidence));
     return evidence;
   }
 
@@ -174,7 +185,7 @@ export const QUESTION_SAVE_MS = 300;
 // the investigation, on the question, with its own evidence IDs. Saves go
 // through patchIncident, at most every QUESTION_SAVE_MS, so the
 // investigation's fields and other writers' changes are left alone.
-export class QuestionRecorder implements StepRecorder, ThoughtRecorder {
+export class QuestionRecorder implements StepRecorder, EvidenceRecorder, ThoughtRecorder {
   readonly queriedServices = new Set<string>();
   private counters = new Map<EvidenceKind, number>();
   private writes: Promise<void> = Promise.resolve();
@@ -194,10 +205,16 @@ export class QuestionRecorder implements StepRecorder, ThoughtRecorder {
   }
 
   completeStep(id: string, tool: ToolName, summary: string, drafts: EvidenceDraft[]): Evidence[] {
+    const evidence = this.recordEvidence(tool, drafts);
+    this.updateStep(id, (step) => completedStep(step, summary, evidence));
+    return evidence;
+  }
+
+  recordEvidence(tool: ToolName, drafts: EvidenceDraft[]): Evidence[] {
     const prefix = questionEvidencePrefix(this.question.id);
     const evidence = drafts.map((d) => assignId(this.counters, prefix, d, tool));
     this.question.evidence.push(...evidence);
-    this.updateStep(id, (step) => completedStep(step, summary, evidence));
+    this.persist();
     return evidence;
   }
 

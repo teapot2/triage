@@ -733,22 +733,50 @@ function ActivitySection({
         <p className="py-2 text-muted-foreground text-sm">No logs in this window.</p>
       ) : (
         <ol className="divide-y rounded-lg border text-xs">
-          {logs.map((l, i) => (
-            <li
-              // Logs have no id; time and position tell them apart.
-              key={`${l.time}-${i}`}
-              className={cn(
-                "grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-start gap-3 px-4 py-1.5",
-                l.level === "error" && "bg-destructive/5",
-              )}
-            >
-              <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
-              <Badge variant={levelBadge[l.level]} className="uppercase">
-                {l.level}
-              </Badge>
-              <span className="break-words font-mono">{l.body}</span>
-            </li>
-          ))}
+          {logs.map((l, i) => {
+            const fields = Object.entries(l.attributes ?? {});
+            // The request this line belongs to, when it is in the feed too.
+            const request = l.traceId ? requests.find((r) => r.traceId === l.traceId) : undefined;
+            return (
+              <li
+                // Logs have no id; time and position tell them apart.
+                key={`${l.time}-${i}`}
+                className={cn(
+                  "grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)_auto] items-start gap-3 px-4 py-1.5",
+                  l.level === "error" && "bg-destructive/5",
+                )}
+              >
+                <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
+                <Badge variant={levelBadge[l.level]} className="uppercase">
+                  {l.level}
+                </Badge>
+                <span className="min-w-0 break-words font-mono">
+                  {l.body}
+                  {fields.length > 0 && (
+                    <span className="text-muted-foreground">
+                      {fields.map(([key, value]) => (
+                        <span key={key} className="ml-2 inline-block">
+                          {key}=<span className="text-foreground/80">{String(value)}</span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </span>
+                {request ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenRequest(request)}
+                    aria-label={`Show the trace of ${request.method} ${request.route} at ${clock(request.time)}`}
+                    className="font-mono text-muted-foreground tabular-nums hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
+                  >
+                    {l.traceId?.slice(0, 8)}
+                  </button>
+                ) : (
+                  <span className="font-mono text-muted-foreground/50 tabular-nums">{l.traceId?.slice(0, 8) ?? ""}</span>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </Section>

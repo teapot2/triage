@@ -39,6 +39,8 @@ async function loadProducts(category: Category | undefined, q: string | undefine
         .where(and(...where))
         .orderBy(asc(products.id)),
     );
+    if (q) logger.info("catalog: searched", { "search.term": q.slice(0, 80), "products.count": rows.length });
+    else logger.debug("catalog: listed", { "products.category": category ?? "all", "products.count": rows.length });
     return { rows, error: false as const };
   } catch (err) {
     logger.error("home: failed to load products", { "error.message": String(err) });

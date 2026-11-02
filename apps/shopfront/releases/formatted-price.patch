@@ -1,0 +1,26 @@
+diff --git a/apps/shopfront/src/app/api/products/[id]/route.ts b/apps/shopfront/src/app/api/products/[id]/route.ts
+--- a/apps/shopfront/src/app/api/products/[id]/route.ts
++++ b/apps/shopfront/src/app/api/products/[id]/route.ts
+@@ -3,3 +3,4 @@
+ import { products } from "@/db/schema";
+ import { logger } from "@/lib/logger";
++import { formatPrice } from "@/lib/money";
+ import { priceOf } from "@/lib/prices";
+@@ -22,5 +23,5 @@
+   if (!product) return Response.json({ error: "not found" }, { status: 404 });
+   const priceCents = await priceOf(product);
+   const stock = await getStockLevel(product.id);
+-  return Response.json({ ...product, priceCents, stock });
++  return Response.json({ ...product, priceCents, price: formatPrice(priceCents), stock });
+ }
+diff --git a/apps/shopfront/src/lib/money.ts b/apps/shopfront/src/lib/money.ts
+new file mode 100644
+--- /dev/null
++++ b/apps/shopfront/src/lib/money.ts
+@@ -0,0 +1,6 @@
++// Prices are stored in cents. The store's currency comes from the
++// deployment (STORE_CURRENCY) rather than the catalog, so the same products
++// can be sold in another region without a data change.
++export function formatPrice(cents: number, currency = process.env.STORE_CURRENCY): string {
++  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
++}
