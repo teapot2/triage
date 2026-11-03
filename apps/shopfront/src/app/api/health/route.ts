@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { db, pool, queriesIssued, rowsFetched } from "@/db/client";
 import { flagStates } from "@/lib/flags";
+import { runtimeInfo } from "@/lib/runtime";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function GET() {
   }
   const flags = Object.fromEntries(flagStates().map((f) => [f.name, f.enabled]));
   return Response.json(
-    { ok: dbOk, db: dbOk, pool: counts, queries: queriesIssued(), rows: rowsFetched(), flags },
+    { ok: dbOk, db: dbOk, pool: counts, queries: queriesIssued(), rows: rowsFetched(), flags, runtime: runtimeInfo() },
     { status: dbOk ? 200 : 503 },
   );
 }
