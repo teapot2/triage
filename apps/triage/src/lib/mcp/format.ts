@@ -154,7 +154,7 @@ function verdictSection(incident: Incident): string {
   const h = verdictHypothesis(incident);
   if (!h) return `## Verdict\n\nRoot cause: hypothesis ${verdict.hypothesisId} (not in the report).`;
   const grade = gradeLabels[gradeHypothesis(h, incident).grade];
-  const exposure = report.exposure;
+  const exposure = incident.dependency && report.exposure;
   return [
     "## Verdict",
     `Root cause: **${h.title}** (confidence ${h.confidence}, ${grade.toLowerCase()})`,

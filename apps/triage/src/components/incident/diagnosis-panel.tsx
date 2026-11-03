@@ -110,7 +110,7 @@ export function VerdictCard({
           )}
         </div>
         <p className="text-muted-foreground text-sm leading-relaxed">{body}</p>
-        {report.exposure && (
+        {incident.dependency && report.exposure && (
           <ExposureLine
             exposure={report.exposure}
             struck={report.exposure.rationale.evidenceIds.some((id) => unknownEvidenceIds.includes(id))}
