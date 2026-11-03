@@ -1,4 +1,5 @@
 import { p95, type RequestSample } from "./live/live-source";
+import type { Incident } from "./schema";
 import { matchesTarget, type WatchCondition, type WatchRule } from "./watch-rule-model";
 
 // How the watch judges a rule: shared by the live watch (watch.ts) and the
@@ -15,8 +16,9 @@ export const isWatched = (s: RequestSample) => !ignoredRoutes.has(s.route) && s.
 
 type Judgment = { verdict: "idle" | "ok" | "breach"; value: number; limit: number };
 
-// One route's requests against one condition.
-function judge(c: WatchCondition, rows: RequestSample[], minRequests: number): Judgment {
+// One route's requests against one condition. SLOs are judged on their
+// budget instead (slo/judge.ts).
+function judge(c: Exclude<WatchCondition, { metric: "slo" }>, rows: RequestSample[], minRequests: number): Judgment {
   const n = rows.length;
   const slowShare = (ms: number) => (rows.filter((r) => r.durationMs > ms).length / n) * 100;
   let value: number;
@@ -40,7 +42,7 @@ function judge(c: WatchCondition, rows: RequestSample[], minRequests: number): J
   return { verdict: !enough ? "idle" : value > limit ? "breach" : "ok", value, limit };
 }
 
-function summarize(c: WatchCondition, value: number, route: string): string {
+function summarize(c: Exclude<WatchCondition, { metric: "slo" }>, value: number, route: string): string {
   const v = Math.round(value);
   switch (c.metric) {
     case "p95":
@@ -64,8 +66,14 @@ export type RuleResult = {
   // Checks in a row over the limit, on its worst route.
   checks?: number;
   // Set when the rule has been over its limit on a route long enough to open.
-  trip?: { route: string; method: string };
+  // An SLO's says how fast its budget was burning, and the severity when it
+  // isn't the rule's (a slow burn).
+  trip?: { route: string; method: string; severity?: WatchRule["severity"]; burn?: TripBurn };
+  // An SLO's: what's left of its budget on its worst route.
+  budgetLeftPercent?: number;
 };
+
+export type TripBurn = NonNullable<Incident["trigger"]["burn"]>;
 
 // Judges a rule at `now` on each route it covers, advancing that route's
 // streak in `streaks` (keyed "rule|route"). A route without enough requests
@@ -77,6 +85,8 @@ export function evaluateRule(
   streaks: Map<string, number>,
 ): RuleResult {
   if (!rule.enabled) return { status: "paused" };
+  const condition = rule.condition;
+  if (condition.metric === "slo") return { status: "idle" };
   const byRoute = new Map<string, RequestSample[]>();
   for (const s of samples) {
     if (s.start <= now - rule.windowSeconds * 1000 || s.start > now || !matchesTarget(rule.target, s.route)) continue;
@@ -90,7 +100,7 @@ export function evaluateRule(
   let checks = 0;
   let trip: RuleResult["trip"];
   for (const [route, rows] of byRoute) {
-    const j = judge(rule.condition, rows, rule.minRequests);
+    const j = judge(condition, rows, rule.minRequests);
     if (j.verdict === "idle") continue;
     const key = `${rule.id}|${route}`;
     if (j.verdict === "ok") {
@@ -106,7 +116,7 @@ export function evaluateRule(
   }
   return {
     status: checks > 0 ? "breaching" : anyOk ? "ok" : "idle",
-    summary: worst && summarize(rule.condition, worst.j.value, worst.route),
+    summary: worst && summarize(condition, worst.j.value, worst.route),
     checks: checks || undefined,
     trip,
   };

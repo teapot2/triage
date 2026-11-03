@@ -1,13 +1,17 @@
+import { liveService } from "../live/types";
 import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
+import { evaluateSloRule } from "../slo/judge";
+import { liveCounts, rolledThrough, routesSince } from "../slo/rollups";
 import { createRuleIncident, runInvestigation } from "./agent";
 import { type DependencyState, dependencyState, startDependencies, stopDependencies } from "./dependencies";
-import { createLiveSource, recentRequests, sampleStatements, shopfrontDir } from "./live/live-source";
+import { createLiveSource, type RequestSample, recentRequests, sampleStatements, shopfrontDir } from "./live/live-source";
+import { RETENTION_MS } from "./live/otlp-files";
 import { incidentToReopen, isOpen } from "./reopen";
 import { isExample, listIncidents, patchIncident } from "./store";
 import { type EndpointState, startUptime, stopUptime, uptimeState } from "./uptime";
 import { reopened } from "./verify";
-import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched } from "./watch-judge";
+import { CHECK_MS, evaluateRule, HEALTHY_TO_REARM, isWatched, type RuleResult } from "./watch-judge";
 import { describeRule, readRules, type WatchRule } from "./watch-rules";
 import { errorMessage } from "../errors";
 
@@ -21,10 +25,12 @@ import { errorMessage } from "../errors";
 // outage is one incident. A breach within half an hour of an incident on
 // the same rule and route being resolved reopens that incident instead of
 // opening another (see reopen). How a rule is judged is in watch-judge, shared
-// with the backtest.
+// with the backtest; an SLO rule, on how fast its error budget burns, in
+// slo/judge, from the request counts slo/rollups keeps.
 
 // The window the sidebar's request count covers.
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 export type RuleStatus = "ok" | "breaching" | "alerting" | "idle" | "paused";
 
@@ -41,6 +47,8 @@ export type RuleState = {
   // opens an incident.
   checks?: number;
   needed: number;
+  // An SLO rule's: what's left of its error budget on its worst route.
+  budgetLeftPercent?: number;
 };
 
 export type WatchState = {
@@ -72,6 +80,9 @@ type Internal = Omit<WatchState, "rules" | "endpoints" | "dependencies"> & {
   // Rules that tripped during the open episode.
   tripped: Set<string>;
   rules: RuleState[];
+  // The routes the SLO rules judge, beyond those in the telemetry: every
+  // route counted over the longest SLO window, read at most once a minute.
+  sloRoutes?: { at: number; since: number; routes: { route: string; method: string }[] };
 };
 
 // On globalThis: one watcher per server process, across dev hot reloads.
@@ -144,17 +155,33 @@ async function check() {
     // The database's statement counters, for slow_queries' window (see
     // live-source). Not awaited: a slow database must not delay the check.
     void sampleStatements(now);
-    const longest = Math.max(MINUTE, ...rules.map((r) => r.windowSeconds * 1000));
+    const slos = rules.filter((r) => r.enabled && r.condition.metric === "slo");
+    // SLO rules count the requests since the minutes rolled up, or every one
+    // in the telemetry before any are.
+    const through = rolledThrough();
+    const unrolled = slos.length ? now - (through ?? now - RETENTION_MS) : 0;
+    const longest = Math.max(MINUTE, unrolled, ...rules.map((r) => r.windowSeconds * 1000));
     const samples = (await recentRequests(longest)).filter(isWatched);
     state.lastCheck = { at: new Date(now).toISOString(), requests: samples.filter((s) => s.start > now - MINUTE).length };
     state.error = undefined;
 
-    const results = rules.map((rule) => ({ rule, ...evaluateRule(rule, samples, now, state.streaks) }));
+    const sloRoutes = slos.length ? routesToJudge(samples, slos, now) : [];
+    const counts = liveCounts(liveService, samples, through);
+    const results = rules.map(
+      (rule): { rule: WatchRule } & RuleResult => ({
+        rule,
+        ...(rule.condition.metric === "slo"
+          ? evaluateSloRule(rule, sloRoutes, counts, now)
+          : evaluateRule(rule, samples, now, state.streaks)),
+      }),
+    );
     const breaching = results.some((r) => r.status === "breaching");
     const anyOk = results.some((r) => r.status === "ok");
     // Several at once (latency and errors in the same outage): the most
-    // severe opens the incident, ties going to the rule listed first.
-    const trips = results.filter((r) => r.trip).sort((a, b) => severityRank[a.rule.severity] - severityRank[b.rule.severity]);
+    // severe opens the incident, ties going to the rule listed first. A slow
+    // burn's trip carries its own, lower severity.
+    const rank = (r: { rule: WatchRule } & RuleResult) => severityRank[r.trip?.severity ?? r.rule.severity];
+    const trips = results.filter((r) => r.trip).sort((a, b) => rank(a) - rank(b));
 
     const first = trips[0];
     if (state.status === "alerting") {
@@ -194,7 +221,8 @@ async function check() {
         status: state.status === "alerting" && state.tripped.has(r.rule.id) ? "alerting" : r.status,
         summary: r.summary,
         checks: r.checks,
-        needed: r.rule.checksToOpen,
+        needed: r.rule.condition.metric === "slo" ? 1 : r.rule.checksToOpen,
+        budgetLeftPercent: r.budgetLeftPercent,
       }),
     );
   } catch (err) {
@@ -204,10 +232,25 @@ async function check() {
   }
 }
 
+// The routes the SLO rules judge: those in the telemetry, with the method of
+// their latest request, and those counted over the longest SLO window, so a
+// route with no traffic just now still has its budget judged.
+function routesToJudge(samples: RequestSample[], slos: WatchRule[], now: number) {
+  const days = Math.max(...slos.map((r) => (r.condition.metric === "slo" ? r.condition.windowDays : 0)));
+  const since = now - days * DAY;
+  const cached = state.sloRoutes;
+  if (!cached || cached.since > since || now - cached.at >= MINUTE) {
+    state.sloRoutes = { at: now, since, routes: routesSince(liveService, since) };
+  }
+  const methods = new Map(state.sloRoutes!.routes.map((r) => [r.route, r.method]));
+  for (const s of samples) if (s.service === liveService) methods.set(s.route, s.method);
+  return [...methods].map(([route, method]) => ({ route, method }));
+}
+
 // Opens the incident and starts its run; false when no model can run it.
 // The same outage back soon after a resolution reopens that incident
 // instead, without investigating again.
-async function open(rule: WatchRule, trip: { route: string; method: string }, summary?: string): Promise<boolean> {
+async function open(rule: WatchRule, trip: NonNullable<RuleResult["trip"]>, summary?: string): Promise<boolean> {
   const now = new Date().toISOString();
   // The bundled examples are never the live outage, though one carries a
   // rule. Only the rule's incidents: the others can't be reopened by it.

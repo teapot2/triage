@@ -4,6 +4,7 @@ import { errorMessage } from "@/lib/errors";
 import { type RequestSample, requestSamples } from "@/lib/investigation/live/live-source";
 import { readTelemetry, RETENTION_MS } from "@/lib/investigation/live/otlp-files";
 import { isWatched } from "@/lib/investigation/watch-judge";
+import { type Counts, LATENCY_BUCKETS, type LatencyBucket } from "./model";
 
 // Request counts for SLOs: per route and UTC minute, how many requests there
 // were, how many failed, and how many succeeded within each latency bucket.
@@ -12,11 +13,6 @@ import { isWatched } from "@/lib/investigation/watch-judge";
 // minute for MINUTE_DAYS, each complete hour for HOURLY_DAYS. An hour is
 // summarised before its minutes go, in the same transaction, as uptime's
 // results are (uptime/samples.ts).
-
-// The latency an SLO can hold requests to. Fixed, so a new SLO (or one given
-// another latency) is judged on the history already counted.
-export const LATENCY_BUCKETS = [100, 250, 500, 1000, 2500] as const;
-export type LatencyBucket = (typeof LATENCY_BUCKETS)[number];
 
 // Long enough for the slowest burn window (3 days) plus its edges.
 export const MINUTE_DAYS = 4;
@@ -118,8 +114,6 @@ export function pruneRollups(db: DatabaseSync, now: number) {
   });
 }
 
-export type Counts = { total: number; good: number };
-
 // A route's requests in [from, to), and how many were good: didn't fail
 // and, with latencyMs, took at most that long. Every method together, as the
 // watch judges a route. Hours older than the oldest minute kept come from
@@ -172,6 +166,29 @@ export function routesSince(service: string, since: number, db = getDb()): { rou
     seen.add(route);
     return [{ route, method: String(r.method) }];
   });
+}
+
+export type CountsFn = (route: string, from: number, to: number, latencyMs?: LatencyBucket) => Counts;
+
+// Counts up to the minute: the rolled-up minutes before `through`, and from
+// `samples` (which must hold every request since then) after it. Without
+// `through` (nothing rolled up yet) it's the samples alone.
+export function liveCounts(service: string, samples: RequestSample[], through: number | undefined, db = getDb()): CountsFn {
+  const byRoute = Map.groupBy(
+    samples.filter((s) => s.service === service),
+    (s) => s.route,
+  );
+  return (route, from, to, latencyMs) => {
+    const split = through === undefined ? from : Math.min(Math.max(through, from), to);
+    const saved = split > from ? countsIn({ service, route, from, to: split, latencyMs }, db) : { total: 0, good: 0 };
+    let [total, good] = [saved.total, saved.good];
+    for (const s of byRoute.get(route) ?? []) {
+      if (s.start < split || s.start >= to) continue;
+      total++;
+      if (!s.failed && (latencyMs === undefined || s.durationMs <= latencyMs)) good++;
+    }
+    return { total, good };
+  };
 }
 
 // --- the loop ----------------------------------------------------------------

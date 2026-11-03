@@ -5,7 +5,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { closeDb, getDb } from "../db";
 import type { RequestSample } from "../investigation/live/live-source";
-import { bucketMinutes, countsIn, MINUTE_DAYS, pruneRollups, rollUp, routesSince, SETTLE_MS } from "./rollups";
+import { bucketMinutes, countsIn, liveCounts, MINUTE_DAYS, pruneRollups, rollUp, routesSince, SETTLE_MS } from "./rollups";
 
 // rollups.ts on a temp working directory, so .data/triage.db is ours.
 // Rewrites and prunes are database-wide, so each test sits in its own
@@ -233,5 +233,29 @@ describe("routesSince", () => {
       { route: "/api/products", method: "GET" },
     ]);
     assert.deepEqual(routesSince(service, m + 2 * MINUTE), []);
+  });
+});
+
+describe("liveCounts", () => {
+  it("counts the rolled-up minutes before `through` and the samples from it", () => {
+    const service = "svc-live";
+    const m = t("2026-11-01T15:00:00.000Z");
+    const rolled = [req(m + 1_000, { service }), req(m + MINUTE + 1_000, { service, failed: true, status: 500 })];
+    const written = rollUp(getDb(), rolled, m - HOUR, m + 2 * MINUTE + SETTLE_MS, HOUR)!;
+    assert.equal(written.to, m + 2 * MINUTE);
+    // The telemetry still holds the rolled-up requests; they aren't counted
+    // twice. Another service's request isn't counted at all.
+    const samples = [
+      ...rolled,
+      req(m + 2 * MINUTE + 5_000, { service, durationMs: 700 }),
+      req(m + 2 * MINUTE + 6_000, { service: "other" }),
+    ];
+    const counts = liveCounts(service, samples, written.to);
+    const route = "/api/products/[id]";
+    assert.deepEqual(counts(route, m, m + 3 * MINUTE), { total: 3, good: 2 });
+    assert.deepEqual(counts(route, m, m + 3 * MINUTE, 500), { total: 3, good: 1 });
+    assert.deepEqual(counts(route, m + 2 * MINUTE, m + 3 * MINUTE), { total: 1, good: 1 });
+    // Before anything is rolled up, the samples alone.
+    assert.deepEqual(liveCounts(service, samples, undefined)(route, m, m + 3 * MINUTE), { total: 3, good: 2 });
   });
 });

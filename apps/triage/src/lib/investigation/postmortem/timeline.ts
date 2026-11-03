@@ -9,9 +9,9 @@ import type { Approval, FixRun, Incident, Reopening } from "../schema";
 export type TimelineEvent = { at: string; event: string };
 export type Duration = { label: string; ms: number };
 
-// "500 ms", "10 connections", "5%".
+// "500 ms", "10 connections", "5%", "14.4×".
 export function withUnit(value: number | string, unit: string): string {
-  return unit === "%" || unit === "" ? `${value}${unit}` : `${value} ${unit}`;
+  return unit === "%" || unit === "×" || unit === "" ? `${value}${unit}` : `${value} ${unit}`;
 }
 
 // Whether a value of the alert's metric breaches its threshold: at or over

@@ -27,6 +27,8 @@ import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
 import { beforeAnswer, type Part } from "./web-search";
 import { describeRule, matchesTarget, readRules, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
+import type { TripBurn } from "./watch-judge";
+import { budgetText, burnText, durationText } from "../slo/model";
 
 const MAX_STEPS = 30;
 // Steps left when only submit_report stays available.
@@ -74,11 +76,17 @@ export function prompt(incident: Incident, source: TelemetrySource, task = "Inve
   const note = uptimeNote(source);
   return `Alert: ${incident.title}
 Service: ${incident.service}
-Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}
+Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}${burnLine(incident.trigger.burn)}
 Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
 Dependency path: ${services}${flagsLine(d.flags)}
 ${note ? `\n${note}\n` : ""}
 ${task}`;
+}
+
+// An SLO alert's burn, in words: what users are losing, not a threshold.
+function burnLine(burn: Incident["trigger"]["burn"]): string {
+  if (!burn) return "";
+  return `\nError budget: burning ${burnText(burn.rate)} over the last ${durationText(burn.longMs)} (the alert fires over ${burnText(burn.threshold)} in both the last ${durationText(burn.longMs)} and ${durationText(burn.shortMs)}); ${budgetText(burn.budgetLeftPercent)} of the budget left.`;
 }
 
 // What the logs say each flag is now: code behind a flag that is off isn't
@@ -194,21 +202,24 @@ export async function createRangeIncident(
 // An incident a watch rule opened: titled by the rule and the route that
 // tripped it, its chart that route's latency (or error ratio) against the
 // rule's limit.
+// An SLO rule's charts the route's burn rate against the burn its alert
+// fired at, at the trip's severity (lower for a slow burn).
 export async function createRuleIncident(
   source: TelemetrySource,
-  trip: { rule: WatchRule; route: string; method: string },
+  trip: { rule: WatchRule; route: string; method: string; severity?: Incident["severity"]; burn?: TripBurn },
 ): Promise<Incident> {
-  const { metric, threshold } = tripMetric(trip.rule, trip.route);
+  const { metric, threshold } = tripMetric(trip.rule, trip.route, trip.burn?.threshold);
   const alert = await source.queryMetric({ name: metric, windowMinutes: 30 });
   if (!alert || alert.points.length === 0) throw new Error(`No ${metric} series to open an incident from.`);
   return saveNewIncident(source, alert, {
-    title: tripTitle(trip.rule, trip.method, trip.route),
+    title: tripTitle(trip.rule, trip.method, trip.route, trip.burn?.rate),
     service: "shopfront",
-    severity: trip.rule.severity,
+    severity: trip.severity ?? trip.rule.severity,
     threshold,
     openedBy: "watch",
     rule: { id: trip.rule.id, name: trip.rule.name, description: describeRule(trip.rule) },
     route: trip.route,
+    burn: trip.burn,
   });
 }
 
@@ -222,6 +233,7 @@ type NewIncident = {
   openedBy?: Incident["openedBy"];
   rule?: Incident["trigger"]["rule"];
   route?: string;
+  burn?: Incident["trigger"]["burn"];
   focus?: Incident["trigger"]["focus"];
   uptime?: Incident["uptime"];
   dependency?: Incident["dependency"];
@@ -254,6 +266,7 @@ async function newIncident(source: TelemetrySource, alert: MetricSeries, a: NewI
       series: alert.points,
       rule: a.rule,
       route: a.route,
+      burn: a.burn,
       focus: a.focus,
     },
     steps: [],

@@ -807,6 +807,18 @@ const incidentBaseSchema = z.object({
     // The route the rule tripped on ("/api/products"). Missing with the rule,
     // and on watch incidents from before it was recorded (it's in the title).
     route: z.string().optional(),
+    // An SLO rule's: how fast its error budget was burning when it tripped,
+    // the burn rate its alert fires at over its long and short windows, and
+    // what was left of the budget. Missing on every other incident.
+    burn: z
+      .object({
+        rate: z.number(),
+        threshold: z.number(),
+        longMs: z.number(),
+        shortMs: z.number(),
+        budgetLeftPercent: z.number(),
+      })
+      .optional(),
     // The time range (and route) a person selected on the live page to
     // investigate. Missing on every other incident.
     focus: z.object({ from: timestamp, to: timestamp, route: z.string().optional() }).optional(),

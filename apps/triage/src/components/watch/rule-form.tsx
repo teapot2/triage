@@ -85,7 +85,7 @@ function toDraft(r: WatchRule): Draft {
     targetKind: r.target.kind,
     route: r.target.kind === "route" ? r.target.route : "",
     metric: c.metric,
-    ms: String(c.metric === "p95" ? c.aboveMs : c.metric === "errorRate" ? 1000 : c.slowerThanMs),
+    ms: String(c.metric === "p95" ? c.aboveMs : c.metric === "slowCount" || c.metric === "slowShare" ? c.slowerThanMs : 1000),
     count: String(c.metric === "slowCount" ? c.moreThan : 5),
     percent: String(c.metric === "slowShare" || c.metric === "errorRate" ? c.moreThanPercent : 5),
     windowSeconds: r.windowSeconds,
