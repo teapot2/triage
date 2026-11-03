@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
+import type { Choice } from "@/components/stage-choice-fields";
 import { markSeen, recordView } from "@/hooks/use-seen";
 import { findUnknownEvidenceIds, type Incident } from "@/lib/investigation/schema";
 import { currentRun, isRunning, runView } from "@/lib/investigation/reruns";
@@ -33,10 +34,13 @@ function useRefreshWhile(active: boolean, intervalMs = 2000) {
 // menu beside one section at a time.
 export function IncidentView({
   incident,
+  askModel,
   webSearch,
   fullContext,
 }: {
   incident: Incident;
+  // Settings' Ask model, which the composer starts on.
+  askModel?: Choice;
   webSearch?: boolean;
   fullContext?: boolean;
 }) {
@@ -70,7 +74,7 @@ export function IncidentView({
   );
   // This tab's own question streams here, above the sections, so switching
   // sections mid-answer keeps the stream.
-  const ask = useAskQuestion(incident, webSearch, fullContext);
+  const ask = useAskQuestion(incident, askModel, webSearch, fullContext);
   // Whatever happened up to now has been seen; a run that finishes while
   // this page is open is seen as the refresh brings it in.
   const latest = activityAt(incident);

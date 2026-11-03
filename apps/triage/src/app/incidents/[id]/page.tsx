@@ -38,14 +38,22 @@ async function Incident({ params }: Props) {
   if (approval?.prState === "opened" && !approval.prMergedAt && incident.status !== "resolved") {
     after(() => checkPrMerged(incident));
   }
-  // The Ask composer's web search switch starts as Settings has it, and
-  // shows only while Ask runs on Meta's API, the one with the search.
-  const webSearch = (await stageModel("ask")).provider === "meta" ? await webSearchOn() : undefined;
+  // The Ask composer starts on Settings' Ask model (only its name: the
+  // endpoint's key stays here), and its web search switch as Settings has
+  // it; the switch shows while the chosen model is on Meta's API.
+  const { provider, model, effort } = await stageModel("ask");
   // The full-context switch shows when there's telemetry to read and Wonder
   // on Meta's API to read it.
   const wonder = sourceKind(incident) ? await choiceModel("ask", FULL_CONTEXT_MODEL) : undefined;
   const fullContext = wonder !== undefined && !stageProblem(wonder);
-  return <IncidentView incident={incident} webSearch={webSearch} fullContext={fullContext} />;
+  return (
+    <IncidentView
+      incident={incident}
+      askModel={{ provider, model, effort }}
+      webSearch={await webSearchOn()}
+      fullContext={fullContext}
+    />
+  );
 }
 
 // The page's own frame (IncidentHeader, then IncidentReport's section menu

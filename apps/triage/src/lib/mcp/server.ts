@@ -246,7 +246,7 @@ export function createTriageMcpServer({ baseUrl }: { baseUrl: string }): McpServ
                 })
                 .catch(() => {});
             };
-      const result = await answerQuestion(started.incident, started.question, { onToolCall });
+      const result = await answerQuestion(started.incident, started.question, { stage: started.stage, onToolCall });
       await result.consumeStream();
 
       const incident = (await getIncident(resolved.id)) ?? started.incident;

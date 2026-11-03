@@ -2,26 +2,21 @@
 
 import { LoaderCircleIcon } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { FormField, FormRow, FormRows } from "@/components/form-fields";
-import type { Provider } from "@/components/model-settings";
-import { ModelPicker } from "@/components/model-picker";
-import { useModelList } from "@/components/model-stage-row";
+import { FormRow, FormRows } from "@/components/form-fields";
+import { type Choice, StageFields, trimChoice } from "@/components/stage-choice-fields";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { errorMessage } from "@/lib/errors";
 import { allRuns, runModelsOf, runsFix } from "@/lib/investigation/reruns";
-import type { Incident, RunModels, StageChoice } from "@/lib/investigation/schema";
+import type { Incident, RunModels } from "@/lib/investigation/schema";
 import type { PublicModelSettings } from "@/lib/models/settings";
-import { defaultEffort, effortLabels, effortsFor, type ReasoningEffort, stageLabels } from "@/lib/models/stages";
-import { cn } from "@/lib/utils";
+import { defaultEffort, stageLabels } from "@/lib/models/stages";
 
-type Choice = Required<StageChoice>;
 type Draft = { investigate: Choice; fanout: boolean; lead: Choice; fix: Choice; postmortem: Choice };
 type DraftStage = Exclude<keyof Draft, "fanout">;
 
@@ -131,19 +126,11 @@ function RerunForm({
     if (missing.length) return;
     setPending(true);
     setError(undefined);
-    // A level the model doesn't take drops to the highest it does, as the
-    // effort field shows it.
-    const trim = (c: Choice): StageChoice => {
-      const model = c.model.trim();
-      const efforts = effortsFor(model);
-      const effort = efforts.includes(c.effort) ? c.effort : efforts[efforts.length - 1];
-      return { provider: c.provider, model, ...(c.provider === "meta" && { effort }) };
-    };
     const models: RunModels = {
-      investigate: trim(draft.investigate),
-      ...(draft.fanout && { lead: trim(draft.lead) }),
-      ...(fixes && { fix: trim(draft.fix) }),
-      postmortem: trim(draft.postmortem),
+      investigate: trimChoice(draft.investigate),
+      ...(draft.fanout && { lead: trimChoice(draft.lead) }),
+      ...(fixes && { fix: trimChoice(draft.fix) }),
+      postmortem: trimChoice(draft.postmortem),
     };
     try {
       const res = await fetch(`/api/incidents/${incident.id}/reruns`, {
@@ -210,87 +197,5 @@ function RerunForm({
         </Button>
       </DialogFooter>
     </>
-  );
-}
-
-// One stage's provider, model and (on Meta's API) effort, in a row.
-function StageFields({
-  stage,
-  value,
-  onChange,
-  providers,
-  error,
-}: {
-  stage: DraftStage;
-  value: Choice;
-  onChange: (choice: Choice) => void;
-  providers: Provider[];
-  error?: string;
-}) {
-  const id = useId();
-  const provider = providers.find((p) => p.id === value.provider);
-  const list = useModelList(provider);
-  const [custom, setCustom] = useState(false);
-  const listed = !list.loading && !list.error && list.models.length > 0;
-  const meta = value.provider === "meta";
-  const efforts = effortsFor(value.model);
-  const effort = efforts.includes(value.effort) ? value.effort : efforts[efforts.length - 1];
-  const missingKey = provider?.keyEnv && !provider.hasKey ? `${provider.keyEnv} is not set.` : undefined;
-
-  return (
-    <div className={cn("grid gap-x-4 gap-y-3 sm:col-span-2 sm:grid-cols-2", meta && "sm:grid-cols-[1fr_1.5fr_1fr]")}>
-      <FormField label="Provider" htmlFor={`${id}-provider`} error={missingKey}>
-        <Select
-          value={value.provider}
-          onValueChange={(p) => {
-            // A model ID rarely carries over to another provider.
-            onChange({ ...value, provider: p, model: "" });
-            setCustom(false);
-          }}
-        >
-          <SelectTrigger id={`${id}-provider`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {providers.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                {p.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </FormField>
-      <FormField label="Model" htmlFor={`${id}-model`} error={error}>
-        <ModelPicker
-          id={`${id}-model`}
-          models={list.models}
-          loading={list.loading}
-          listed={listed}
-          value={value.model}
-          custom={custom}
-          onChange={(model, c) => {
-            onChange({ ...value, model });
-            setCustom(c);
-          }}
-        />
-      </FormField>
-      {meta && (
-        <FormField label="Reasoning effort" htmlFor={`${id}-effort`}>
-          <Select value={effort} onValueChange={(e) => onChange({ ...value, effort: e as ReasoningEffort })}>
-            <SelectTrigger id={`${id}-effort`} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {efforts.map((e) => (
-                <SelectItem key={e} value={e}>
-                  {effortLabels[e]}
-                  {e === defaultEffort[stage] && " (default)"}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </FormField>
-      )}
-    </div>
   );
 }

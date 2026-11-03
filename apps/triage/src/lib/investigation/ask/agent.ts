@@ -125,7 +125,7 @@ function promptSections(incident: Incident, question: Question, source: Telemetr
   };
 }
 
-const NO_VISION_HINT = "(This model may not read images: pick a vision model for Ask in Settings.)";
+const NO_VISION_HINT = "(This model may not read images: pick a vision model for Ask.)";
 
 // The answer as it runs: the route streams it to the asking tab, and
 // consumeStream() resolves once it is answered (or failed) and saved. The
@@ -135,7 +135,9 @@ export interface AnswerStream {
   toUIMessageStreamResponse(init?: { status?: number; headers?: HeadersInit }): Response;
 }
 
-// Tests: a model other than Settings' one, and a scripted model to call.
+// `stage`: the model startQuestion() chose (Wonder with full context, else
+// the composer's, else Settings'); when absent, Wonder with full context,
+// else Settings' Ask model. Tests: a scripted model to call.
 // `onToolCall` hears each tool the model calls, by name, as it calls it
 // (the MCP server reports them as progress). `budget`: a full-context
 // prompt's size in tokens, when not FULL_CONTEXT_TOKENS (a cheap probe);

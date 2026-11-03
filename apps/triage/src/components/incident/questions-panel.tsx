@@ -7,12 +7,14 @@ import {
   ArrowUpIcon,
   BrainIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CircleSlashIcon,
   CircleXIcon,
   CopyIcon,
   CornerDownLeftIcon,
   CornerDownRightIcon,
+  CpuIcon,
   EllipsisIcon,
   GitCommitHorizontalIcon,
   GlobeIcon,
@@ -42,13 +44,16 @@ import {
   useRef,
   useState,
 } from "react";
+import type { Provider } from "@/components/model-settings";
 import { LevelBars, MicButton } from "@/components/speech/mic-button";
 import { SpeakButton } from "@/components/speech/speak-button";
+import { type Choice, StageFields, trimChoice } from "@/components/stage-choice-fields";
 import { Timestamp } from "@/components/timestamp";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDictation, useDictationSupported } from "@/hooks/use-dictation";
 import { scrollsItself, scrollToEnd, useFollowBottom } from "@/hooks/use-follow-bottom";
@@ -56,11 +61,12 @@ import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shrink";
 import { isArchived } from "@/lib/investigation/archive";
 import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
-import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
+import { type Incident, type InvestigationStep, type Question, type StageChoice, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { searchSummary, WEB_SEARCH } from "@/lib/investigation/web-search";
 import { contextLimit, contextShare } from "@/lib/models/context";
 import { modelLabel, providerLabels } from "@/lib/models/labels";
+import type { PublicModelSettings } from "@/lib/models/settings";
 import { effortLabels, type ReasoningEffort } from "@/lib/models/stages";
 import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
@@ -114,6 +120,9 @@ export interface QueuedQuestion {
   webSearch?: boolean;
   // The full-context switch as it was when sent.
   fullContext?: boolean;
+  // The composer's model as it was when sent; absent where the page gave
+  // none, and Settings decides, and with full context, which runs on Wonder.
+  model?: StageChoice;
 }
 
 export interface Ask {
@@ -133,8 +142,15 @@ export interface Ask {
   error: string | undefined;
   draft: string;
   setDraft: (text: string) => void;
-  // Whether the next question may search the web: undefined when Ask isn't
-  // on Meta's API, the one with the search, so there's no switch.
+  // The model the next question is asked with: Settings' Ask model until
+  // it's changed on the composer, then that for as long as the page is
+  // open. Undefined where the page gave none (a preview).
+  model: Choice | undefined;
+  setModel: (choice: Choice) => void;
+  // Settings' Ask model, to go back to.
+  defaultModel: Choice | undefined;
+  // Whether the next question may search the web: undefined when the model
+  // isn't on Meta's API, the one with the search, so there's no switch.
   webSearch: boolean | undefined;
   setWebSearch: (on: boolean) => void;
   // Whether the next question reads everything Triage holds on the service
@@ -183,25 +199,46 @@ function questionRequest(question: QueuedQuestion): RequestInit {
     return {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: question.text, webSearch: question.webSearch, fullContext: question.fullContext }),
+      body: JSON.stringify({
+        text: question.text,
+        webSearch: question.webSearch,
+        fullContext: question.fullContext,
+        model: question.model,
+      }),
     };
   }
   const form = new FormData();
   form.append("text", question.text);
   if (question.webSearch !== undefined) form.append("webSearch", String(question.webSearch));
   if (question.fullContext) form.append("fullContext", "true");
+  if (question.model) {
+    form.append("provider", question.model.provider);
+    form.append("model", question.model.model);
+    if (question.model.effort) form.append("effort", question.model.effort);
+  }
   form.append("image", question.image.blob, `screenshot.${question.image.mediaType.split("/")[1]}`);
   form.append("width", String(question.image.width));
   form.append("height", String(question.image.height));
   return { method: "POST", body: form };
 }
 
-// webSearch: the composer's switch to start with, Settings' choice, or
-// undefined for none. fullContext: whether there's a full-context switch
-// (it starts off: each question is a large, billed prompt).
-export function useAskQuestion(incident: Incident, webSearchDefault?: boolean, fullContextAvailable?: boolean): Ask {
+// defaultModel: Settings' Ask model, the composer's to start with.
+// webSearchDefault: the web search switch to start with, Settings' choice,
+// or undefined for none. fullContextAvailable: whether there's a
+// full-context switch (it starts off: each question is a large, billed
+// prompt).
+export function useAskQuestion(
+  incident: Incident,
+  defaultModel?: Choice,
+  webSearchDefault?: boolean,
+  fullContextAvailable?: boolean,
+): Ask {
   const router = useRouter();
-  const [webSearch, setWebSearch] = useState(webSearchDefault);
+  const [model, setModel] = useState(defaultModel);
+  const [searchOn, setWebSearch] = useState(webSearchDefault);
+  // Only Meta's API has the search; the switch keeps its place for when
+  // the model goes back there.
+  const webSearch = model && model.provider !== "meta" ? undefined : searchOn;
   const [fullContext, setFullContext] = useState(fullContextAvailable ? false : undefined);
   const [live, setLive] = useState<LiveQuestion>();
   const [queue, setQueue] = useState<QueuedQuestion[]>([]);
@@ -356,7 +393,15 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean, f
     (text: string, image?: Attachment) => {
       const trimmed = text.trim();
       if (!trimmed && !image) return;
-      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image, webSearch, fullContext };
+      const question = {
+        key: newKey(),
+        text: trimmed || DEFAULT_IMAGE_QUESTION,
+        image,
+        webSearch,
+        fullContext,
+        // Full context runs on Wonder, whatever the composer has.
+        ...(model && !fullContext && { model: trimChoice(model) }),
+      };
       if (waiting || paused || queue.length > 0 || busy.current) {
         setQueue((q) => [...q, question]);
         setDraft("");
@@ -366,7 +411,7 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean, f
         void ask(question, false);
       }
     },
-    [waiting, paused, queue.length, ask, webSearch, fullContext],
+    [waiting, paused, queue.length, ask, webSearch, fullContext, model],
   );
 
   const unqueue = useCallback(
@@ -401,6 +446,9 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean, f
     error,
     draft,
     setDraft,
+    model,
+    setModel,
+    defaultModel,
     webSearch,
     setWebSearch,
     fullContext,
@@ -1233,6 +1281,100 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
   },
 };
 
+// The same model, effort included where it's sent (Meta's API).
+const sameChoice = (a: Choice, b: Choice) =>
+  a.provider === b.provider && a.model.trim() === b.model.trim() && (a.provider !== "meta" || a.effort === b.effort);
+
+// The model the next question is asked with, by name on the composer (a
+// chip icon where the report is phone-narrow, so the text keeps its room),
+// opening to its provider, model and (on Meta's API) effort. A change lasts
+// while the page is open and leaves Settings alone; "Use Settings' model"
+// goes back. Closed without a model (the provider changed, nothing picked
+// yet), it keeps the last one that had a model.
+function ModelButton({ ask, disabled }: { ask: Ask; disabled: boolean }) {
+  const { model, setModel, defaultModel } = ask;
+  const [open, setOpen] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>();
+  const [loadError, setLoadError] = useState<string>();
+  const lastChosen = useRef(model);
+  useEffect(() => {
+    if (model?.model.trim()) lastChosen.current = model;
+  }, [model]);
+
+  useEffect(() => {
+    if (!open || providers) return;
+    const ctrl = new AbortController();
+    fetch("/api/settings/models", { signal: ctrl.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setProviders(((await res.json()) as PublicModelSettings).providers);
+      })
+      .catch((err) => !ctrl.signal.aborted && setLoadError(errorText(err)));
+    return () => ctrl.abort();
+  }, [open, providers]);
+
+  if (!model) return null;
+  const onOpenChange = (o: boolean) => {
+    if (!o && !model.model.trim() && lastChosen.current) setModel(lastChosen.current);
+    setOpen(o);
+  };
+  // A router's ID names its maker first ("meta/muse-glimmer-30b"): the
+  // button keeps the part that tells models apart.
+  const name = model.model.trim().split("/").pop() || "Choose a model";
+  const label = modelLabel(model.model, model.provider, model.provider === "meta" ? model.effort : undefined);
+  const changed = defaultModel && !sameChoice(model, defaultModel);
+
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={disabled}
+              aria-label={`Model: ${label}`}
+              className="h-7 max-w-36 gap-1 px-2 font-normal text-muted-foreground text-xs"
+            >
+              <CpuIcon className="size-4 shrink-0 @sm:hidden" />
+              <span className="hidden truncate @sm:inline">{name}</span>
+              <ChevronDownIcon className="size-3.5 shrink-0" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" className="flex w-80 flex-col gap-4">
+        <div className="flex flex-col gap-0.5">
+          <p className="font-medium text-sm">Model for Ask</p>
+          <p className="text-muted-foreground text-xs">
+            For questions asked here while the page is open. Settings keeps Ask&apos;s default.
+          </p>
+        </div>
+        {providers ? (
+          <StageFields stage="ask" stacked value={model} onChange={setModel} providers={providers} />
+        ) : loadError ? (
+          <p role="alert" className="text-destructive text-xs">
+            Couldn&apos;t load the models: {loadError}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+          </div>
+        )}
+        {changed && (
+          <Button variant="outline" size="sm" className="self-start" onClick={() => setModel(defaultModel)}>
+            <RotateCcwIcon />
+            Use Settings&apos; model
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // The draft's screenshot, above the text: a thumbnail, its size as sent,
 // and × to take it off; "Preparing image" while it's being shrunk.
 function AttachmentChip({ image, onRemove }: { image: Attachment | undefined; onRemove: () => void }) {
@@ -1465,6 +1607,8 @@ function Composer({
         <span id="ask-triage-mode" className="sr-only">
           {hint.detail}
         </span>
+        {/* Full context runs on Wonder, so there's no model to pick. */}
+        {!ask.fullContext && <ModelButton ask={ask} disabled={disabled} />}
         <input
           ref={fileRef}
           type="file"
