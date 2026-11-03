@@ -91,3 +91,71 @@ describe("answerQuestion's loop", () => {
     assert.equal(saved.error, "No answer after 1 model steps");
   });
 });
+
+describe("a full-context question", () => {
+  // The pool-leak incident asked with full context, a small budget, and one
+  // earlier incident on the service.
+  async function askFull(script: (call: Call) => Turn) {
+    const incident = { ...poolLeak(), id: `inc_ask_${++n}` };
+    const earlier = { ...poolLeak(), id: "inc_earlier", title: "Earlier pool exhaustion", detectedAt: "2026-10-01T10:00:00.000Z" };
+    const question: Question = {
+      id: "q_1",
+      text: "Has this happened before?",
+      askedAt: new Date().toISOString(),
+      status: "answering",
+      answer: "",
+      citedIds: [],
+      unknownIds: [],
+      steps: [],
+      evidence: [],
+      mode: "full_context",
+      model: stage.model,
+    };
+    const asked = { ...incident, questions: [question] };
+    await store.saveIncident(asked);
+    const seen: Call[] = [];
+    const answer = await ask.answerQuestion(asked, question, {
+      stage,
+      languageModel: scriptedModel(script, seen),
+      budget: 140_000,
+      others: [earlier, incident],
+    });
+    await Promise.all([answer.toUIMessageStreamResponse().text(), answer.consumeStream()]);
+    const saved = (await store.getIncident(incident.id))!.questions![0];
+    return { saved, seen };
+  }
+
+  it("answers in one call with no tools, keeping only the cited items", async () => {
+    const { saved, seen } = await askFull(() => ({
+      text: "Yes: the same leak [ev_ctx_incident_1], in this code [ev_ctx_source_1_1] [ev_metric_pool].",
+    }));
+    assert.equal(seen.length, 1);
+    const prompt = lastUserText(seen[0]);
+    for (const part of ["<source>", "<changes>", "<incidents>", "<telemetry>"]) assert.ok(prompt.includes(part), part);
+    assert.ok(prompt.indexOf("<source>") < prompt.indexOf("Incident: "), "the bundle comes before the report");
+    assert.equal(saved.status, "answered", saved.error);
+    assert.equal(saved.mode, "full_context");
+    assert.deepEqual(saved.citedIds, ["ev_ctx_incident_1", "ev_ctx_source_1_1", "ev_metric_pool"]);
+    assert.deepEqual(
+      saved.evidence.map((e) => [e.id, e.kind]),
+      [
+        ["ev_ctx_incident_1", "incident"],
+        ["ev_ctx_source_1_1", "source"],
+      ],
+    );
+    const incidentEvidence = saved.evidence[0];
+    assert.ok(incidentEvidence.kind === "incident" && incidentEvidence.incidentId === "inc_earlier");
+    assert.equal(saved.steps.length, 1);
+    assert.equal(saved.steps[0].tool, "full_context");
+    assert.equal(saved.steps[0].status, "completed");
+    assert.deepEqual(saved.steps[0].evidenceIds, ["ev_ctx_incident_1", "ev_ctx_source_1_1"]);
+    assert.ok(saved.start?.parts.source && saved.start.parts.telemetry !== undefined);
+  });
+
+  it("strikes an ID the bundle doesn't have", async () => {
+    const { saved } = await askFull(() => ({ text: "It did [ev_ctx_incident_99]." }));
+    assert.deepEqual(saved.citedIds, []);
+    assert.deepEqual(saved.unknownIds, ["ev_ctx_incident_99"]);
+    assert.deepEqual(saved.evidence, []);
+  });
+});

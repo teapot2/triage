@@ -39,6 +39,7 @@ const evidenceLabels: Record<EvidenceKind, string> = {
   source: "Source",
   commit: "Commit",
   web: "Web page",
+  incident: "Earlier incident",
 };
 
 export function valueLabel(facet: Facet, value: string): string {
@@ -50,8 +51,9 @@ export function valueLabel(facet: Facet, value: string): string {
 }
 
 // Evidence IDs are ev_<kind>_<n>, or ev_<prefix>_<kind>_<n> for an Ask
-// question's (ev_q2_span_1) or a fan-out lane's (ev_h1_log_1).
-export const kindOf = (evidenceId: string) => /^ev_(?:[a-z]\d+_)?([a-z]+)/.exec(evidenceId)?.[1] ?? evidenceId;
+// question's (ev_q2_span_1), a fan-out lane's (ev_h1_log_1) or a
+// full-context bundle's (ev_ctx_source_3_2).
+export const kindOf = (evidenceId: string) => /^ev_(?:[a-z]\d+_|ctx_)?([a-z]+)/.exec(evidenceId)?.[1] ?? evidenceId;
 
 function serviceOf(step: InvestigationStep): string | undefined {
   if (typeof step.input.service === "string") return step.input.service;
@@ -105,6 +107,8 @@ function evidenceText(e: Evidence): string {
       return `${e.summary} ${e.sha} ${e.message} ${e.files.join(" ")}`;
     case "web":
       return `${e.summary} ${e.url}`;
+    case "incident":
+      return `${e.summary} ${e.title} ${e.verdict ?? ""}`;
   }
 }
 

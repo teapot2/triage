@@ -68,6 +68,8 @@ export interface CommitRecord {
   message: string;
   files: string[];
   committedAt: string;
+  // The diff, when gitLog was asked for it and the source keeps one.
+  patch?: string;
 }
 
 export interface DeployRecord {
@@ -121,7 +123,9 @@ export interface TelemetrySource {
   dbDiagnostics(check: DbCheck): Promise<DbResult>;
   readSource(path: string): Promise<SourceFile | undefined>;
   listSourceFiles(): Promise<string[]>;
-  gitLog(q: { path?: string; limit: number }): Promise<CommitRecord[]>;
+  // `patch`: each commit's diff too, where the source has one (only a full
+  // context bundle asks).
+  gitLog(q: { path?: string; limit: number; patch?: boolean }): Promise<CommitRecord[]>;
   deployHistory(q: { service?: string; sinceMinutes: number }): Promise<DeployRecord[]>;
 }
 

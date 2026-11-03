@@ -760,35 +760,38 @@ export interface GitLogQuery {
   limit: number;
   // The commit to log from, when not HEAD: the deployed release's.
   from?: string;
+  // Each commit's diff instead of only its file names.
+  patch?: boolean;
 }
 
-// The git command behind gitLog, as its arguments.
-export function gitLogArgs({ path: file, limit, from }: GitLogQuery): string[] {
-  const args = ["-C", shopfrontDir, "log", `-n${limit}`, "--name-only", "--format=%x1e%h%x1f%an%x1f%s%x1f%cI", "--relative"];
+// The git command behind gitLog, as its arguments. With `patch`, the
+// pathspec keeps the harness's hunks out of the diffs as well.
+export function gitLogArgs({ path: file, limit, from, patch }: GitLogQuery): string[] {
+  const args = ["-C", shopfrontDir, "log", `-n${limit}`, patch ? "--patch" : "--name-only", "--format=%x1e%h%x1f%an%x1f%s%x1f%cI", "--relative"];
   if (from) args.push(from);
   args.push("--", file ? normalize(file) : ".", ...harnessPaths.map((h) => `:(exclude)${h}`));
   return args;
 }
+
+const diffFile = /^diff --git a\/(\S+) b\//gm;
 
 // Real history when Shopfront is in a git checkout; none otherwise. Only
 // commits that touch Shopfront outside the harness: Triage's own commits
 // and the harness's would give the answer away.
 export async function gitLog(q: GitLogQuery): Promise<CommitRecord[]> {
   try {
-    const { stdout } = await run("git", gitLogArgs(q), { timeout: 5000 });
+    // A whole history's diffs run to a few hundred KB.
+    const { stdout } = await run("git", gitLogArgs(q), q.patch ? { timeout: 20_000, maxBuffer: 64 * 1024 * 1024 } : { timeout: 5000 });
     return stdout
       .split("\x1e")
       .filter((c) => c.trim())
       .map((c) => {
-        const [header, ...files] = c.trim().split("\n");
+        const [header, ...rest] = c.trim().split("\n");
         const [sha, author, message, committedAt] = header.split("\x1f");
-        return {
-          sha,
-          author,
-          message,
-          committedAt: new Date(committedAt).toISOString(),
-          files: files.filter((f) => f && !isHarness(f)),
-        };
+        const record = { sha, author, message, committedAt: new Date(committedAt).toISOString() };
+        if (!q.patch) return { ...record, files: rest.filter((f) => f && !isHarness(f)) };
+        const patch = rest.join("\n").trim();
+        return { ...record, files: [...patch.matchAll(diffFile)].map((m) => m[1]).filter((f) => !isHarness(f)), patch };
       });
   } catch {
     return [];

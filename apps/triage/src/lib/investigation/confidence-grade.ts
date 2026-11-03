@@ -53,6 +53,7 @@ const kindNouns: Record<Evidence["kind"], string> = {
   source: "the source",
   commit: "a change",
   web: "a web page",
+  incident: "an earlier incident",
 };
 
 // "a", "a and b", "a, b and c".

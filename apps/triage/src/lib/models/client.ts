@@ -3,7 +3,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { ToolSet } from "ai";
 import { WEB_SEARCH } from "../investigation/web-search";
 import { ModelCallError, type RetryOptions, retryingFetch } from "./fetch";
-import { policyFor, RunTimeoutError, STALL_MS } from "./policy";
+import { policyFor, type RetryPolicy, RunTimeoutError, STALL_MS } from "./policy";
 import { type ProviderId, providers } from "./providers";
 import type { Endpoint, StageModel } from "./settings";
 import type { StageId } from "./stages";
@@ -18,9 +18,14 @@ import { errorMessage } from "../errors";
 //
 // Every request goes through retryingFetch: a time limit per attempt and
 // jittered retries on 429s, 5xx and network errors (policy.ts). `onRetry`
-// lets a run count them.
-export function languageModel(s: StageModel & Endpoint, { onRetry }: Pick<RetryOptions, "onRetry"> = {}) {
-  const fetch = retryingFetch(policyFor(s.provider), { onRetry });
+// lets a run count them; `policy` changes the limits for one call (a
+// full-context question gets one long attempt: a retry would bill its
+// whole prompt again).
+export function languageModel(
+  s: StageModel & Endpoint,
+  { onRetry, policy }: Pick<RetryOptions, "onRetry"> & { policy?: Partial<Pick<RetryPolicy, "attempts" | "attemptMs">> } = {},
+) {
+  const fetch = retryingFetch({ ...policyFor(s.provider), ...policy }, { onRetry });
   if (s.provider === "meta") return createOpenAI({ baseURL: s.baseUrl, apiKey: s.apiKey, fetch }).responses(s.model);
   const client = createOpenAICompatible({
     name: s.provider,

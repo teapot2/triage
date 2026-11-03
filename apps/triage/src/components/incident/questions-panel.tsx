@@ -17,6 +17,7 @@ import {
   GitCommitHorizontalIcon,
   GlobeIcon,
   ImageIcon,
+  LibraryBigIcon,
   LoaderCircleIcon,
   type LucideIcon,
   PaperclipIcon,
@@ -111,6 +112,8 @@ export interface QueuedQuestion {
   image?: Attachment;
   // The web search switch as it was when sent; absent where Ask has none.
   webSearch?: boolean;
+  // The full-context switch as it was when sent.
+  fullContext?: boolean;
 }
 
 export interface Ask {
@@ -134,6 +137,11 @@ export interface Ask {
   // on Meta's API, the one with the search, so there's no switch.
   webSearch: boolean | undefined;
   setWebSearch: (on: boolean) => void;
+  // Whether the next question reads everything Triage holds on the service
+  // in one Wonder call: undefined when there's no telemetry to read or no
+  // Wonder to read it, so there's no switch.
+  fullContext: boolean | undefined;
+  setFullContext: (on: boolean) => void;
   // The screenshot attached to the draft, and whether one is being shrunk.
   image: Attachment | undefined;
   attaching: boolean;
@@ -175,12 +183,13 @@ function questionRequest(question: QueuedQuestion): RequestInit {
     return {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: question.text, webSearch: question.webSearch }),
+      body: JSON.stringify({ text: question.text, webSearch: question.webSearch, fullContext: question.fullContext }),
     };
   }
   const form = new FormData();
   form.append("text", question.text);
   if (question.webSearch !== undefined) form.append("webSearch", String(question.webSearch));
+  if (question.fullContext) form.append("fullContext", "true");
   form.append("image", question.image.blob, `screenshot.${question.image.mediaType.split("/")[1]}`);
   form.append("width", String(question.image.width));
   form.append("height", String(question.image.height));
@@ -188,10 +197,12 @@ function questionRequest(question: QueuedQuestion): RequestInit {
 }
 
 // webSearch: the composer's switch to start with, Settings' choice, or
-// undefined for none.
-export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): Ask {
+// undefined for none. fullContext: whether there's a full-context switch
+// (it starts off: each question is a large, billed prompt).
+export function useAskQuestion(incident: Incident, webSearchDefault?: boolean, fullContextAvailable?: boolean): Ask {
   const router = useRouter();
   const [webSearch, setWebSearch] = useState(webSearchDefault);
+  const [fullContext, setFullContext] = useState(fullContextAvailable ? false : undefined);
   const [live, setLive] = useState<LiveQuestion>();
   const [queue, setQueue] = useState<QueuedQuestion[]>([]);
   const [paused, setPaused] = useState(false);
@@ -345,7 +356,7 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): 
     (text: string, image?: Attachment) => {
       const trimmed = text.trim();
       if (!trimmed && !image) return;
-      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image, webSearch };
+      const question = { key: newKey(), text: trimmed || DEFAULT_IMAGE_QUESTION, image, webSearch, fullContext };
       if (waiting || paused || queue.length > 0 || busy.current) {
         setQueue((q) => [...q, question]);
         setDraft("");
@@ -355,7 +366,7 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): 
         void ask(question, false);
       }
     },
-    [waiting, paused, queue.length, ask, webSearch],
+    [waiting, paused, queue.length, ask, webSearch, fullContext],
   );
 
   const unqueue = useCallback(
@@ -392,6 +403,8 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): 
     setDraft,
     webSearch,
     setWebSearch,
+    fullContext,
+    setFullContext,
     image,
     attaching,
     attach,
@@ -478,6 +491,7 @@ interface QuestionView {
   provider?: string;
   reasoningEffort?: ReasoningEffort;
   context?: Question["context"];
+  cachedInputTokens?: number;
   answeredAt?: string;
 }
 
@@ -510,6 +524,7 @@ function savedView(q: Question, key: string, incidentId: string): QuestionView {
     provider: q.provider,
     reasoningEffort: q.reasoningEffort,
     context: q.context,
+    cachedInputTokens: q.cachedInputTokens,
     answeredAt: q.answeredAt,
   };
 }
@@ -642,7 +657,7 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   // Without a source to read again (a bundled example, or a run whose
   // scenario is gone) answers come from the recorded evidence alone
   // (evidence_only), as the route decides.
-  const mode: Question["mode"] = sourceKind(incident) ? "tools" : "evidence_only";
+  const mode: Question["mode"] = ask.fullContext ? "full_context" : sourceKind(incident) ? "tools" : "evidence_only";
   // Archived, the conversation is read-only: no composer, suggestions or
   // asking again.
   const archived = isArchived(incident);
@@ -1079,6 +1094,11 @@ function conversationContext(questions: Question[]): ReactNode {
     },
     { key: "question", label: "Question", tokens: parts.question },
     { key: "screenshot", label: "Screenshot", tokens: parts.screenshot ?? 0 },
+    // A full-context question's bundle.
+    { key: "source", label: "Source code", tokens: parts.source ?? 0 },
+    { key: "changes", label: "Git history and deploys", tokens: parts.changes ?? 0 },
+    { key: "incidents", label: "Earlier incidents", tokens: parts.incidents ?? 0 },
+    { key: "telemetry", label: "Telemetry", tokens: parts.telemetry ?? 0 },
   ];
   return (
     <ContextWindow
@@ -1104,6 +1124,8 @@ function ReplyDetails({ view }: { view: QuestionView }) {
     rows.push(["Peak context", `${formatShare(peak)} · ${formatCompact(view.context.inputTokens)} tokens`]);
   }
   if (view.mode === "evidence_only") rows.push(["Source", "Recorded evidence only"]);
+  if (view.mode === "full_context") rows.push(["Source", "Full context, one call"]);
+  if (view.cachedInputTokens) rows.push(["Cached input", `${formatCompact(view.cachedInputTokens)} tokens`]);
   if (view.via === "mcp") rows.push(["Asked from", "A coding agent, over MCP"]);
   if (view.webSearches) rows.push(["Web searches", view.webSearches]);
   rows.push(["Asked", <Timestamp key="asked" date={view.askedAt} />]);
@@ -1202,6 +1224,12 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
     icon: ArchiveIcon,
     text: "Recorded evidence only",
     detail: "No run to read again: answers from the evidence the investigation recorded, citing it like the report.",
+  },
+  full_context: {
+    icon: LibraryBigIcon,
+    text: "Full context, one Wonder call",
+    detail:
+      "Answers from everything Triage holds on the service, read at once: its source, git history with diffs, deploys, earlier incidents and telemetry up to the alert. No tools.",
   },
 };
 
@@ -1467,7 +1495,30 @@ function Composer({
           </TooltipTrigger>
           <TooltipContent>Attach a screenshot · or paste or drop one</TooltipContent>
         </Tooltip>
-        {ask.webSearch !== undefined && (
+        {ask.fullContext !== undefined && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={disabled}
+                aria-label="Full context"
+                aria-pressed={ask.fullContext}
+                className="text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+                onClick={() => ask.setFullContext(!ask.fullContext)}
+              >
+                <LibraryBigIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {ask.fullContext
+                ? "Full context on · Wonder reads the source, history, past incidents and telemetry in one call"
+                : "Full context off"}
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {ask.webSearch !== undefined && !ask.fullContext && (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

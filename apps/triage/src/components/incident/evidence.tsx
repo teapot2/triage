@@ -8,9 +8,11 @@ import {
   GlobeIcon,
   type LucideIcon,
   ScrollTextIcon,
+  SirenIcon,
   WaypointsIcon,
   XIcon,
 } from "lucide-react";
+import Link from "next/link";
 import {
   createContext,
   type ElementType,
@@ -59,6 +61,7 @@ export const evidenceIcons: Record<EvidenceKind, LucideIcon> = {
   source: FileCodeIcon,
   commit: GitCommitHorizontalIcon,
   web: GlobeIcon,
+  incident: SirenIcon,
 };
 
 interface EvidenceContextValue {
@@ -443,6 +446,17 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
             {evidence.url}
           </a>
         </Field>
+      );
+    case "incident":
+      return (
+        <>
+          <Field label="Incident">
+            <Link href={`/incidents/${evidence.incidentId}`} className="underline underline-offset-2">
+              {evidence.title}
+            </Link>
+          </Field>
+          {evidence.verdict && <Field label="Verdict">{evidence.verdict}</Field>}
+        </>
       );
   }
 }

@@ -24,6 +24,9 @@ export const toolNameSchema = z.enum([
   "dependency_audit",
   "list_files",
   "grep_source",
+  // A full-context question (ask/full-context.ts): the one step that read
+  // the whole bundle into the prompt, holding what the answer cited.
+  "full_context",
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -112,6 +115,15 @@ export const evidenceSchema = z.discriminatedUnion("kind", [
     kind: z.literal("web"),
     url: z.url(),
     title: z.string().optional(),
+  }),
+  // An earlier incident a full-context answer cited: its report was in the
+  // prompt (ask/full-context.ts), and the page links to it.
+  z.object({
+    ...evidenceBase,
+    kind: z.literal("incident"),
+    incidentId: z.string(),
+    title: z.string(),
+    verdict: z.string().optional(),
   }),
 ]);
 export type Evidence = z.infer<typeof evidenceSchema>;
@@ -482,7 +494,8 @@ export const runSchema = z.object({
 export type Run = z.infer<typeof runSchema>;
 
 // A question's prompt, part by part, in estimated tokens; `screenshot`
-// only when one was attached.
+// only when one was attached, and the bundle's four parts only on a
+// full-context question.
 export const promptPartsSchema = z.object({
   instructions: z.number().int(),
   tools: z.number().int(),
@@ -491,6 +504,10 @@ export const promptPartsSchema = z.object({
   history: z.number().int(),
   question: z.number().int(),
   screenshot: z.number().int().optional(),
+  source: z.number().int().optional(),
+  changes: z.number().int().optional(),
+  incidents: z.number().int().optional(),
+  telemetry: z.number().int().optional(),
 });
 export type PromptParts = z.infer<typeof promptPartsSchema>;
 
@@ -533,8 +550,10 @@ export const questionSchema = z.object({
   evidence: z.array(evidenceSchema),
   thoughts: z.array(thoughtSchema).optional(),
   // evidence_only: no telemetry source to rebuild (bundled examples), so the
-  // answer comes from the recorded evidence without tools.
-  mode: z.enum(["tools", "evidence_only"]),
+  // answer comes from the recorded evidence without tools. full_context: one
+  // Wonder call over everything Triage holds on the service, no tools
+  // (ask/full-context.ts).
+  mode: z.enum(["tools", "evidence_only", "full_context"]),
   // Whether the answer may search the web: the composer's switch, on Meta's
   // API only. Missing on questions from before it existed (off).
   webSearch: z.boolean().optional(),

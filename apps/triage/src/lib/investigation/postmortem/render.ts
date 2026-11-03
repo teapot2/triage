@@ -295,6 +295,8 @@ export function evidenceLine(e: Evidence): string {
     }
     case "web":
       return `Web · [${e.title ?? e.url}](${e.url})`;
+    case "incident":
+      return `Earlier incident · ${e.title}${e.verdict ? ` · ${e.verdict}` : ""}`;
   }
 }
 

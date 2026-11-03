@@ -246,6 +246,14 @@ export class QuestionRecorder implements StepRecorder, EvidenceRecorder, Thought
     this.updateStep(id, (step) => failedStep(step, error));
   }
 
+  // Evidence that already has its IDs (a full-context answer's citations,
+  // ask/full-context.ts), added to a finished step.
+  attachEvidence(stepId: string, evidence: Evidence[]) {
+    if (evidence.length === 0) return;
+    this.question.evidence.push(...evidence);
+    this.updateStep(stepId, (step) => ({ ...step, evidenceIds: [...step.evidenceIds, ...evidence.map((e) => e.id)] }));
+  }
+
   startThought(id: string) {
     this.currentCall = id;
     this.question.thoughts = startedThought(this.question.thoughts, id);

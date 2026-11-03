@@ -6,8 +6,10 @@ import type { PromptParts } from "../schema";
 // Ask composer's context card. The split is by each part's share of the
 // text: close enough to say what fills the window, not a tokenizer's count.
 
-// The prompt's text, part by part, in the order the bar shows them.
-export type PromptText = Record<Exclude<keyof PromptParts, "screenshot">, string>;
+// The prompt's text, part by part, in the order the bar shows them; the
+// bundle's parts only on a full-context question.
+type BundlePart = "source" | "changes" | "incidents" | "telemetry";
+export type PromptText = Record<Exclude<keyof PromptParts, "screenshot" | BundlePart>, string> & Partial<Record<BundlePart, string>>;
 
 // The tools as a provider sees them: name, description and JSON Schema.
 export async function toolsText(tools: ToolSet): Promise<string> {
@@ -27,12 +29,13 @@ const CHARS_PER_TOKEN = 4;
 
 export function splitTokens(inputTokens: number, text: PromptText, image: boolean): PromptParts {
   const keys = Object.keys(text) as (keyof PromptText)[];
-  const total = keys.reduce((sum, k) => sum + text[k].length, 0);
+  const length = (k: keyof PromptText) => text[k]?.length ?? 0;
+  const total = keys.reduce((sum, k) => sum + length(k), 0);
   // Without a screenshot the whole input is text, shared by length; with
   // one, the text is estimated from its length and the rest is the image.
   const textTokens = image ? Math.min(inputTokens, Math.round(total / CHARS_PER_TOKEN)) : inputTokens;
   const parts = Object.fromEntries(
-    keys.map((k) => [k, total > 0 ? Math.round((textTokens * text[k].length) / total) : 0]),
+    keys.map((k) => [k, total > 0 ? Math.round((textTokens * length(k)) / total) : 0]),
   ) as PromptParts;
   if (image) parts.screenshot = inputTokens - textTokens;
   return parts;

@@ -4,22 +4,25 @@ import { DEFAULT_IMAGE_QUESTION, MAX_IMAGE_BYTES, MAX_QUESTION_CHARS, sniffImage
 import { type QuestionImage, startQuestion } from "@/lib/investigation/ask/start";
 
 // The answer runs inside this request (it streams through the response),
-// capped at 10 model steps; this bounds it.
-export const maxDuration = 120;
+// capped at 10 model steps, or one long full-context call (its run budget
+// is 10 minutes); this bounds it.
+export const maxDuration = 660;
 
 const bodySchema = z.object({
   text: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
   webSearch: z.boolean().optional(),
+  fullContext: z.boolean().optional(),
 });
 const imageSizeSchema = z.coerce.number().int().positive().max(10_000);
 
-type Body = { text: string; webSearch?: boolean; image?: QuestionImage };
+type Body = { text: string; webSearch?: boolean; fullContext?: boolean; image?: QuestionImage };
 
-// The question from either body: JSON { text, webSearch? }, or
-// multipart/form-data with `text` and an `image` file (with its `width` and
-// `height`), where the text may be empty and then asks
-// DEFAULT_IMAGE_QUESTION, and `webSearch` is "true" or "false". Without
-// webSearch, Settings decides. A Response when the body is refused.
+// The question from either body: JSON { text, webSearch?, fullContext? },
+// or multipart/form-data with `text` and an `image` file (with its `width`
+// and `height`), where the text may be empty and then asks
+// DEFAULT_IMAGE_QUESTION, and `webSearch` and `fullContext` are "true" or
+// "false". Without webSearch, Settings decides. A Response when the body is
+// refused.
 async function readBody(req: Request): Promise<Body | Response> {
   if (!req.headers.get("content-type")?.startsWith("multipart/form-data")) {
     const parsed = bodySchema.safeParse(await req.json().catch(() => null));
@@ -38,12 +41,13 @@ async function readBody(req: Request): Promise<Body | Response> {
   const text = (typeof typed === "string" ? typed : "").trim();
   const search = form?.get("webSearch");
   const webSearch = search === "true" ? true : search === "false" ? false : undefined;
+  const fullContext = form?.get("fullContext") === "true";
   if (text.length > MAX_QUESTION_CHARS) {
     return Response.json({ error: `The question is over ${MAX_QUESTION_CHARS} characters.` }, { status: 400 });
   }
   if (!(file instanceof File)) {
     if (!text) return Response.json({ error: "expected text, an image, or both" }, { status: 400 });
-    return { text, webSearch };
+    return { text, webSearch, fullContext };
   }
   if (file.size > MAX_IMAGE_BYTES) {
     const mb = (n: number) => `${(n / 1e6).toFixed(1)} MB`;
@@ -60,6 +64,7 @@ async function readBody(req: Request): Promise<Body | Response> {
   return {
     text: text || DEFAULT_IMAGE_QUESTION,
     webSearch,
+    fullContext,
     image: { bytes, mediaType, width: width.data, height: height.data },
   };
 }
@@ -74,7 +79,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (body instanceof Response) return body;
 
   const { id } = await params;
-  const started = await startQuestion(id, body.text, { image: body.image, webSearch: body.webSearch });
+  const started = await startQuestion(id, body.text, { image: body.image, webSearch: body.webSearch, fullContext: body.fullContext });
   if (!started.ok) return Response.json({ error: started.error }, { status: started.status });
 
   const result = await answerQuestion(started.incident, started.question);

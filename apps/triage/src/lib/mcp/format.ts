@@ -332,6 +332,8 @@ function evidenceBody(e: Evidence): string {
     }
     case "web":
       return `${e.title ? `${e.title}: ` : ""}${e.url}`;
+    case "incident":
+      return `Earlier incident \`${e.incidentId}\`: ${e.title}${e.verdict ? ` (${e.verdict})` : ""}`;
   }
 }
 

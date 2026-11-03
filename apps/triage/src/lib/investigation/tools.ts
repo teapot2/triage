@@ -345,10 +345,12 @@ export function forModel(e: Evidence) {
       return { ...base, files: e.files };
     case "web":
       return { ...base, url: e.url };
+    case "incident":
+      return { ...base, incidentId: e.incidentId, verdict: e.verdict };
   }
 }
 
-function summarizeSeries(points: MetricPoint[]) {
+export function summarizeSeries(points: MetricPoint[]) {
   const head = points.slice(0, Math.max(1, Math.floor(points.length / 2)));
   const sorted = head.map((p) => p.value).sort((a, b) => a - b);
   const baseline = round(sorted[Math.floor(sorted.length / 2)]);

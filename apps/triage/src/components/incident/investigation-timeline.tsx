@@ -11,6 +11,7 @@ import {
   FolderTreeIcon,
   GitCommitHorizontalIcon,
   GlobeIcon,
+  LibraryBigIcon,
   LoaderCircleIcon,
   type LucideIcon,
   PackageIcon,
@@ -58,6 +59,7 @@ const toolIcons: Record<ToolName, LucideIcon> = {
   dependency_audit: PackageIcon,
   list_files: FolderTreeIcon,
   grep_source: TextSearchIcon,
+  full_context: LibraryBigIcon,
 };
 
 const statusIcons = {
@@ -92,6 +94,7 @@ const phaseOf: Record<ToolName, Phase> = {
   dependency_audit: "changes",
   list_files: "code",
   grep_source: "code",
+  full_context: "code",
 };
 
 const phaseLabels: Record<Phase, string> = {

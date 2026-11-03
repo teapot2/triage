@@ -5,8 +5,10 @@ import { Suspense } from "react";
 import { IncidentView } from "@/components/incident/incident-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { checkPrMerged } from "@/lib/investigation/fix/pr-merge";
+import { FULL_CONTEXT_MODEL } from "@/lib/investigation/ask/full-context";
+import { sourceKind } from "@/lib/investigation/source-kind";
 import { getIncident } from "@/lib/investigation/store";
-import { stageModel, webSearchOn } from "@/lib/models/settings";
+import { choiceModel, stageModel, stageProblem, webSearchOn } from "@/lib/models/settings";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -39,7 +41,11 @@ async function Incident({ params }: Props) {
   // The Ask composer's web search switch starts as Settings has it, and
   // shows only while Ask runs on Meta's API, the one with the search.
   const webSearch = (await stageModel("ask")).provider === "meta" ? await webSearchOn() : undefined;
-  return <IncidentView incident={incident} webSearch={webSearch} />;
+  // The full-context switch shows when there's telemetry to read and Wonder
+  // on Meta's API to read it.
+  const wonder = sourceKind(incident) ? await choiceModel("ask", FULL_CONTEXT_MODEL) : undefined;
+  const fullContext = wonder !== undefined && !stageProblem(wonder);
+  return <IncidentView incident={incident} webSearch={webSearch} fullContext={fullContext} />;
 }
 
 // The page's own frame (IncidentHeader, then IncidentReport's section menu

@@ -20,7 +20,7 @@ import {
 } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
-import { stageModel, stageProblem } from "../../models/settings";
+import { choiceModel, stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { recordThoughts } from "../agent";
@@ -31,8 +31,18 @@ import { QuestionRecorder } from "../recorder";
 import type { Incident, Question } from "../schema";
 import { sourceFor } from "../source-for";
 import type { TelemetrySource } from "../source";
+import { listIncidents } from "../store";
 import { createInvestigationTools, forModel } from "../tools";
 import { type PromptText, splitTokens, toolsText } from "./context-parts";
+import {
+  buildContext,
+  bundleText,
+  cachedContext,
+  estimateTokens,
+  FULL_CONTEXT_MODEL,
+  FULL_CONTEXT_TOKENS,
+  type FullContext,
+} from "./full-context";
 import { readQuestionImage } from "./images";
 import {
   answerOf,
@@ -75,11 +85,17 @@ function instructions(mode: Question["mode"], image: boolean, web: boolean): str
 - If the tools find nothing in the window, say so instead of guessing.
 - db_diagnostics and read_source read the system as it is now, not at alert time: say "now" when you cite them.
 - Every tool is read-only. If the question asks you to change something, point at the incident's mitigation or fix instead.`
-      : `- You have no tools to read this incident's system: answer from the recorded evidence below. If it does not answer the question, say what is missing instead of guessing.`;
+      : mode === "full_context"
+        ? `- Everything Triage holds on this service is in the message, before this incident's report: its source code, its git history with every diff, its deploys, every earlier incident's report, and its telemetry up to the alert. You have no tools: answer from that material and the recorded evidence.
+- Each item there has an ID (ev_ctx_source_…, ev_ctx_commit_…, ev_ctx_incident_…, ev_ctx_log_…, ev_ctx_span_…, ev_ctx_metric_…): cite those like evidence. Name an earlier incident or a commit only with its ID cited.
+- Look across all of it: an earlier incident with the same signature, the change that introduced a line, a pattern that started before the alert window.
+- If the material does not answer the question, say what is missing instead of guessing.`
+        : `- You have no tools to read this incident's system: answer from the recorded evidence below. If it does not answer the question, say what is missing instead of guessing.`;
+  const where = mode === "full_context" ? "in the message" : "below or returned by a tool";
   return `You are Triage, an SRE. Triage watches the team's services, opens an incident when an alert crosses its limit, investigates it, and proposes a mitigation and a fix for a person to approve. You already investigated this incident and wrote the report below. A person on the team, reading the incident's page, sends a message: answer it, nothing more.
 
 Rules:
-- Cite every claim about the system or the incident with an evidence ID in square brackets, e.g. [ev_log_3]. Cite only IDs listed below or returned by a tool. Never invent one. Questions about this conversation, the report, the incident's page or Triage itself need no citations.
+- Cite every claim about the system or the incident with an evidence ID in square brackets, e.g. [ev_log_3]. Cite only IDs listed ${where}. Never invent one. Questions about this conversation, the report, the incident's page or Triage itself need no citations.
 ${tools}${web ? WEB_SEARCH_RULES : ""}${image ? IMAGE_RULES : ""}
 - A question about Triage or about something on the incident's page (a label, a status, a section) is on topic: answer it from the incident details below.
 - Thanks, an acknowledgement or a reaction (frustration included) is not a question: reply in a sentence, plainly, without asking them to clarify.
@@ -121,8 +137,44 @@ export interface AnswerStream {
 
 // Tests: a model other than Settings' one, and a scripted model to call.
 // `onToolCall` hears each tool the model calls, by name, as it calls it
-// (the MCP server reports them as progress).
-type AnswerOptions = { stage?: Stage; languageModel?: LanguageModel; onToolCall?: (tool: string) => void };
+// (the MCP server reports them as progress). `budget`: a full-context
+// prompt's size in tokens, when not FULL_CONTEXT_TOKENS (a cheap probe);
+// `others`: the earlier incidents, when not the store's.
+type AnswerOptions = {
+  stage?: Stage;
+  languageModel?: LanguageModel;
+  onToolCall?: (tool: string) => void;
+  budget?: number;
+  others?: Incident[];
+};
+
+// A full-context question's one step: reading the bundle.
+const FULL_STEP = "full_context_1";
+// One attempt, waited on longer: a prompt of several hundred thousand
+// tokens takes a while to read, and a retry would bill it again.
+const FULL_ATTEMPT_MS = 5 * 60_000;
+const FULL_RUN_MS = 10 * 60_000;
+// What the bundle leaves for the rest of the prompt: the instructions, this
+// incident's report and evidence, earlier questions and the question. Fixed,
+// so every question on the incident sends the same bundle.
+const FULL_RESERVE = 100_000;
+
+// Wonder on Meta's API, whatever Ask uses in Settings.
+async function fullContextStage(): Promise<Stage> {
+  const stage = await choiceModel("ask", FULL_CONTEXT_MODEL);
+  if (!stage) throw new Error("Meta's API isn't available for a full-context answer.");
+  return stage;
+}
+
+// The step's line: what the bundle held.
+function bundleSummary(context: FullContext, tokens: number): string {
+  const items = [...context.items.values()];
+  const files = new Set(items.flatMap((e) => (e.kind === "source" ? [e.file] : []))).size;
+  const commits = items.filter((e) => e.kind === "commit" && e.tool === "git_log").length;
+  const incidents = items.filter((e) => e.kind === "incident").length;
+  const back = context.spans.oldest ? `, spans back to ${context.spans.oldest.slice(11, 16)}` : "";
+  return `Read about ${Math.round(tokens / 1000)}k tokens: ${files} files, ${commits} commits, ${incidents} earlier incidents, telemetry${back}`;
+}
 
 // Answers a question already appended to the incident (status answering).
 // Never rejects: failures land on the question as status failed.
@@ -152,8 +204,10 @@ async function answer(
   let calledModel = false;
   let provider: ProviderId | undefined;
   let retries = 0;
+  // A full-context question reads the whole bundle in one call, no tools.
+  const full = recorder.question.mode === "full_context";
   try {
-    const stage = opts.stage ?? (await stageModel("ask"));
+    const stage = opts.stage ?? (full ? await fullContextStage() : await stageModel("ask"));
     provider = stage.provider;
     recorder.update({ provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) });
     const problem = stageProblem(stage);
@@ -165,12 +219,15 @@ async function answer(
       console.error("[triage] question source unavailable", incident.id, err);
       return undefined;
     });
-    const mode: Question["mode"] = source ? "tools" : "evidence_only";
+    if (full && !source) throw new Error("This incident's telemetry can't be read, so there's nothing to answer with full context.");
+    const mode: Question["mode"] = full ? "full_context" : source ? "tools" : "evidence_only";
     recorder.update({ mode });
-    const tools: ToolSet = {
-      ...(source && createInvestigationTools(source, recorder, { submit: false })),
-      ...webSearchTools(stage, recorder.question.webSearch === true),
-    };
+    const tools: ToolSet = full
+      ? {}
+      : {
+          ...(source && createInvestigationTools(source, recorder, { submit: false })),
+          ...webSearchTools(stage, recorder.question.webSearch === true),
+        };
     const web = WEB_SEARCH in tools;
 
     // The screenshot goes with this question only, after its text; the
@@ -179,7 +236,18 @@ async function answer(
     const image = await readQuestionImage(incident.id, question);
     if (question.image && !image) throw new Error("The attached image couldn't be read back: ask again with it");
     const { sections, history } = promptSections(incident, question, source);
-    const prompt = Object.values(sections).join("");
+    // The bundle goes first, so the prompt's start is the same for every
+    // question on the incident and Meta serves it from the cache.
+    let bundle: FullContext | undefined;
+    if (full) {
+      recorder.startStep(FULL_STEP, "full_context", {});
+      const room = (opts.budget ?? FULL_CONTEXT_TOKENS) - FULL_RESERVE;
+      bundle = await cachedContext(incident.id, room, async () =>
+        buildContext(incident, source!, opts.others ?? (await listIncidents({ service: incident.service })), room),
+      );
+      recorder.completeStep(FULL_STEP, "full_context", bundleSummary(bundle, estimateTokens(bundleText(bundle.parts))), []);
+    }
+    const prompt = (bundle ? bundleText(bundle.parts) : "") + Object.values(sections).join("");
     const content: UserContent = image
       ? [
           { type: "text", text: prompt },
@@ -187,15 +255,19 @@ async function answer(
         ]
       : prompt;
     const system = instructions(mode, image !== undefined, web);
-    const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...sections };
+    const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...sections, ...bundle?.parts };
+    const maxSteps = full ? 1 : MAX_STEPS;
 
     // As in the investigation: Meta's API only supports tool_choice "auto",
     // so the last step has no tools and must answer, and a run that stops
     // after tool calls without text is nudged once.
     const agent = new ToolLoopAgent({
-      model: opts.languageModel ?? languageModel(stage, { onRetry: () => retries++ }),
+      model:
+        opts.languageModel ??
+        languageModel(stage, { onRetry: () => retries++, ...(full && { policy: { attempts: 1, attemptMs: FULL_ATTEMPT_MS } }) }),
       providerOptions: modelOptions(stage, cacheKey("ask", incident.id)),
       ...callSettings({ stream: true }),
+      ...(full && { timeout: { chunkMs: FULL_ATTEMPT_MS } }),
       ...recordThoughts(recorder, reasoningKind(stage.provider)),
       ...onEachCall((call) =>
         recorder.update({
@@ -210,10 +282,10 @@ async function answer(
       ),
       instructions: system,
       tools,
-      stopWhen: () => stepsUsed >= MAX_STEPS,
+      stopWhen: () => stepsUsed >= maxSteps,
       prepareStep: () => {
         stepsUsed += 1;
-        return stepsUsed >= MAX_STEPS ? { activeTools: [] } : {};
+        return stepsUsed >= maxSteps ? { activeTools: [] } : {};
       },
     });
 
@@ -222,14 +294,14 @@ async function answer(
     let text = "";
     let webSearches = 0;
     calledModel = true;
-    const budget = runBudget("ask");
+    const budget = runBudget("ask", full ? FULL_RUN_MS : undefined);
     await runAgentLoop({
       agent,
       messages,
       abortSignal: budget,
       steps: () => stepsUsed,
-      maxSteps: MAX_STEPS,
-      maxNudges: MAX_NUDGES,
+      maxSteps,
+      maxNudges: full ? 0 : MAX_NUDGES,
       nudge: NUDGE,
       done: () => text !== "",
       tokens,
@@ -293,6 +365,13 @@ async function answer(
       },
     });
 
+    // Of the bundle, only what the answer cites is kept, on the step; an
+    // item an earlier question already keeps is cited from there.
+    if (bundle) {
+      const known = knownEvidenceIds(incident, recorder.question);
+      const cited = parseCitations(text, new Set(bundle.items.keys())).citedIds.filter((id) => !known.has(id));
+      recorder.attachEvidence(FULL_STEP, cited.map((id) => bundle.items.get(id)!));
+    }
     const { citedIds, unknownIds } = parseCitations(text, knownEvidenceIds(incident, recorder.question));
     recorder.update({
       status: text ? "answered" : "failed",
@@ -314,6 +393,7 @@ async function answer(
     // the likely cause is said too, unless the API or the clock failed.
     const text = modelErrorText(err, provider);
     const message = recorder.question.image && calledModel && !isTransientFailure(err) ? `${text} ${NO_VISION_HINT}` : text;
+    if (recorder.question.steps.some((s) => s.id === FULL_STEP && s.status === "running")) recorder.failStep(FULL_STEP, message);
     recorder.update({
       status: "failed",
       error: message,

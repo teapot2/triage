@@ -31,7 +31,15 @@ function useRefreshWhile(active: boolean, intervalMs = 2000) {
 
 // A summary header with the facts that matter, then the report: a section
 // menu beside one section at a time.
-export function IncidentView({ incident, webSearch }: { incident: Incident; webSearch?: boolean }) {
+export function IncidentView({
+  incident,
+  webSearch,
+  fullContext,
+}: {
+  incident: Incident;
+  webSearch?: boolean;
+  fullContext?: boolean;
+}) {
   // The run on screen: the incident's own, another of its runs (read only:
   // it acts on nothing until it's used), or all of them compared.
   const shown = useShownRun(incident);
@@ -62,7 +70,7 @@ export function IncidentView({ incident, webSearch }: { incident: Incident; webS
   );
   // This tab's own question streams here, above the sections, so switching
   // sections mid-answer keeps the stream.
-  const ask = useAskQuestion(incident, webSearch);
+  const ask = useAskQuestion(incident, webSearch, fullContext);
   // Whatever happened up to now has been seen; a run that finishes while
   // this page is open is seen as the refresh brings it in.
   const latest = activityAt(incident);
