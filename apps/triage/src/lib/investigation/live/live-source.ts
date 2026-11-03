@@ -251,7 +251,7 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
     },
 
     async queryMetric({ name, windowMinutes }) {
-      const s = catalog.find((x) => x.name === name);
+      const s = catalog.find((x) => x.name === name) ?? burnSeries(name, requests, now, { failed, duration });
       if (!s) return undefined;
       return { name: s.name, service: s.service, unit: s.unit, description: s.description, points: s.points(windowMinutes) };
     },
@@ -440,6 +440,41 @@ function spanSeries(
         ),
     },
   ];
+}
+
+// An SLO's burn rate on a route (watch-rule-model's burnMetric), what its
+// incident charts: per minute, the share of requests in the 5 minutes to the
+// minute's end that weren't good, against the share the objective allows.
+// Built when asked for, from the objective and latency in the name.
+const burnName = /^slo\.burn_rate\{route=(\/[^,}]*),objective=([\d.]+)(?:,le=(\d+))?\}$/;
+const BURN_WINDOW = 5 * MINUTE;
+
+export function burnSeries(
+  name: string,
+  requests: SpanRow[],
+  now: number,
+  f: { failed: (s: SpanRow) => boolean; duration: (s: SpanRow) => number },
+): Series | undefined {
+  const m = name.match(burnName);
+  if (!m) return undefined;
+  const [, route, objective, le] = m;
+  const allowed = 1 - Number(objective) / 100;
+  if (!(allowed > 0)) return undefined;
+  const latencyMs = le === undefined ? undefined : Number(le);
+  const rows = requests.filter((r) => routeOf(r) === route);
+  const bad = (r: SpanRow) => f.failed(r) || (latencyMs !== undefined && f.duration(r) > latencyMs);
+  return {
+    name,
+    service: "shopfront",
+    unit: "×",
+    description: `How fast ${route} spends its error budget (${objective}% of requests succeeding${latencyMs === undefined ? "" : ` within ${latencyMs} ms`}): 1 spends exactly the budget, per minute over the 5 minutes to its end`,
+    points: (w) =>
+      minuteBuckets(now, w).flatMap((start) => {
+        const end = start + MINUTE;
+        const inWindow = rows.filter((r) => r.start >= end - BURN_WINDOW && r.start < end);
+        return inWindow.length ? [point(start, inWindow.filter(bad).length / inWindow.length / allowed)] : [];
+      }),
+  };
 }
 
 // Gauges and sums as exported, one series per distinguishing attribute

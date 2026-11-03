@@ -41,7 +41,8 @@ const input = (o: Partial<SnapshotInput>): SnapshotInput => ({
   spans: [],
   logs: [],
   metrics: [],
-  rules: defaultRules,
+  // Every default on, the paused API latency rule included, for its limit.
+  rules: defaultRules.map((r) => ({ ...r, enabled: true })),
   incidents: [],
   ...o,
 });

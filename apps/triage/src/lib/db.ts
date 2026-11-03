@@ -109,6 +109,38 @@ const migrations: string[] = [
     body TEXT NOT NULL,
     PRIMARY KEY (service, advisory_id)
   ) WITHOUT ROWID;`,
+  // Request counts per route for SLOs (slo/rollups.ts): each UTC minute,
+  // and each complete hour summarised from them. ok_<n> counts requests
+  // that didn't fail and took at most n ms.
+  `CREATE TABLE request_minutes (
+    service TEXT NOT NULL,
+    route TEXT NOT NULL,
+    method TEXT NOT NULL,
+    minute INTEGER NOT NULL, -- start of the UTC minute, epoch ms
+    total INTEGER NOT NULL,
+    failed INTEGER NOT NULL,
+    ok_100 INTEGER NOT NULL,
+    ok_250 INTEGER NOT NULL,
+    ok_500 INTEGER NOT NULL,
+    ok_1000 INTEGER NOT NULL,
+    ok_2500 INTEGER NOT NULL,
+    PRIMARY KEY (service, route, method, minute)
+  ) WITHOUT ROWID;
+  CREATE INDEX request_minutes_minute ON request_minutes (minute);
+  CREATE TABLE request_hourly (
+    service TEXT NOT NULL,
+    route TEXT NOT NULL,
+    method TEXT NOT NULL,
+    hour INTEGER NOT NULL, -- start of the UTC hour, epoch ms
+    total INTEGER NOT NULL,
+    failed INTEGER NOT NULL,
+    ok_100 INTEGER NOT NULL,
+    ok_250 INTEGER NOT NULL,
+    ok_500 INTEGER NOT NULL,
+    ok_1000 INTEGER NOT NULL,
+    ok_2500 INTEGER NOT NULL,
+    PRIMARY KEY (service, route, method, hour)
+  ) WITHOUT ROWID;`,
 ];
 
 export function getDb(): DatabaseSync {

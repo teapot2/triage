@@ -25,6 +25,38 @@ export interface LiveRoute {
   errorPercent: number;
   // The p95 limit of the watch rule that judges this route, if one does.
   limitMs?: number;
+  // What's left of the error budget of the SLO rules that cover this route,
+  // the lowest if several do.
+  budgetLeftPercent?: number;
+}
+
+// An SLO rule's error budget, from the request counts Triage keeps (not the
+// page's window): each route it covers, lowest budget first, and how the
+// lowest one's was spent over the SLO window.
+export interface LiveSlo {
+  ruleId: string;
+  name: string;
+  objectivePercent: number;
+  windowDays: number;
+  latencyMs?: number;
+  routes: LiveSloRoute[];
+  // The lowest route's budget left over time: at each point, the share of
+  // today's budget not yet spent by then, so it only falls. null before
+  // the counts begin.
+  burndown: ChartPoint[];
+}
+
+export interface LiveSloRoute {
+  method: string;
+  route: string;
+  // Requests counted over the SLO window: a budget on a few dozen swings
+  // far below 0 on one bad request.
+  requests: number;
+  budgetLeftPercent: number;
+  burn1h: number;
+  burn6h: number;
+  // A burn alert firing on it now.
+  alert?: "fast" | "slow";
 }
 
 export interface LiveIncident {
@@ -90,6 +122,8 @@ export interface LiveSnapshot {
   // Limits from the enabled watch rules, drawn on the charts.
   limits: { p95Ms?: number; errorPercent?: number; poolMax?: number };
   routes: LiveRoute[];
+  // The enabled SLO rules' budgets; empty when there are none.
+  slos: LiveSlo[];
   incidents: LiveIncident[];
   requests: LiveRequest[];
   logs: LiveLog[];

@@ -1,5 +1,6 @@
 import { CheckIcon, XIcon } from "lucide-react";
 import { ResultChip } from "@/components/ui/badge";
+import { burnText } from "@/lib/slo/model";
 import { formatDuration } from "./format";
 import { lowerIsWorse } from "./metric-labels";
 
@@ -41,8 +42,9 @@ export function HttpStatusBadge({ status, latencyMs }: { status: number; latency
   );
 }
 
+// A burn rate keeps its tenths ("14.4×"): rounded, an SLO's limit reads 14.
 const metricValue = (n: number, unit: string) =>
-  unit === "ratio" ? `${Math.round(n * 100)}%` : `${Math.round(n)} ${unit}`;
+  unit === "ratio" ? `${Math.round(n * 100)}%` : unit === "×" ? burnText(n) : `${Math.round(n)} ${unit}`;
 
 // An alert's measured value against its limit: the value as a chip, red
 // when past the limit (over it, or under it for a metric where less is

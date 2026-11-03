@@ -196,8 +196,8 @@ function RuleRows({
   );
 }
 
-// With every rule deleted, the way back: write one, or put back API latency,
-// Page latency and Server errors. Restoring only happens here, where there's
+// With every rule deleted, the way back: write one, or put back the API SLO,
+// API latency (paused), Page latency and Server errors. Restoring only happens here, where there's
 // nothing for it to overwrite, so it needs no confirm; a rule edited into a
 // bad state is fixed on its own Edit page, not by resetting them all.
 function NoRules({ onRestore }: { onRestore: (rules: WatchRule[]) => void }) {

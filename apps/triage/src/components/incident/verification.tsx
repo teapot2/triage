@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { formatPercent, formatTime } from "./format";
 import { metricLabel } from "./metric-labels";
 import { errorMessage } from "@/lib/errors";
+import { burnText } from "@/lib/slo/model";
 
 // Checking that the fix worked: after the alert's metric recovers, Triage
 // watches it for a quiet window and resolves the incident, or reopens it on
@@ -47,7 +48,8 @@ export function quietMinutes(v: Verification): number {
   return Math.min(v.windowMinutes, v.series.filter((p) => p.value < v.threshold).length);
 }
 
-const formatValue = (value: number, unit: string) => (unit === "ratio" ? formatPercent(value) : `${Math.round(value)} ${unit}`);
+const formatValue = (value: number, unit: string) =>
+  unit === "ratio" ? formatPercent(value) : unit === "×" ? burnText(value) : `${Math.round(value)} ${unit}`;
 const hhmm = (iso: string) => formatTime(iso).slice(0, 5);
 
 // What the menu offers now; each matches what the route would take.

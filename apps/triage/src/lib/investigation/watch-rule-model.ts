@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { burnText, LATENCY_BUCKETS, SLO_WINDOW_DAYS, sloText } from "../slo/model";
 
 // The watch rule model: what a rule is, the defaults, and how one reads in
 // words. A rule over several routes judges each route on its own, so one
@@ -19,6 +20,17 @@ export const conditionSchema = z.discriminatedUnion("metric", [
   z.object({ metric: z.literal("slowShare"), slowerThanMs: ms, moreThanPercent: percent }),
   // The share of requests that failed: a 5xx, or an error on the span.
   z.object({ metric: z.literal("errorRate"), moreThanPercent: percent }),
+  // An SLO: objectivePercent of requests good over windowDays, good being
+  // didn't fail and, with latencyMs, took at most that long. It opens an
+  // incident on how fast the error budget burns (slo/model's burnAlerts),
+  // so the rule's windowSeconds and checksToOpen don't apply; minRequests
+  // does, to the alert's long window.
+  z.object({
+    metric: z.literal("slo"),
+    objectivePercent: z.number().min(50).max(99.999),
+    windowDays: z.union(SLO_WINDOW_DAYS.map((d) => z.literal(d))),
+    latencyMs: z.union(LATENCY_BUCKETS.map((ms) => z.literal(ms))).optional(),
+  }),
 ]);
 export type WatchCondition = z.infer<typeof conditionSchema>;
 
@@ -64,6 +76,7 @@ export const metricOptions: { value: WatchCondition["metric"]; label: string }[]
   { value: "slowCount", label: "Slow requests, counted" },
   { value: "slowShare", label: "Slow requests, as a share" },
   { value: "errorRate", label: "Error rate" },
+  { value: "slo", label: "Error budget (SLO)" },
 ];
 
 export const rulesSchema = z
@@ -71,13 +84,30 @@ export const rulesSchema = z
   .max(50)
   .refine((rules) => new Set(rules.map((r) => r.id)).size === rules.length, "rule ids must be unique");
 
-// API latency is the check the watch always made, now on every API route;
-// pages get a looser, count-based limit; errors are judged everywhere.
+// The API is held to an SLO: it pages on how fast its error budget burns,
+// not on a fixed limit (slo/model). 99.9% leaves the fast alert under a
+// minute behind a full outage, and minRequests 100 keeps one slow request
+// (a dev server compiling a route on its first visit) from paging while the
+// hour's counts are still thin. API latency, the check the watch always
+// made, stays as an example, paused: it would page on the same outages.
+// Pages get a looser, count-based limit; errors are judged everywhere,
+// within seconds, ahead of the SLO's minute.
 export const defaultRules: WatchRule[] = [
+  {
+    id: "api-slo",
+    name: "API SLO",
+    enabled: true,
+    target: { kind: "api" },
+    condition: { metric: "slo", objectivePercent: 99.9, windowDays: 30, latencyMs: 500 },
+    windowSeconds: 60,
+    checksToOpen: 1,
+    minRequests: 100,
+    severity: "sev2",
+  },
   {
     id: "api-latency",
     name: "API latency",
-    enabled: true,
+    enabled: false,
     target: { kind: "api" },
     condition: { metric: "p95", aboveMs: 500 },
     windowSeconds: 60,
@@ -137,6 +167,8 @@ export function conditionText(c: WatchCondition): string {
       return `more than ${c.moreThanPercent}% of requests slower than ${c.slowerThanMs} ms`;
     case "errorRate":
       return `error rate over ${c.moreThanPercent}%`;
+    case "slo":
+      return sloText(c);
   }
 }
 
@@ -146,7 +178,8 @@ export const describeRule = (r: WatchRule) => `${conditionText(r.condition)} on 
 
 // An incident's title when this rule trips on a route, e.g. "p95 latency
 // above 500 ms on GET /api/products/[id]", the title the watch always used.
-export function tripTitle(r: WatchRule, method: string, route: string): string {
+// An SLO's says how fast its budget was burning, when that's known.
+export function tripTitle(r: WatchRule, method: string, route: string, burn?: number): string {
   const where = `on ${method} ${route}`;
   const c = r.condition;
   switch (c.metric) {
@@ -158,17 +191,26 @@ export function tripTitle(r: WatchRule, method: string, route: string): string {
       return `More than ${c.moreThanPercent}% of requests slower than ${c.slowerThanMs} ms ${where}`;
     case "errorRate":
       return `Error rate above ${c.moreThanPercent}% ${where}`;
+    case "slo":
+      return `Error budget burning ${burn === undefined ? "fast" : burnText(burn)} ${where}`;
   }
 }
 
 // The series an incident from this rule charts, and the limit drawn on it:
-// the route's p95 against the latency limit, or its error ratio against the
-// error limit.
-export function tripMetric(r: WatchRule, route: string): { metric: string; threshold: number } {
+// the route's p95 against the latency limit, its error ratio against the
+// error limit, or for an SLO its budget's burn rate over the last 5 minutes
+// against the burn rate that fired (`burnThreshold`).
+export function tripMetric(r: WatchRule, route: string, burnThreshold?: number): { metric: string; threshold: number } {
   const c = r.condition;
   if (c.metric === "errorRate") return { metric: `http.server.error_ratio{route=${route}}`, threshold: c.moreThanPercent / 100 };
+  if (c.metric === "slo") return { metric: burnMetric(route, c.objectivePercent, c.latencyMs), threshold: burnThreshold ?? 1 };
   return {
     metric: `http.server.request.duration.p95{route=${route}}`,
     threshold: c.metric === "p95" ? c.aboveMs : c.slowerThanMs,
   };
 }
+
+// The name of a route's burn-rate series for an SLO, read back by the live
+// source (live-source's burnSeries), so it carries all that's needed.
+export const burnMetric = (route: string, objectivePercent: number, latencyMs?: number) =>
+  `slo.burn_rate{route=${route},objective=${objectivePercent}${latencyMs === undefined ? "" : `,le=${latencyMs}`}}`;

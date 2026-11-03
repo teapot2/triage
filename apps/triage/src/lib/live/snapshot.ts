@@ -1,10 +1,13 @@
 import { p95, requestSamples } from "@/lib/investigation/live/live-source";
-import { type LogRow, type MetricRow, readTelemetry, type SpanRow } from "@/lib/investigation/live/otlp-files";
+import { type LogRow, type MetricRow, readTelemetry, RETENTION_MS, type SpanRow } from "@/lib/investigation/live/otlp-files";
 import type { IncidentSummary } from "@/lib/investigation/list-summary";
 import type { ChartPoint } from "@/lib/investigation/schema";
 import { listIncidentSummaries } from "@/lib/investigation/store";
+import { isWatched } from "@/lib/investigation/watch-judge";
 import { matchesTarget, readRules, type WatchRule } from "@/lib/investigation/watch-rules";
-import { type LiveRoute, type LiveSnapshot, type LiveWindow, liveService, liveWindows } from "./types";
+import { sloBudgets } from "@/lib/slo/budget";
+import { liveCounts, rolledThrough, routesSince } from "@/lib/slo/rollups";
+import { type LiveRoute, type LiveSlo, type LiveSnapshot, type LiveWindow, liveService, liveWindows } from "./types";
 
 // A service's last few minutes for the live page, summarized here so the
 // browser gets a few hundred numbers per poll rather than raw spans. Reads
@@ -30,12 +33,20 @@ function p95Limit(rules: WatchRule[], route: string): number | undefined {
   return rule?.condition.metric === "p95" ? rule.condition.aboveMs : undefined;
 }
 
+// The lowest budget left among the SLOs covering a route, if any do.
+function budgetOf(slos: LiveSlo[], route: string): Pick<LiveRoute, "budgetLeftPercent"> {
+  const left = slos.flatMap((s) => s.routes.filter((r) => r.route === route).map((r) => r.budgetLeftPercent));
+  return left.length ? { budgetLeftPercent: Math.min(...left) } : {};
+}
+
 export interface SnapshotInput {
   spans: SpanRow[];
   logs: LogRow[];
   metrics: MetricRow[];
   rules: WatchRule[];
   incidents: Pick<IncidentSummary, "id" | "title" | "service" | "detectedAt" | "trigger">[];
+  // The SLO rules' budgets (sloSnapshot), when the service has any.
+  slos?: LiveSlo[];
 }
 
 // Snapshots computed in the last CACHE_MS, per service and window: several
@@ -52,12 +63,37 @@ export function liveSnapshot(service: string, window: LiveWindow): Promise<LiveS
   for (const [k, v] of cache) if (Date.now() - v.at >= CACHE_MS) cache.delete(k);
   const snapshot = (async () => {
     const [telemetry, rules, incidents] = await Promise.all([readTelemetry(), readRules(), listIncidentSummaries({ service })]);
-    return summarize({ ...telemetry, rules, incidents }, service, window, Date.now());
+    const slos = service === liveService ? await sloSnapshot(telemetry.spans, rules) : [];
+    return summarize({ ...telemetry, rules, incidents, slos }, service, window, Date.now());
   })();
   cache.set(key, { at: Date.now(), snapshot });
   // A failure isn't kept: the next poll tries again.
   snapshot.catch(() => cache.delete(key));
   return snapshot;
+}
+
+// The SLO budgets, read from the request counts, for SLO_CACHE_MS: they
+// reach back days and barely move between polls.
+const SLO_CACHE_MS = 10_000;
+let sloCache: { at: number; key: string; slos: LiveSlo[] } | undefined;
+
+async function sloSnapshot(spans: SpanRow[], rules: WatchRule[]): Promise<LiveSlo[]> {
+  const slos = rules.filter((r) => r.enabled && r.condition.metric === "slo");
+  if (!slos.length) return [];
+  const now = Date.now();
+  const key = JSON.stringify(slos);
+  if (sloCache && sloCache.key === key && now - sloCache.at < SLO_CACHE_MS) return sloCache.slos;
+  // The requests since the counts were last written, or all in the
+  // telemetry before any are, as the watch reads them.
+  const through = rolledThrough();
+  const samples = requestSamples(spans, (through ?? now - RETENTION_MS) - 1, now).filter(isWatched);
+  const days = Math.max(...slos.map((r) => (r.condition.metric === "slo" ? r.condition.windowDays : 0)));
+  const methods = new Map(routesSince(liveService, now - days * 24 * 3_600_000).map((r) => [r.route, r.method]));
+  for (const s of samples) if (s.service === liveService) methods.set(s.route, s.method);
+  const routes = [...methods].map(([route, method]) => ({ route, method }));
+  const budgets = sloBudgets(slos, routes, liveCounts(liveService, samples, through), now);
+  sloCache = { at: now, key, slos: budgets };
+  return budgets;
 }
 
 // The snapshot itself, from rows already read: no I/O, so it's tested
@@ -114,6 +150,7 @@ export function summarize(input: SnapshotInput, service: string, window: LiveWin
         p95Ms: Math.round(p95(list.map((r) => r.durationMs))),
         errorPercent: round((list.filter((r) => r.failed).length / list.length) * 100),
         limitMs: p95Limit(rules, route),
+        ...budgetOf(input.slos ?? [], route),
       };
     })
     .sort((a, b) => b.requests - a.requests);
@@ -176,6 +213,7 @@ export function summarize(input: SnapshotInput, service: string, window: LiveWin
       poolMax,
     },
     routes,
+    slos: input.slos ?? [],
     // Incidents opened on this service in the window, oldest first, to mark
     // on the charts.
     incidents: own(input.incidents)

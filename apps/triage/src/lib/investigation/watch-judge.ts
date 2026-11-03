@@ -1,4 +1,5 @@
 import { p95, type RequestSample } from "./live/live-source";
+import type { Incident } from "./schema";
 import { matchesTarget, type WatchCondition, type WatchRule } from "./watch-rule-model";
 
 // How the watch judges a rule: shared by the live watch (watch.ts) and the
@@ -15,8 +16,9 @@ export const isWatched = (s: RequestSample) => !ignoredRoutes.has(s.route) && s.
 
 type Judgment = { verdict: "idle" | "ok" | "breach"; value: number; limit: number };
 
-// One route's requests against one condition.
-function judge(c: WatchCondition, rows: RequestSample[], minRequests: number): Judgment {
+// One route's requests against one condition. SLOs are judged on their
+// budget instead (slo/judge.ts).
+function judge(c: Exclude<WatchCondition, { metric: "slo" }>, rows: RequestSample[], minRequests: number): Judgment {
   const n = rows.length;
   const slowShare = (ms: number) => (rows.filter((r) => r.durationMs > ms).length / n) * 100;
   let value: number;
@@ -40,7 +42,7 @@ function judge(c: WatchCondition, rows: RequestSample[], minRequests: number): J
   return { verdict: !enough ? "idle" : value > limit ? "breach" : "ok", value, limit };
 }
 
-function summarize(c: WatchCondition, value: number, route: string): string {
+function summarize(c: Exclude<WatchCondition, { metric: "slo" }>, value: number, route: string): string {
   const v = Math.round(value);
   switch (c.metric) {
     case "p95":
@@ -64,8 +66,14 @@ export type RuleResult = {
   // Checks in a row over the limit, on its worst route.
   checks?: number;
   // Set when the rule has been over its limit on a route long enough to open.
-  trip?: { route: string; method: string };
+  // An SLO's says how fast its budget was burning, and the severity when it
+  // isn't the rule's (a slow burn).
+  trip?: { route: string; method: string; severity?: WatchRule["severity"]; burn?: TripBurn };
+  // An SLO's: what's left of its budget on its worst route.
+  budgetLeftPercent?: number;
 };
+
+export type TripBurn = NonNullable<Incident["trigger"]["burn"]>;
 
 // Judges a rule at `now` on each route it covers, advancing that route's
 // streak in `streaks` (keyed "rule|route"). A route without enough requests
@@ -77,6 +85,8 @@ export function evaluateRule(
   streaks: Map<string, number>,
 ): RuleResult {
   if (!rule.enabled) return { status: "paused" };
+  const condition = rule.condition;
+  if (condition.metric === "slo") return { status: "idle" };
   const byRoute = new Map<string, RequestSample[]>();
   for (const s of samples) {
     if (s.start <= now - rule.windowSeconds * 1000 || s.start > now || !matchesTarget(rule.target, s.route)) continue;
@@ -90,7 +100,7 @@ export function evaluateRule(
   let checks = 0;
   let trip: RuleResult["trip"];
   for (const [route, rows] of byRoute) {
-    const j = judge(rule.condition, rows, rule.minRequests);
+    const j = judge(condition, rows, rule.minRequests);
     if (j.verdict === "idle") continue;
     const key = `${rule.id}|${route}`;
     if (j.verdict === "ok") {
@@ -106,7 +116,7 @@ export function evaluateRule(
   }
   return {
     status: checks > 0 ? "breaching" : anyOk ? "ok" : "idle",
-    summary: worst && summarize(rule.condition, worst.j.value, worst.route),
+    summary: worst && summarize(condition, worst.j.value, worst.route),
     checks: checks || undefined,
     trip,
   };
@@ -127,25 +137,45 @@ export type Backtest = {
 };
 
 // Replays the watch's checks for one rule over past requests, every CHECK_MS
-// from `from` to `to`, with the live watch's streaks and episodes: once it
-// fires it stays quiet until HEALTHY_TO_REARM healthy checks. It judges the
-// rule on its own, as if it were the only one. `samples` must be sorted by
-// start.
+// from `from` to `to`, with the live watch's streaks and episodes (replay).
+// It judges the rule on its own, as if it were the only one. `samples` must
+// be sorted by start.
 export function backtestRule(rule: WatchRule, samples: RequestSample[], from: number, to: number): Backtest {
   const live = { ...rule, enabled: true };
   const windowMs = rule.windowSeconds * 1000;
   const streaks = new Map<string, number>();
+  // The window slides forward with the checks: samples[lo, hi) are in it.
+  let lo = 0;
+  let hi = 0;
+  const result = replay(
+    from,
+    to,
+    (t) => {
+      while (hi < samples.length && samples[hi].start <= t) hi++;
+      while (lo < hi && samples[lo].start <= t - windowMs) lo++;
+      return evaluateRule(live, samples.slice(lo, hi), t, streaks);
+    },
+    () => streaks.clear(),
+  );
+  return { ...result, dataFrom: dataFrom(from, samples.find((s) => s.start > from)?.start) };
+}
+
+// The watch's checks replayed every CHECK_MS from `from` to `to` with its
+// episodes: once a check trips it stays quiet until HEALTHY_TO_REARM healthy
+// checks, then `rearm` runs. `check` judges the rule as of a time, and is
+// called with each in order. Shared with the SLO backtest (slo/backtest).
+export function replay(
+  from: number,
+  to: number,
+  check: (t: number) => RuleResult,
+  rearm?: () => void,
+): Omit<Backtest, "dataFrom"> {
   const fired: Backtest["fired"] = [];
   let [checks, judged, breaching] = [0, 0, 0];
   let alerting = false;
   let healthy = 0;
-  // The window slides forward with the checks: samples[lo, hi) are in it.
-  let lo = 0;
-  let hi = 0;
   for (let t = from + CHECK_MS; t <= to; t += CHECK_MS) {
-    while (hi < samples.length && samples[hi].start <= t) hi++;
-    while (lo < hi && samples[lo].start <= t - windowMs) lo++;
-    const r = evaluateRule(live, samples.slice(lo, hi), t, streaks);
+    const r = check(t);
     checks++;
     if (r.status !== "idle") judged++;
     if (r.status === "breaching") breaching++;
@@ -154,7 +184,7 @@ export function backtestRule(rule: WatchRule, samples: RequestSample[], from: nu
       if (healthy >= HEALTHY_TO_REARM) {
         alerting = false;
         healthy = 0;
-        streaks.clear();
+        rearm?.();
       }
     } else if (r.trip) {
       fired.push({ at: new Date(t).toISOString(), route: r.trip.route, summary: r.summary });
@@ -162,14 +192,10 @@ export function backtestRule(rule: WatchRule, samples: RequestSample[], from: nu
       healthy = 0;
     }
   }
-  const oldest = samples.find((s) => s.start > from)?.start;
-  return {
-    fired,
-    checks,
-    judged,
-    breaching,
-    from: new Date(from).toISOString(),
-    to: new Date(to).toISOString(),
-    dataFrom: oldest !== undefined && oldest - from > 5 * 60_000 ? new Date(oldest).toISOString() : undefined,
-  };
+  return { fired, checks, judged, breaching, from: new Date(from).toISOString(), to: new Date(to).toISOString() };
 }
+
+// The oldest data in range, when it's well after `from`: the history doesn't
+// reach back that far.
+export const dataFrom = (from: number, oldest: number | undefined) =>
+  oldest !== undefined && oldest - from > 5 * 60_000 ? new Date(oldest).toISOString() : undefined;

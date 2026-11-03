@@ -9,6 +9,8 @@ const known: Record<string, string> = {
   "http.server.duration": "latency",
   "http.server.request.rate": "Request rate",
   "http.server.error_ratio": "Error rate",
+  // An SLO's; its {objective=…} and {le=…} labels are left off.
+  "slo.burn_rate": "Error budget burn",
   "db.client.connection.count": "DB pool connections",
   "db.client.connection.pending_requests": "Requests waiting for a DB connection",
   "postgresql.backends": "Postgres backends",
