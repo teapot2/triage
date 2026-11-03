@@ -14,6 +14,10 @@ export async function register() {
     if (process.env.TRIAGE_WATCH !== "0") {
       const { startWatch } = await import("./lib/investigation/watch");
       startWatch();
+      // The request counts SLOs are judged on; the sidebar's pause doesn't
+      // stop them.
+      const { startRollups } = await import("./lib/slo/rollups");
+      startRollups();
     }
 
     // The Slack bot's Socket Mode client, for button clicks in Slack. Stays
