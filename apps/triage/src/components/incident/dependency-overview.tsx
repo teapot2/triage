@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightIcon, CheckIcon, CircleIcon, LoaderCircleIcon, ShieldAlertIcon, TriangleAlertIcon, WrenchIcon } from "lucide-react";
+import { ArrowRightIcon, LoaderCircleIcon, ShieldAlertIcon, WrenchIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Timestamp } from "@/components/timestamp";
 import { StatusBadge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { AdvisoryCard } from "./dependency-card";
 import { exposureLabels } from "./diagnosis-panel";
 import { Citations } from "./evidence";
 import { FixProgress, FixProof } from "./fix-panel";
+import { type Step, StepList } from "./progress-steps";
 import { VerificationLine } from "./verification";
 
 // A dependency incident's Overview, in the order its reader asks: what is
@@ -109,12 +110,6 @@ function ExposureBadge({ exposure }: { exposure: Exposure }) {
   );
 }
 
-// done: finished. current: Triage is working on it. waiting: a person has
-// to act (approve, merge). failed: it stopped short. todo: not reached yet.
-type StepState = "done" | "current" | "waiting" | "failed" | "todo";
-
-type Step = { title: string; state: StepState; summary?: ReactNode; detail?: ReactNode };
-
 const prNumber = (url: string) => url.match(/\/pull\/(\d+)/)?.[1];
 
 // The fix as three steps: the bump, its PR, and the audit that confirms it.
@@ -137,33 +132,9 @@ function ProgressCard({
         <WrenchIcon className="size-3.5" aria-hidden />
         Fix
       </span>
-      <ol className="flex flex-col gap-3">
-        {steps.map((s) => (
-          <li key={s.title} className="flex gap-2.5">
-            <StepIcon state={s.state} />
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <p className={cn("text-sm", s.state === "todo" && "text-muted-foreground")}>
-                <span className="font-medium">{s.title}</span>
-                {s.summary && <span className="text-muted-foreground"> · {s.summary}</span>}
-              </p>
-              {s.detail}
-            </div>
-          </li>
-        ))}
-      </ol>
+      <StepList steps={steps} />
     </section>
   );
-}
-
-function StepIcon({ state }: { state: StepState }) {
-  const base = "mt-0.5 size-4 shrink-0";
-  if (state === "done") return <CheckIcon className={cn(base, "text-success")} aria-label="Done" />;
-  if (state === "current") {
-    return <LoaderCircleIcon className={cn(base, "animate-spin text-muted-foreground motion-reduce:animate-none")} aria-label="In progress" />;
-  }
-  if (state === "failed") return <TriangleAlertIcon className={cn(base, "text-warning")} aria-label="Stopped" />;
-  if (state === "waiting") return <CircleIcon className={cn(base, "fill-primary text-primary")} aria-label="Waiting on a person" />;
-  return <CircleIcon className={cn(base, "text-muted-foreground/50")} aria-label="Not yet" />;
 }
 
 function progressSteps(incident: Incident, advisory: DependencyAdvisory, onSection: (id: "fix") => void): Step[] | undefined {

@@ -208,7 +208,10 @@ export function IncidentReport({
             <ChartLineIcon className="size-3.5" />
             {metricLabel(trigger.metric)}
           </span>
-          <MetricBadges metric={trigger.metric} observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
+          {/* The chip is a little taller than the label: kept from pushing it down. */}
+          <span className="-my-px">
+            <MetricBadges metric={trigger.metric} observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
+          </span>
         </div>
         <MetricChart
           series={chartSeries(incident, markers)}

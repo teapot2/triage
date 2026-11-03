@@ -1,18 +1,8 @@
 "use client";
 
-import {
-  ChevronDownIcon,
-  LoaderCircleIcon,
-  type LucideIcon,
-  RotateCcwIcon,
-  ShieldAlertIcon,
-  ShieldCheckIcon,
-  ShieldIcon,
-  ShieldXIcon,
-  XIcon,
-} from "lucide-react";
+import { ChevronDownIcon, RotateCcwIcon, ShieldIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { useRegisterCommands } from "@/components/command-registry";
 import {
@@ -29,14 +19,15 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { isArchived } from "@/lib/investigation/archive";
+import { withUnit } from "@/lib/investigation/postmortem/timeline";
 import type { Incident, Mitigation } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent, formatTime } from "./format";
 import { THIS_INCIDENT } from "./incident-commands";
 import type { ChartMarker } from "./metric-chart";
-import { metricLabel } from "./metric-labels";
-import { VerificationLine } from "./verification";
+import { type Step, StepList } from "./progress-steps";
+import { quietMinutes, VerificationLine } from "./verification";
 import { errorMessage } from "@/lib/errors";
 
 type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
@@ -133,51 +124,57 @@ export function MitigationCard({ incident, readOnly = false, className }: { inci
   const decided = useChangedSinceMount(state);
   const land = decided && "animate-in fade-in-0 duration-200 ease-out motion-reduce:animate-none";
   const recovery = state === "applied" ? mitigation.recovery : undefined;
-  const status = mitigationStatus(state, mitigation, incident, { readOnly, error });
 
   return (
-    // Closed, the card is the action, where it stands, and the decision;
-    // why, the steps and the undo open under Details. Approving shows the
-    // steps again in its dialog, so they're never approved unseen.
+    // Closed, the card is the action and where it stands: while proposed,
+    // what approving means and the decision; once approved, its steps
+    // (applied, recovered, verified), the way a dependency incident's Fix
+    // card reads. Why, the steps it runs and the undo open under Details.
+    // Approving shows the steps again in its dialog, so they're never
+    // approved unseen.
     <Collapsible className={cn("rounded-lg border", className)}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 p-4">
-        <status.Icon className={cn("mt-0.5 size-4 shrink-0 self-start", status.iconClass)} aria-hidden />
-        <div className="min-w-0 flex-1 basis-56">
-          <p className="font-medium text-sm">
-            <span className="sr-only">Mitigation: </span>
-            {mitigation.title}
-          </p>
-          <p className={cn("text-muted-foreground text-xs", land)}>{status.line}</p>
-        </div>
-        <div className="ml-auto flex items-center gap-1">
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="group text-muted-foreground">
-              Details
-              <ChevronDownIcon className="transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none" />
-            </Button>
-          </CollapsibleTrigger>
-          {state === "proposed" && !locked && (
-            <>
-              <Button variant="ghost" size="sm" onClick={() => void decide("denied")}>
-                Deny
+      <div className="flex flex-col gap-1 p-4">
+        {/* The label row is as tall as the label, as on the other cards:
+            the buttons beside it hang into the padding rather than push
+            the label down. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+            <ShieldIcon className="size-3.5" aria-hidden />
+            Mitigation
+          </span>
+          <div className="-my-2 ml-auto flex items-center gap-1">
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="group text-muted-foreground">
+                Details
+                <ChevronDownIcon className="transition-transform group-data-[state=open]:rotate-180 motion-reduce:transition-none" />
               </Button>
-              <Button size="sm" onClick={() => setConfirming(true)}>
-                Approve
+            </CollapsibleTrigger>
+            {state === "proposed" && !locked && (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => void decide("denied")}>
+                  Deny
+                </Button>
+                <Button size="sm" onClick={() => setConfirming(true)}>
+                  Approve
+                </Button>
+              </>
+            )}
+            {state === "failed" && !locked && (
+              <Button variant="outline" size="sm" onClick={() => void decide("approved")}>
+                <RotateCcwIcon />
+                Retry
               </Button>
-            </>
-          )}
-          {state === "failed" && !locked && (
-            <Button variant="outline" size="sm" onClick={() => void decide("approved")}>
-              <RotateCcwIcon />
-              Retry
-            </Button>
-          )}
-        </div>
-        {mitigation.state === "applied" && incident.verification && (
-          <div className="basis-full pl-7">
-            <VerificationLine incident={incident} verification={incident.verification} />
+            )}
           </div>
-        )}
+        </div>
+        <p className="font-medium text-sm">{mitigation.title}</p>
+        <div className={cn("pt-1", land)}>
+          {state === "proposed" || state === "denied" ? (
+            <p className="text-muted-foreground text-xs">{decisionLine(state, mitigation, { readOnly, error })}</p>
+          ) : (
+            <StepList steps={mitigationSteps(state, mitigation, incident, error)} />
+          )}
+        </div>
       </div>
 
       <CollapsibleContent>
@@ -239,79 +236,77 @@ export function MitigationCard({ incident, readOnly = false, className }: { inci
   );
 }
 
-// The card's icon and the line under its title, for where the mitigation
-// stands: what approving means while it's proposed, then its progress, and
-// once applied, whether the alert's metric came back.
-function mitigationStatus(
-  state: Mitigation["state"],
+// The line under the title before anything runs: what approving means
+// while it's proposed, or that nothing was changed once denied.
+function decisionLine(
+  state: "proposed" | "denied",
   mitigation: Mitigation,
-  incident: Incident,
   { readOnly, error }: { readOnly: boolean; error: string | null },
-): { Icon: LucideIcon; iconClass?: string; line: React.ReactNode } {
-  const applied = mitigation.appliedAt ? `Applied ${formatTime(mitigation.appliedAt)}` : "Applied";
-  switch (state) {
-    case "proposed": {
-      const n = mitigation.steps.length;
-      const facts = `${n} ${n === 1 ? "step" : "steps"} · ${mitigation.risk.replace(/_/g, " ")} risk · reversible`;
-      if (error) return { Icon: ShieldIcon, iconClass: "text-muted-foreground", line: <span className="text-destructive">{error}</span> };
-      return { Icon: ShieldIcon, iconClass: "text-muted-foreground", line: readOnly ? `${facts} · use the run to approve it` : facts };
-    }
-    case "approved":
-    case "running":
-      return { Icon: LoaderCircleIcon, iconClass: "animate-spin text-muted-foreground", line: `Applying on ${incident.service}` };
-    case "failed":
-      return {
-        Icon: ShieldAlertIcon,
-        iconClass: "text-destructive",
-        line: <span className="text-destructive">{error ?? mitigation.error ?? "The mitigation failed"}</span>,
-      };
-    case "denied":
-      return { Icon: ShieldXIcon, iconClass: "text-muted-foreground", line: "Denied · nothing was changed" };
-    case "applied":
-      break;
+): ReactNode {
+  if (state === "denied") return "Denied · nothing was changed";
+  if (error) return <span className="text-destructive">{error}</span>;
+  const n = mitigation.steps.length;
+  const facts = `${n} ${n === 1 ? "step" : "steps"} · ${mitigation.risk.replace(/_/g, " ")} risk · reversible`;
+  return readOnly ? `${facts} · use the run to approve it` : facts;
+}
+
+// "02:06": to the minute, as the chart's axis reads.
+const hhmm = (iso: string) => formatTime(iso).slice(0, 5);
+
+// Once approved, where it stands in three steps: applying it, the alert's
+// metric coming back under its limit, and the quiet window that resolves
+// the incident. The metric is the chart's, just below, so each step gives
+// only its value and its time.
+function mitigationSteps(state: Mitigation["state"], mitigation: Mitigation, incident: Incident, error: string | null): Step[] {
+  const { unit } = incident.trigger;
+  const value = (n: number) => (unit === "ratio" ? formatPercent(n) : withUnit(Math.round(n), unit));
+
+  // 1. Applying it on the service.
+  let apply: Step;
+  if (state === "failed") {
+    apply = { title: "Not applied", state: "failed", summary: error ?? mitigation.error ?? "the mitigation failed" };
+  } else if (state === "applied") {
+    apply = { title: "Applied", state: "done", summary: mitigation.appliedAt && hhmm(mitigation.appliedAt) };
+  } else {
+    apply = { title: "Applying", state: "current", summary: `on ${incident.service}` };
   }
-  const recovery = mitigation.recovery;
-  const label = recovery && metricLabel(recovery.metric);
-  if (recovery?.status === "watching") {
+
+  // 2. The alert's metric back under its limit, as the recovery watch saw it.
+  const recovery = state === "applied" ? mitigation.recovery : undefined;
+  let recover: Step;
+  if (recovery?.status === "recovered") {
+    const last = recovery.series.at(-1)?.value;
+    const back = last === undefined ? "back under the limit" : `back to ${value(last)}`;
+    recover = { title: "Recovered", state: "done", summary: recovery.recoveredAt ? `${back} at ${hhmm(recovery.recoveredAt)}` : back };
+  } else if (recovery?.status === "watching") {
     let under = 0;
     while (under < recovery.series.length && recovery.series.at(-1 - under)!.value < recovery.threshold) under++;
-    return {
-      Icon: LoaderCircleIcon,
-      iconClass: "animate-spin text-muted-foreground",
-      line: `${applied} · watching ${label} · ${under} min under the limit`,
-    };
-  }
-  if (recovery?.status === "recovered") {
-    const unit = incident.trigger.unit;
-    const last = recovery.series.at(-1)?.value;
-    const value = last === undefined ? undefined : unit === "ratio" ? formatPercent(last) : `${Math.round(last)} ${unit}`;
-    return {
-      Icon: ShieldCheckIcon,
-      iconClass: "text-success",
-      line: (
-        <>
-          {applied} ·{" "}
-          <span className="text-success">
-            Recovered: {label}
-            {value && ` at ${value}`}
-          </span>
-          {recovery.recoveredAt && ` · ${formatTime(recovery.recoveredAt)}`}
-        </>
-      ),
-    };
-  }
-  if (recovery) {
+    recover = { title: "Recovering", state: "current", summary: `${under} min under ${value(recovery.threshold)} so far` };
+  } else if (recovery) {
     // A note means the watch was cut off (a restart), not that it ran its
     // 5 min; the note itself is under Details.
-    return {
-      Icon: ShieldAlertIcon,
-      iconClass: "text-warning",
-      line: (
-        <>
-          {applied} · <span className="text-warning">{recovery.note ? "Recovery watch stopped" : "Not recovered after 5 min"}</span>
-        </>
-      ),
-    };
+    recover = { title: "Not recovered", state: "failed", summary: recovery.note ? "the watch stopped" : "still over the limit after 5 min" };
+  } else {
+    recover = { title: "Recover", state: "todo" };
   }
-  return { Icon: ShieldCheckIcon, iconClass: "text-foreground", line: applied };
+
+  // 3. The quiet window that resolves the incident.
+  const v = state === "applied" ? incident.verification : undefined;
+  let verify: Step;
+  if (v?.status === "resolved") {
+    const at = incident.resolvedAt ?? v.finishedAt;
+    const window = `${quietMinutes(v)} min under ${value(v.threshold)}`;
+    verify = { title: "Verified", state: "done", summary: at ? `${window}, resolved ${hhmm(at)}` : window };
+  } else if (v?.status === "verifying") {
+    verify = { title: "Verifying", state: "current", summary: `${quietMinutes(v)} of ${v.windowMinutes} min under ${value(v.threshold)}` };
+  } else if (v) {
+    // Breached or stopped: the line says why, with Verify again.
+    verify = { title: "Not verified", state: "failed", detail: <VerificationLine incident={incident} verification={v} /> };
+  } else if (incident.status === "resolved") {
+    verify = { title: "Resolved", state: "done", summary: incident.resolvedAt && hhmm(incident.resolvedAt) };
+  } else {
+    verify = { title: "Verify", state: "todo" };
+  }
+
+  return [apply, recover, verify];
 }
