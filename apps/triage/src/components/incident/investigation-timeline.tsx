@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowDownIcon,
   BrainIcon,
   ChartLineIcon,
   ChevronRightIcon,
@@ -25,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { useCountUp } from "@/hooks/use-count-up";
+import { scrollToEnd, useFollowBottom } from "@/hooks/use-follow-bottom";
 import { incidentSubject, investigationTrace, traceRows } from "@/lib/export/datasets/incident";
 import type { InvestigationStep, Run, Thought, ToolName } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
@@ -175,6 +177,23 @@ export function InvestigationTimeline({
   // A fan-out run's lanes; none on a single-agent run, which then shows no
   // labels and no Lane filter.
   const lanes = useMemo(() => laneOptions(steps, thoughts), [steps, thoughts]);
+
+  // While the agent runs, the page follows its newest row, as long as the
+  // reader is at the bottom; scrolling up to read stops it. Not while
+  // searching or filtering, or while a citation's source is brought into
+  // view. The live thought grows as it streams, so its length counts too.
+  const latest = thoughts.at(-1);
+  const progress =
+    steps.length + thoughts.length + (latest?.reasoning?.length ?? 0) + (latest?.text?.length ?? 0);
+  const following = useFollowBottom(noBox, noBox, running && !filtering && !focused ? progress : undefined, true);
+  // Rows added since the reader scrolled away offer a way back down.
+  const [seen, setSeen] = useState(steps.length + thoughts.length);
+  if (following && seen !== steps.length + thoughts.length) setSeen(steps.length + thoughts.length);
+  const behind = running && !filtering && !following && steps.length + thoughts.length > seen;
+  const jumpToLatest = () => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scrollToEnd(null, null, reduce ? "auto" : "smooth");
+  };
 
   // "/" opens search and focuses it, as in Sentry and GitHub.
   useEffect(() => {
@@ -479,9 +498,27 @@ export function InvestigationTimeline({
           </ol>
         )}
       </div>
+      {/* Held at the window's bottom edge while there's more below; no
+          height of its own, so it doesn't move the rows. */}
+      {behind && (
+        <div className="sticky bottom-6 z-10 flex h-0 justify-center">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={jumpToLatest}
+            className="absolute bottom-0 rounded-full shadow-md animate-in fade-in-0 slide-in-from-bottom-1 duration-200 ease-out motion-reduce:animate-none"
+          >
+            <ArrowDownIcon />
+            Jump to latest
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
+
+// No scrolling box: the timeline scrolls with the page.
+const noBox = { current: null };
 
 // Two or more calls known to come from one model call.
 const parallel = (turn: Turn) => turn.together && turn.steps.length > 1;

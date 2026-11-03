@@ -412,7 +412,7 @@ function DeleteDialog({
                 onChange={(e) => setTyped(e.target.value)}
                 inputMode="numeric"
                 autoComplete="off"
-                className="w-24"
+                className="w-full"
               />
             </FormField>
           </>

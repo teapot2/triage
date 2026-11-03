@@ -50,6 +50,7 @@ import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDictation, useDictationSupported } from "@/hooks/use-dictation";
+import { scrollsItself, scrollToEnd, useFollowBottom } from "@/hooks/use-follow-bottom";
 import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shrink";
 import { isArchived } from "@/lib/investigation/archive";
@@ -721,30 +722,6 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   );
 }
 
-// Whether the conversation scrolls in its own box (wide reports) rather
-// than with the page.
-function scrollsItself(thread: HTMLElement | null): thread is HTMLElement {
-  return thread !== null && getComputedStyle(thread).overflowY !== "visible";
-}
-
-// How far the conversation is from its latest message, in pixels.
-function distanceFromEnd(thread: HTMLElement | null): number {
-  if (scrollsItself(thread)) return thread.scrollHeight - thread.scrollTop - thread.clientHeight;
-  return document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
-}
-
-// Scrolls the conversation to its latest message. In its own box the
-// composer is in the window already, unless the window is too short for
-// the box's minimum height; then the page brings it into view.
-function scrollToEnd(thread: HTMLElement | null, composer: HTMLElement | null, behavior: ScrollBehavior = "auto") {
-  if (scrollsItself(thread)) {
-    thread.scrollTo({ top: thread.scrollHeight, behavior });
-    composer?.scrollIntoView({ block: "nearest", behavior });
-  } else {
-    window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
-  }
-}
-
 // Caps the conversation's box at what's left of the window below where it
 // starts on the page, less the page's bottom padding (pb-8), so the page
 // itself has nothing to scroll; 20rem at least, for very short windows.
@@ -788,35 +765,6 @@ function useScrollingFlag(ref: RefObject<HTMLElement | null>, mounted: boolean) 
       clearTimeout(timer);
     };
   }, [ref, mounted]);
-}
-
-// Keeps the conversation at its latest message while `signal` changes, if
-// the reader was there: scrolling up to read stops it, scrolling back down
-// picks it up again. Undefined stops following. `mounted` says the
-// conversation is on screen (it isn't before the first question).
-function useFollowBottom(
-  threadRef: RefObject<HTMLElement | null>,
-  composerRef: RefObject<HTMLElement | null>,
-  signal: number | undefined,
-  mounted: boolean,
-) {
-  const atEnd = useRef(true);
-  useEffect(() => {
-    const thread = threadRef.current;
-    const onScroll = () => {
-      atEnd.current = distanceFromEnd(threadRef.current) < 96;
-    };
-    onScroll();
-    thread?.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      thread?.removeEventListener("scroll", onScroll);
-      window.removeEventListener("scroll", onScroll);
-    };
-  }, [threadRef, mounted]);
-  useLayoutEffect(() => {
-    if (signal !== undefined && atEnd.current) scrollToEnd(threadRef.current, composerRef.current);
-  }, [signal, threadRef, composerRef]);
 }
 
 // Suggested follow-ups after the last answer, as chips above the composer.
