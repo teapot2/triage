@@ -84,13 +84,30 @@ export const rulesSchema = z
   .max(50)
   .refine((rules) => new Set(rules.map((r) => r.id)).size === rules.length, "rule ids must be unique");
 
-// API latency is the check the watch always made, now on every API route;
-// pages get a looser, count-based limit; errors are judged everywhere.
+// The API is held to an SLO: it pages on how fast its error budget burns,
+// not on a fixed limit (slo/model). 99.9% leaves the fast alert under a
+// minute behind a full outage, and minRequests 100 keeps one slow request
+// (a dev server compiling a route on its first visit) from paging while the
+// hour's counts are still thin. API latency, the check the watch always
+// made, stays as an example, paused: it would page on the same outages.
+// Pages get a looser, count-based limit; errors are judged everywhere,
+// within seconds, ahead of the SLO's minute.
 export const defaultRules: WatchRule[] = [
+  {
+    id: "api-slo",
+    name: "API SLO",
+    enabled: true,
+    target: { kind: "api" },
+    condition: { metric: "slo", objectivePercent: 99.9, windowDays: 30, latencyMs: 500 },
+    windowSeconds: 60,
+    checksToOpen: 1,
+    minRequests: 100,
+    severity: "sev2",
+  },
   {
     id: "api-latency",
     name: "API latency",
-    enabled: true,
+    enabled: false,
     target: { kind: "api" },
     condition: { metric: "p95", aboveMs: 500 },
     windowSeconds: 60,
