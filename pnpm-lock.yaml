@@ -229,8 +229,8 @@ importers:
         specifier: ^19.3.1
         version: 19.3.1(react@19.3.1)
       semver:
-        specifier: 7.5.1
-        version: 7.5.1
+        specifier: 7.5.2
+        version: 7.5.2
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
@@ -5423,8 +5423,8 @@ packages:
     resolution: {integrity: sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==}
     hasBin: true
 
-  semver@7.5.1:
-    resolution: {integrity: sha512-Wvss5ivl8TMRZXXESstBA4uR5iXgEN/VC5/sOcuXdVLzcdkz4HWetIoRfG5gb5X+ij/G9rw9YoGn3QoQ8OCSpw==}
+  semver@7.5.2:
+    resolution: {integrity: sha512-SoftuTROv/cRjCze/scjGyiDtcUyxw1rgYQSZY7XTmtR5hX+dm76iDbTH8TkLPHCQmlbQVSSbNZCPM2hb0knnQ==}
     engines: {node: '>=10'}
     hasBin: true
 
@@ -12239,7 +12239,7 @@ snapshots:
 
   semver@6.3.1: {}
 
-  semver@7.5.1:
+  semver@7.5.2:
     dependencies:
       lru-cache: 6.0.0
 
