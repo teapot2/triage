@@ -15,21 +15,23 @@ import { useSearchParams } from "next/navigation";
 import { type ReactNode, useState } from "react";
 import { SectionMenu, selectSection } from "@/components/section-menu";
 import { Button } from "@/components/ui/button";
+import { isArchived } from "@/lib/investigation/archive";
 import { dataChangeOf } from "@/lib/investigation/fix/data-change";
 import type { Incident } from "@/lib/investigation/schema";
 import { providerLabels } from "@/lib/models/labels";
 import { cn } from "@/lib/utils";
 import { chartSeries } from "./chart-series";
 import { citedDeploys, VerdictCard } from "./diagnosis-panel";
+import { DependencyOverview } from "./dependency-overview";
 import { EndpointCard } from "./endpoint-card";
 import { FailedRunNotice } from "./failed-run-notice";
-import { AttemptBadge, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
+import { AttemptBadge, BumpLine, EarlierAttempts, FixProgress, FixProof, FixView } from "./fix-panel";
 import { HypothesesChecked } from "./hypotheses-checked";
 import { incidentSubject } from "./incident-export";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { type ChartMarker, MetricChart } from "./metric-chart";
 import { lowerIsWorse, metricLabel } from "./metric-labels";
-import { MitigationCard, mitigationMarker } from "./mitigation-card";
+import { MitigationCard, mitigationMarker, NoMitigationCard } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
 import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
 import { type Ask, QuestionsPanel } from "./questions-panel";
@@ -90,13 +92,15 @@ export function IncidentReport({
   // incident a beat later).
   const savedQuestions = incident.questions ?? [];
   const answering = savedQuestions.some((q) => q.status === "answering") || ask.live !== undefined;
-  if (report && !readOnly) {
+  // Archived, Ask and Postmortem show only what's already there.
+  const archived = isArchived(incident);
+  if (report && !readOnly && (!archived || savedQuestions.length > 0)) {
     const extra = ask.live && !savedQuestions.some((q) => q.id === ask.live?.id) ? 1 : 0;
     sections.push({ id: "ask", label: "Ask", icon: MessageSquareTextIcon, count: savedQuestions.length + extra });
   }
   // The postmortem, once a report names something wrong.
   const postmortem = incident.postmortem;
-  if (hasPostmortem(incident) && !readOnly) sections.push({ id: "postmortem", label: "Postmortem", icon: FileTextIcon });
+  if (hasPostmortem(incident) && !readOnly && (!archived || postmortem)) sections.push({ id: "postmortem", label: "Postmortem", icon: FileTextIcon });
   const factors = postmortem?.status === "ready" ? (postmortem.contributingFactors?.length ?? 0) : 0;
 
   // The open section lives in the URL (?section=fix), so it can be linked
@@ -117,101 +121,118 @@ export function IncidentReport({
   const busy = (id: SectionId) =>
     (id === "investigation" && running) || (id === "ask" && answering) || (id === "postmortem" && postmortem?.status === "writing");
 
+  // Every incident but a dependency one: the verdict, the mitigation, the
+  // verification, the fix, then the alert. A dependency incident has its
+  // own, shorter Overview (dependency-overview.tsx).
+  const general = () => (
+    <>
+      {report ? (
+        <VerdictCard
+          incident={incident}
+          report={report}
+          unknownEvidenceIds={unknownEvidenceIds}
+          className={arrive || undefined}
+        />
+      ) : (
+        running && (
+          <div className="flex flex-col items-start gap-2">
+            <p className="flex items-center gap-2 text-muted-foreground text-sm">
+              <LoaderCircleIcon className="size-4 animate-spin" />
+              {run?.wakingSince
+                ? `Starting the ${providerLabels[run.provider ?? ""] ?? "model's"} deployment. After it scales to zero, its first start takes a few minutes; the investigation begins once it answers.`
+                : "Investigating. The verdict appears once the report passes validation."}
+            </p>
+            <Button variant="outline" size="sm" onClick={() => setSelected("investigation")}>
+              Watch the investigation <ArrowRightIcon />
+            </Button>
+          </div>
+        )
+      )}
+
+      {factors > 0 && (
+        <button
+          type="button"
+          onClick={() => setSelected("postmortem")}
+          className="-mt-6 flex items-center gap-1.5 self-start text-muted-foreground text-xs transition-colors hover:text-foreground"
+        >
+          <FileTextIcon className="size-3.5" />
+          {factors} contributing {factors === 1 ? "factor" : "factors"} in the postmortem
+          <ArrowRightIcon className="size-3.5" />
+        </button>
+      )}
+
+      {/* A fan-out run's hypotheses, under the verdict they were merged
+          into, or being checked while it runs. */}
+      {run?.fanout && (
+        <HypothesesChecked fanout={run.fanout} lanes={run} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+      )}
+
+      {mitigation && (
+        <MitigationCard incident={incident} readOnly={readOnly} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+      )}
+      {!mitigation && incident.noMitigation && (
+        <NoMitigationCard why={incident.noMitigation.why} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+      )}
+
+      {/* Without an applied mitigation to sit under (after a merged fix,
+          or one asked for by hand), the verification gets its own card. */}
+      {verification && mitigation?.state !== "applied" && (
+        <VerificationCard incident={incident} verification={verification} />
+      )}
+
+      {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
+
+      {fix && (
+        <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-150 fill-mode-backwards"])}>
+          <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+            <WrenchIcon className="size-3.5" />
+            Proposed fix · {fix.risk} risk{dataChangeOf(fix).detected && " · changes stored data"}
+            <AttemptBadge attempts={fixAttempts} />
+          </span>
+          {fix.bump && <BumpLine bump={fix.bump} />}
+          <p className="text-sm leading-relaxed">{fix.summary}</p>
+          <FixProof validation={validation} bump={fix.bump !== undefined} />
+          <Button variant="outline" size="sm" className="mt-1 self-start" onClick={() => setSelected("fix")}>
+            Review the fix <ArrowRightIcon />
+          </Button>
+        </div>
+      )}
+
+      <EndpointCard incident={incident} />
+
+      {/* The alert, as a card like the verdict and fix above it: what fired
+          on the left, how far past its limit on the right. */}
+      <div className="flex flex-col gap-3 rounded-lg border p-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <ChartLineIcon className="size-3.5" />
+            {metricLabel(trigger.metric)}
+          </span>
+          <MetricBadges metric={trigger.metric} observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
+        </div>
+        <MetricChart
+          series={chartSeries(incident, markers)}
+          label={metricLabel(trigger.metric)}
+          unit={trigger.unit}
+          threshold={trigger.threshold}
+          lowerIsWorse={lowerIsWorse(trigger.metric)}
+          markers={markers}
+          exportAs={{ subject: incidentSubject(incident) }}
+        />
+      </div>
+    </>
+  );
+
   const content: Record<SectionId, () => ReactNode> = {
     overview: () => (
       <div className="flex flex-col gap-8">
         {incident.status === "failed" && run?.error && <FailedRunNotice run={{ ...run, error: run.error }} />}
         {reopened && <ReopenedNotice incident={incident} reopening={reopened} />}
-        {report ? (
-          <VerdictCard
-            incident={incident}
-            report={report}
-            unknownEvidenceIds={unknownEvidenceIds}
-            className={arrive || undefined}
-          />
+        {incident.dependency ? (
+          <DependencyOverview incident={incident} advisory={incident.dependency} unknownEvidenceIds={unknownEvidenceIds} onSection={setSelected} />
         ) : (
-          running && (
-            <div className="flex flex-col items-start gap-2">
-              <p className="flex items-center gap-2 text-muted-foreground text-sm">
-                <LoaderCircleIcon className="size-4 animate-spin" />
-                {run?.wakingSince
-                  ? `Starting the ${providerLabels[run.provider ?? ""] ?? "model's"} deployment. After it scales to zero, its first start takes a few minutes; the investigation begins once it answers.`
-                  : "Investigating. The verdict appears once the report passes validation."}
-              </p>
-              <Button variant="outline" size="sm" onClick={() => setSelected("investigation")}>
-                Watch the investigation <ArrowRightIcon />
-              </Button>
-            </div>
-          )
+          general()
         )}
-
-        {factors > 0 && (
-          <button
-            type="button"
-            onClick={() => setSelected("postmortem")}
-            className="-mt-6 flex items-center gap-1.5 self-start text-muted-foreground text-xs transition-colors hover:text-foreground"
-          >
-            <FileTextIcon className="size-3.5" />
-            {factors} contributing {factors === 1 ? "factor" : "factors"} in the postmortem
-            <ArrowRightIcon className="size-3.5" />
-          </button>
-        )}
-
-        {/* A fan-out run's hypotheses, under the verdict they were merged
-            into, or being checked while it runs. */}
-        {run?.fanout && (
-          <HypothesesChecked fanout={run.fanout} lanes={run} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
-        )}
-
-        {mitigation && (
-          <MitigationCard incident={incident} readOnly={readOnly} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
-        )}
-
-        {/* Without an applied mitigation to sit under (after a merged fix,
-            or one asked for by hand), the verification gets its own card. */}
-        {verification && mitigation?.state !== "applied" && (
-          <VerificationCard incident={incident} verification={verification} />
-        )}
-
-        {!fix && incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
-
-        {fix && (
-          <div className={cn("flex flex-col gap-2 rounded-lg border p-4", arrive && [arrive, "delay-150 fill-mode-backwards"])}>
-            <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
-              <WrenchIcon className="size-3.5" />
-              Proposed fix · {fix.risk} risk{dataChangeOf(fix).detected && " · changes stored data"}
-              <AttemptBadge attempts={fixAttempts} />
-            </span>
-            <p className="text-sm leading-relaxed">{fix.summary}</p>
-            <FixProof validation={validation} />
-            <Button variant="outline" size="sm" className="mt-1 self-start" onClick={() => setSelected("fix")}>
-              Review the fix <ArrowRightIcon />
-            </Button>
-          </div>
-        )}
-
-        <EndpointCard incident={incident} />
-
-        {/* The alert, as a card like the verdict and fix above it: what fired
-            on the left, how far past its limit on the right. */}
-        <div className="flex flex-col gap-3 rounded-lg border p-4">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <ChartLineIcon className="size-3.5" />
-              {metricLabel(trigger.metric)}
-            </span>
-            <MetricBadges metric={trigger.metric} observed={trigger.observed} threshold={trigger.threshold} unit={trigger.unit} />
-          </div>
-          <MetricChart
-            series={chartSeries(incident, markers)}
-            label={metricLabel(trigger.metric)}
-            unit={trigger.unit}
-            threshold={trigger.threshold}
-            lowerIsWorse={lowerIsWorse(trigger.metric)}
-            markers={markers}
-            exportAs={{ subject: incidentSubject(incident) }}
-          />
-        </div>
       </div>
     ),
     fix: () =>
@@ -219,7 +240,9 @@ export function IncidentReport({
         <FixView fix={fix} validation={validation} fixRun={incident.fixRun} attempts={fixAttempts} />
       ) : (
         <div className="flex flex-col gap-4">
-          {incident.fixRun && <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} />}
+          {incident.fixRun && (
+            <FixProgress fixRun={incident.fixRun} attempts={fixAttempts} dependency={incident.dependency !== undefined} />
+          )}
           <EarlierAttempts attempts={fixAttempts} />
         </div>
       ),

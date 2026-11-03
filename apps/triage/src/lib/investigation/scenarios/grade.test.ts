@@ -151,3 +151,129 @@ describe("grade", () => {
     });
   });
 });
+
+describe("grade, no defect", () => {
+  const rush: Expected = {
+    verdict: "no_defect",
+    rootCauseFiles: [],
+    mustMention: [["traffic", "load", "rush", "request rate", "requests per second"]],
+    mitigation: "none",
+  };
+  const rollback = (): Mitigation => ({ ...flagOff("0dfdbac", "rollback"), title: "Roll back shopfront to the deploy before 0dfdbac" });
+
+  it("hits a healthy verdict whose rationale names the load, with nothing proposed", () => {
+    const r: InvestigationReport = {
+      hypotheses: [],
+      verdict: { kind: "healthy", rationale: claim("Latency tracks the request rate: traffic tripled and nothing failed") },
+      servicesQueried: ["shopfront"],
+    };
+    const g = grade(r, undefined, rush);
+    assert.equal(g.hit, true, g.reasons.join("; "));
+    assert.ok(g.reasons.includes("verdict healthy"));
+    assert.ok(g.reasons.includes("no mitigation proposed"));
+  });
+
+  it("hits a root cause that blames the traffic without a mitigation", () => {
+    const g = grade(report("A traffic rush saturated the server; the journal copy deploy is unrelated"), undefined, rush);
+    assert.equal(g.hit, true, g.reasons.join("; "));
+    assert.ok(g.reasons.includes("verdict root_cause"));
+  });
+
+  it("hits an inconclusive verdict that names the load among what is missing", () => {
+    const r: InvestigationReport = {
+      hypotheses: [],
+      verdict: { kind: "inconclusive", missing: ["capacity figures for the request rate seen in the window"] },
+      servicesQueried: ["shopfront"],
+    };
+    assert.equal(grade(r, undefined, rush).hit, true);
+  });
+
+  it("misses when a rollback is proposed, whatever the words say", () => {
+    const g = grade(report("The traffic rush after deploy 0dfdbac slowed the API"), rollback(), rush);
+    assert.equal(g.hit, false);
+    assert.deepEqual(g.reasons, ["mitigation rollback 0dfdbac proposed, expected none"]);
+  });
+
+  it("misses a root cause that pins the load on a source file, named or cited", () => {
+    const named = grade(report("Traffic tripled and src/lib/ratings.ts averages every review per product"), undefined, rush);
+    assert.equal(named.hit, false);
+    assert.deepEqual(named.reasons, ["blames src/lib/ratings.ts, expected no file"]);
+    const source: Evidence = {
+      id: "ev_source_1",
+      kind: "source",
+      tool: "read_source",
+      summary: "getListingRatings",
+      file: "src/lib/ratings.ts",
+      startLine: 1,
+      code: "export async function getListingRatings() {}",
+    };
+    const cited = grade(report("Traffic tripled and the ratings loop jammed the server", { ids: ["ev_source_1"] }), undefined, rush, [source]);
+    assert.equal(cited.hit, false);
+    assert.deepEqual(cited.reasons, ["blames src/lib/ratings.ts, expected no file"]);
+  });
+
+  it("hits when a file is cited or named only to show what slowed, not as the cause", () => {
+    const journal: Evidence = {
+      id: "ev_source_1",
+      kind: "source",
+      tool: "read_source",
+      summary: "JournalPage",
+      file: "src/app/(store)/journal/page.tsx",
+      startLine: 1,
+      code: "export default function JournalPage() {}",
+    };
+    const r = report("Doubled traffic saturated the single Node process and queued every render", {
+      summary: "Pages slowed as visitor numbers doubled; nothing is broken",
+    });
+    r.hypotheses[0].causalChain.propagation = claim(
+      "Even src/app/(store)/journal/page.tsx, which reads no database, slowed to 2 s: the delay is in the shared process, not a route's query",
+      ["ev_source_1"],
+    );
+    const g = grade(r, undefined, rush, [journal]);
+    assert.equal(g.hit, true, g.reasons.join("; "));
+    assert.ok(g.reasons.includes("verdict root_cause"));
+  });
+
+  it("misses when the words never mention the load", () => {
+    const g = grade(report("Deploy 0dfdbac made the product list slow"), undefined, rush);
+    assert.equal(g.hit, false);
+    assert.equal(g.reasons.length, 1);
+    assert.match(g.reasons[0], /mentions none of/);
+  });
+});
+
+describe("grade on a dependency scenario", () => {
+  const vulnerable: Expected = {
+    verdict: "root_cause",
+    rootCauseFiles: ["src/lib/runtime.ts"],
+    mustMention: [["semver"]],
+    mitigation: "none",
+    exposure: "reachable",
+  };
+  const runtime: Evidence = {
+    id: "ev_source_1",
+    tool: "grep_source",
+    kind: "source",
+    summary: "src/lib/runtime.ts:1",
+    file: "src/lib/runtime.ts",
+    startLine: 1,
+    code: 'import semver from "semver";',
+  };
+  const exposed = (verdict?: NonNullable<InvestigationReport["exposure"]>["verdict"]): InvestigationReport => ({
+    ...report("semver 7.5.1 is inside the advisory's vulnerable range", { ids: ["ev_source_1"] }),
+    ...(verdict && { exposure: { verdict, rationale: claim("src/lib/runtime.ts imports semver for the health check", ["ev_source_1"]) } }),
+  });
+
+  it("hits on the expected exposure, citing the importing file", () => {
+    const g = grade(exposed("reachable"), undefined, vulnerable, [runtime]);
+    assert.equal(g.hit, true, g.reasons.join("; "));
+    assert.ok(g.reasons.includes("exposure reachable"));
+  });
+
+  it("misses on another exposure, or none", () => {
+    assert.deepEqual(grade(exposed("transitive_only"), undefined, vulnerable, [runtime]).reasons, [
+      "exposure transitive_only, expected reachable",
+    ]);
+    assert.deepEqual(grade(exposed(), undefined, vulnerable, [runtime]).reasons, ["exposure missing, expected reachable"]);
+  });
+});

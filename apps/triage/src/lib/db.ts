@@ -38,6 +38,77 @@ const migrations: string[] = [
     max_ms INTEGER NOT NULL,
     PRIMARY KEY (check_id, hour)
   ) WITHOUT ROWID;`,
+  // Incidents: the zod-checked JSON body, plus columns copied from it on
+  // every write (store.ts) so lists and lookups use indexes, and a small
+  // summary for the pages that only list them. Notification deliveries and
+  // the keys of events already sent (notify.ts). Whole documents saved
+  // under a name: the settings and the uptime checks.
+  `CREATE TABLE incidents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    service TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    status TEXT NOT NULL,
+    sort_at INTEGER NOT NULL, -- run.startedAt ?? detectedAt, epoch ms
+    detected_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    archived_at INTEGER,
+    rule_id TEXT, -- trigger.rule.id
+    version INTEGER NOT NULL, -- +1 on every write
+    updated_at INTEGER NOT NULL,
+    summary TEXT NOT NULL,
+    summary_version INTEGER NOT NULL,
+    body TEXT NOT NULL
+  );
+  CREATE INDEX incidents_list ON incidents (archived_at, sort_at DESC);
+  CREATE INDEX incidents_rule ON incidents (rule_id, sort_at DESC);
+  CREATE TABLE notification_deliveries (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    incident_id TEXT,
+    ok INTEGER NOT NULL,
+    error TEXT
+  );
+  CREATE INDEX notification_deliveries_at ON notification_deliveries (at DESC);
+  CREATE TABLE notification_sent (
+    key TEXT PRIMARY KEY,
+    at INTEGER NOT NULL
+  );
+  CREATE TABLE documents (
+    name TEXT PRIMARY KEY,
+    body TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );`,
+  // The watched service's dependency audits (investigation/dependencies):
+  // each audit's outcome, with the package manager's JSON on the latest row
+  // only, and each advisory found, kept across audits (the finding's JSON,
+  // plus columns to list and look up by).
+  `CREATE TABLE dependency_audits (
+    id INTEGER PRIMARY KEY,
+    service TEXT NOT NULL,
+    at INTEGER NOT NULL, -- epoch ms, UTC
+    duration_ms INTEGER NOT NULL,
+    package_manager TEXT,
+    counts TEXT NOT NULL, -- JSON, by severity
+    runtime INTEGER NOT NULL,
+    error TEXT,
+    raw TEXT
+  );
+  CREATE INDEX dependency_audits_at ON dependency_audits (service, at DESC);
+  CREATE TABLE dependency_findings (
+    service TEXT NOT NULL,
+    advisory_id TEXT NOT NULL,
+    package TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    dev INTEGER NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    gone_at INTEGER,
+    incident_id TEXT,
+    body TEXT NOT NULL,
+    PRIMARY KEY (service, advisory_id)
+  ) WITHOUT ROWID;`,
 ];
 
 export function getDb(): DatabaseSync {
@@ -68,8 +139,10 @@ export function closeDb() {
 
 // Runs fn in a write transaction: all of it lands or none of it. IMMEDIATE
 // takes the write lock up front, so two processes can't both read and then
-// deadlock upgrading to write.
+// deadlock upgrading to write. Called inside another transaction, fn joins
+// it: SQLite has no nested BEGIN.
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();

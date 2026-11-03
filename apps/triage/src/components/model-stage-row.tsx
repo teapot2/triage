@@ -8,7 +8,7 @@ import { formatDuration } from "@/components/incident/format";
 import type { ModelUpdate, Provider, SaveModelSettings, StageModel } from "@/components/model-settings";
 import { ModelPicker } from "@/components/model-picker";
 import { DisclosureFooter, DisclosureRow } from "@/components/settings-list";
-import { Badge, StatusBadge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -249,9 +249,7 @@ export function StageRow({
               empty, keeping its width so the rows line up. */}
           <span className="w-16 text-xs">
             {saved.provider === "meta" && (
-              <Badge variant="secondary" className="font-normal">
-                {effortLabels[saved.effort]}
-              </Badge>
+              <span className="text-muted-foreground">{effortLabels[saved.effort]}</span>
             )}
           </span>
         </>
@@ -310,15 +308,13 @@ export function StageRow({
       </div>
       {draftFanout !== undefined && (
         <EditorSwitch id={`${id}-fanout`} label="Check hypotheses in parallel" checked={draftFanout} onChange={setDraftFanout}>
-          The Lead proposes up to three causes, the Investigate model checks each at once, and the Lead writes the
-          diagnosis from their findings. More model calls per run.{" "}
+          Up to three causes, checked at once. More model calls per run.{" "}
           {lead && <FanoutExplainer lanes={draft} lead={lead} />}
         </EditorSwitch>
       )}
       {draftWebSearch !== undefined && meta && (
         <EditorSwitch id={`${id}-web-search`} label="Search the web" checked={draftWebSearch} onChange={setDraftWebSearch}>
-          Fix and Ask can look up how a library is documented to behave and cite the pages, at $2.50 per 1,000
-          searches. One setting for both; Ask can also turn it off per question.
+          For Fix and Ask, at $2.50 per 1,000 searches.
         </EditorSwitch>
       )}
       {missingKey && (

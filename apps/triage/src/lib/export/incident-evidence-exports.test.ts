@@ -7,6 +7,7 @@ import { exampleIncidents } from "../investigation/fixtures";
 import type { Evidence, Incident, Question } from "../investigation/schema";
 import { fixPatch, traceRows } from "./datasets/incident";
 import { serialize } from "./serialize";
+import { closeDb } from "../db";
 
 // The incident page's exports (the record, its evidence by kind, the
 // investigation's trace, the fix's patch and the Ask answers) through the
@@ -137,6 +138,7 @@ before(async () => {
 after(async () => {
   process.chdir(cwd);
   // Windows may still hold a just-renamed file for a moment.
+  closeDb();
   await rm(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
@@ -301,6 +303,35 @@ describe("GET /api/export/evidence-db", () => {
       row: { query: "SELECT 1", calls: 1810, mean_ms: 0.02 },
     });
     assert.deepEqual(file.rows[9], { evidence_id: "ev_q1_db_1", source: "q_1", query: "SELECT pid FROM pg_locks WHERE NOT granted", row_index: null, row: null });
+  });
+});
+
+// A dependency incident's exposure cites the files that import the
+// package: the source export marks those.
+describe("GET /api/export/evidence-source", () => {
+  it("writes every excerpt read, and which ones the exposure verdict cites", async () => {
+    const { saveIncident } = await import("../investigation/store");
+    const base = full();
+    await saveIncident({
+      ...base,
+      id: "inc_export_exposure",
+      report: { ...base.report!, exposure: { verdict: "reachable", rationale: { text: "The stock reader imports it.", evidenceIds: ["ev_source_stock"] } } },
+    });
+    const [header, ...rows] = await csvLines(await get("evidence-source", "format=csv&id=inc_export_exposure"));
+    assert.equal(header, "evidence_id,source,observed_at,tool,file,start_line,code,summary,cited_by_exposure");
+    assert.ok(rows.length > 0);
+    const file = await json(await get("evidence-source", "format=json&id=inc_export_exposure"));
+    const stock = file.rows.find((r) => r.evidence_id === "ev_source_stock");
+    assert.equal(stock?.file, "src/lib/stock.ts");
+    assert.equal(stock?.start_line, 6);
+    assert.equal(stock?.cited_by_exposure, true);
+    assert.ok(file.rows.filter((r) => r.evidence_id !== "ev_source_stock").every((r) => r.cited_by_exposure === false));
+  });
+
+  it("marks nothing without an exposure, and is a 404 with no source read", async () => {
+    const file = await json(await get("evidence-source", "format=json&id=inc_export_full"));
+    assert.ok(file.rows.every((r) => r.cited_by_exposure === false));
+    assert.equal((await get("evidence-source", "format=csv&id=inc_export_bare")).status, 404);
   });
 });
 

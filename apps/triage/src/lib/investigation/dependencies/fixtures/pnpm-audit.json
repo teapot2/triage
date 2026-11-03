@@ -1,0 +1,179 @@
+{
+  "advisories": {
+    "1102341": {
+      "findings": [
+        {
+          "version": "0.18.20",
+          "paths": [
+            "apps__shopfront>drizzle-kit>@esbuild-kit/esm-loader>@esbuild-kit/core-utils>esbuild"
+          ],
+          "dev": true,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1102341,
+      "title": "esbuild enables any website to send any requests to the development server and read the response",
+      "module_name": "esbuild",
+      "vulnerable_versions": "<=0.24.2",
+      "patched_versions": ">=0.25.0",
+      "severity": "moderate",
+      "cwe": "CWE-346",
+      "github_advisory_id": "GHSA-67mh-4wv8-2f99",
+      "url": "https://github.com/advisories/GHSA-67mh-4wv8-2f99"
+    },
+    "1121797": {
+      "findings": [
+        {
+          "version": "3.0.3",
+          "paths": [
+            "apps__triage>ansi-to-react>linkify-it"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1121797,
+      "title": "LinkifyIt#match scan loop has quadratic algorithmic complexity",
+      "module_name": "linkify-it",
+      "vulnerable_versions": "<=5.0.0",
+      "patched_versions": ">=5.0.1",
+      "severity": "high",
+      "cwe": "CWE-1333",
+      "github_advisory_id": "GHSA-22p9-wv53-3rq4",
+      "url": "https://github.com/advisories/GHSA-22p9-wv53-3rq4"
+    },
+    "1124012": {
+      "findings": [
+        {
+          "version": "3.0.3",
+          "paths": [
+            "apps__triage>ansi-to-react>linkify-it"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1124012,
+      "title": "linkify-it: Quadratic-complexity DoS via the `mailto:` validator scan-loop on attacker text",
+      "module_name": "linkify-it",
+      "vulnerable_versions": "<=5.0.1",
+      "patched_versions": ">=5.0.2",
+      "severity": "high",
+      "cwe": "CWE-407",
+      "github_advisory_id": "GHSA-v245-v573-v5vm",
+      "url": "https://github.com/advisories/GHSA-v245-v573-v5vm"
+    },
+    "1243505": {
+      "findings": [
+        {
+          "version": "4.3.1",
+          "paths": [
+            "apps__triage>shadcn>deepmerge",
+            "apps__triage>shadcn>@shadcn/registry>deepmerge"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1243505,
+      "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+      "module_name": "deepmerge",
+      "vulnerable_versions": ">=4.2.0 <=4.3.1",
+      "patched_versions": null,
+      "patched_versions_unpublished": true,
+      "severity": "low",
+      "cwe": "CWE-1321",
+      "github_advisory_id": "GHSA-gcqx-w48m-w2h4",
+      "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4"
+    },
+    "1244012": {
+      "findings": [
+        {
+          "version": "10.2.6",
+          "paths": [
+            "apps__shopfront>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+            "apps__shopfront>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+            "apps__shopfront>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+            "apps__shopfront>eslint-config-next>typescript-eslint>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+            "apps__triage>shadcn>ts-morph>@ts-morph/common>minimatch",
+            "apps__triage>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "version": "3.1.5",
+          "paths": [
+            "apps__shopfront>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+            "apps__shopfront>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+            "apps__shopfront>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>minimatch",
+            "apps__shopfront>eslint-config-next>eslint-import-resolver-typescript>eslint>@eslint/config-array>minimatch",
+            "apps__triage>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/config-array>minimatch",
+            "apps__triage>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/eslintrc>minimatch"
+          ],
+          "dev": true,
+          "optional": false,
+          "bundled": false
+        },
+        {
+          "version": "9.0.9",
+          "paths": [
+            "apps__shopfront>@opentelemetry/auto-instrumentations-node>@opentelemetry/resource-detector-gcp>gcp-metadata>gaxios>rimraf>glob>minimatch"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1244012,
+      "title": "minimatch has potential denial of service via globparts amplification",
+      "module_name": "minimatch",
+      "vulnerable_versions": "<11.0.1",
+      "patched_versions": ">=11.0.1",
+      "severity": "moderate",
+      "cwe": "CWE-405",
+      "github_advisory_id": "GHSA-g3hv-75wg-m249",
+      "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249"
+    },
+    "1244013": {
+      "findings": [
+        {
+          "version": "10.5.0",
+          "paths": [
+            "apps__shopfront>@opentelemetry/auto-instrumentations-node>@opentelemetry/resource-detector-gcp>gcp-metadata>gaxios>rimraf>glob"
+          ],
+          "dev": false,
+          "optional": false,
+          "bundled": false
+        }
+      ],
+      "id": 1244013,
+      "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+      "module_name": "glob",
+      "vulnerable_versions": ">=9.0.0 <=14.0.1",
+      "patched_versions": ">=14.0.2",
+      "severity": "moderate",
+      "cwe": "CWE-400",
+      "github_advisory_id": "GHSA-3g3m-2fjr-6pw4",
+      "url": "https://github.com/advisories/GHSA-3g3m-2fjr-6pw4"
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 1,
+      "moderate": 3,
+      "high": 2,
+      "critical": 0
+    },
+    "dependencies": 657,
+    "devDependencies": 416,
+    "optionalDependencies": 202,
+    "totalDependencies": 1124
+  }
+}

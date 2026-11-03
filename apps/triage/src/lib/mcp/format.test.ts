@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { citationOrder } from "../investigation/citations";
+import { exposureReport } from "../investigation/dependencies/exposure";
+import type { StoredFinding } from "../investigation/dependencies/model";
 import { exampleIncidents } from "../investigation/fixtures";
+import { toSummary } from "../investigation/list-summary";
 import type { Evidence, Incident, Question } from "../investigation/schema";
 import {
   answerMarkdown,
   CODE_LINES,
   citedEvidence,
   DB_ROWS,
+  dependencyFindingsMarkdown,
   downsample,
   evidenceMarkdown,
   fixMarkdown,
@@ -55,9 +59,80 @@ describe("incidentMarkdown", () => {
   });
 });
 
+// The pool leak's record as a dependency incident: the advisory, the
+// exposure stage's evidence and the report it builds.
+const advisory: NonNullable<Incident["dependency"]> = {
+  advisoryId: "GHSA-c2qf-rxjj-qqgw",
+  package: "semver",
+  title: "semver vulnerable to Regular Expression Denial of Service",
+  versions: ["7.5.1"],
+  vulnerable: ">=7.0.0 <7.5.2",
+  patched: ">=7.5.2",
+  severity: "high",
+  cwe: ["CWE-1333"],
+  url: "https://github.com/advisories/GHSA-c2qf-rxjj-qqgw",
+  dev: false,
+  direct: ["semver"],
+  paths: ["semver"],
+  audits: 2,
+  lastFoundAt: "2026-11-02T12:00:00.000Z",
+};
+
+function dependencyIncident(): Incident {
+  const evidence: Evidence[] = [
+    { id: "ev_web_1", tool: "dependency_audit", kind: "web", summary: "the advisory", url: advisory.url },
+    { id: "ev_source_1", tool: "grep_source", kind: "source", summary: "an import", file: "src/lib/version.ts", startLine: 1, code: 'import semver from "semver";' },
+  ];
+  const report = exposureReport(
+    advisory,
+    { verdict: "reachable", rationale: { text: "src/lib/version.ts imports semver and parses request input with it", evidenceIds: ["ev_source_1"] } },
+    "The semver package has a known denial-of-service flaw, and the service's version check calls it.",
+    "ev_web_1",
+    ["shopfront"],
+  );
+  return { ...example("inc_pool_leak"), dependency: advisory, evidence, steps: [], report, mitigation: undefined };
+}
+
+describe("incidentMarkdown on a dependency incident", () => {
+  it("shows the advisory and the exposure, with citations", () => {
+    const md = incidentMarkdown(dependencyIncident(), base);
+    assert.match(md, /## Dependency advisory\n\nGHSA-c2qf-rxjj-qqgw \(high\): semver vulnerable/);
+    assert.match(md, /vulnerable `>=7\.0\.0 <7\.5\.2`, patched `>=7\.5\.2`/);
+    assert.match(md, /Exposure: reachable: .*imports semver.* \[ev_source_1\]/);
+    assert.match(md, /Root cause: \*\*Vulnerable semver@7\.5\.1, reachable from the service's code\*\*/);
+    assert.match(md, /- \[ev_web_1\] /);
+  });
+});
+
+describe("dependencyFindingsMarkdown", () => {
+  const finding: StoredFinding = {
+    ...advisory,
+    service: "shopfront",
+    paths: ["next>a>semver", "b>semver", "c>semver", "d>semver"],
+    firstSeen: "2026-11-01T12:00:00.000Z",
+    lastSeen: "2026-11-02T12:00:00.000Z",
+    incidentId: "inc_abc_123456",
+  };
+  const audit = { service: "shopfront", at: "2026-11-02T12:00:00.000Z", durationMs: 900, packageManager: "pnpm" as const, counts: { info: 0, low: 0, moderate: 0, high: 1, critical: 0 }, runtime: 1 };
+
+  it("tables the findings under the latest audit", () => {
+    const md = dependencyFindingsMarkdown("shopfront", [finding], audit);
+    assert.match(md, /^Latest audit of `shopfront`: 2026-11-02 12:00:00 UTC with pnpm, 1 runtime advisory\./);
+    assert.match(md, /\| GHSA-c2qf-rxjj-qqgw \| `semver` \| 7\.5\.1 \| high \| runtime \|/);
+    assert.match(md, /next > a > semver; b > semver; c > semver \(\+1 more\)/);
+    assert.match(md, /`inc_abc_123456`/);
+  });
+
+  it("says when nothing was found, nothing audited, or the audit failed", () => {
+    assert.match(dependencyFindingsMarkdown("shopfront", [], audit), /No vulnerable dependencies found\.$/);
+    assert.match(dependencyFindingsMarkdown("shopfront", [], undefined), /haven't been audited yet/);
+    assert.match(dependencyFindingsMarkdown("shopfront", [finding], { ...audit, error: "registry offline" }), /failed: registry offline/);
+  });
+});
+
 describe("incidentListMarkdown", () => {
   it("tables the rows and says when some are left out", () => {
-    const rows = exampleIncidents.map((i) => incidentRow(i, base, true));
+    const rows = exampleIncidents.map((i) => incidentRow(toSummary(i), base, true));
     const md = incidentListMarkdown(rows.slice(0, 2), rows.length);
     assert.match(md, /`inc_pool_leak` \(example\)/);
     assert.match(md, new RegExp(`2 of ${rows.length} shown`));

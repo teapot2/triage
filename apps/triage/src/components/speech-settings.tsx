@@ -61,11 +61,7 @@ export function SpeechSettings() {
 
   return (
     <section aria-labelledby="speech" className="flex flex-col gap-3">
-      <SettingsSectionHeader
-        id="speech"
-        title="Speech"
-        description="Saved in this browser."
-      />
+      <SettingsSectionHeader id="speech" title="Speech" />
       <div className="divide-y rounded-lg border">
         <div className={rowClass}>
           <div className="flex flex-col gap-0.5">
@@ -123,7 +119,7 @@ export function SpeechSettings() {
               Voice input
             </label>
             <span id="voice-input-description" className="max-w-xl text-muted-foreground text-sm">
-              Speak your questions in Ask. Transcribed with your Meta API key, at about $0.18 an hour of audio.
+              About $0.18 an hour of audio, on your Meta API key.
             </span>
             {preferences.voiceInput && !canRecord && (
               <span className="text-destructive text-xs">This browser can&apos;t record audio here.</span>
@@ -137,17 +133,11 @@ export function SpeechSettings() {
           />
         </div>
         <div className={rowClass}>
-          <div className="flex flex-col gap-0.5">
-            <label htmlFor="voice-auto-send" className="font-medium text-sm">
-              Send when transcription finishes
-            </label>
-            <span id="voice-auto-send-description" className="max-w-xl text-muted-foreground text-sm">
-              Sends the question when you stop the microphone, instead of waiting for Enter.
-            </span>
-          </div>
+          <label htmlFor="voice-auto-send" className="font-medium text-sm">
+            Send when transcription finishes
+          </label>
           <Switch
             id="voice-auto-send"
-            aria-describedby="voice-auto-send-description"
             disabled={!preferences.voiceInput}
             checked={preferences.voiceAutoSend}
             onCheckedChange={(on) => setPreferences({ ...preferences, voiceAutoSend: on })}

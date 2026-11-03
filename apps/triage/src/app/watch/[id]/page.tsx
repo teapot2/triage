@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuleDetail } from "@/components/watch/rule-detail";
-import { listIncidents } from "@/lib/investigation/store";
+import { listIncidentSummaries } from "@/lib/investigation/store";
 import { readRules } from "@/lib/investigation/watch-rules";
 
 type Props = { params: Promise<{ id: string }> };
@@ -31,8 +31,7 @@ async function Rule({ params }: Props) {
   const rule = (await readRules()).find((r) => r.id === id);
   if (!rule) notFound();
   // The incidents this rule opened, newest first (the store's order).
-  const incidents = (await listIncidents())
-    .filter((i) => i.trigger.rule?.id === rule.id)
+  const incidents = (await listIncidentSummaries({ ruleId: rule.id }))
     .slice(0, 10)
     .map(({ id, title, status, detectedAt }) => ({ id, title, status, detectedAt }));
   return <RuleDetail rule={rule} incidents={incidents} />;

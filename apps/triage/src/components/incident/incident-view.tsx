@@ -6,6 +6,7 @@ import { markSeen, recordView } from "@/hooks/use-seen";
 import { findUnknownEvidenceIds, type Incident } from "@/lib/investigation/schema";
 import { currentRun, isRunning, runView } from "@/lib/investigation/reruns";
 import { activityAt } from "@/lib/investigation/summary";
+import { ArchivedNotice } from "./archive-actions";
 import { citationOrder } from "./diagnosis-panel";
 import { EvidenceProvider } from "./evidence";
 import { IncidentCommands } from "./incident-commands";
@@ -13,7 +14,7 @@ import { IncidentProvider } from "./incident-export";
 import { IncidentHeader } from "./incident-header";
 import { IncidentReport } from "./incident-report";
 import { useAskQuestion } from "./questions-panel";
-import { RunComparison, RunSwitcher, useShownRun } from "./run-switcher";
+import { RunComparison, RunNotice, useShownRun } from "./run-switcher";
 
 // While the agent works, re-render from the server every couple of seconds;
 // it saves each step as it goes. Every second while a question is being
@@ -83,10 +84,11 @@ export function IncidentView({ incident, webSearch }: { incident: Incident; webS
     <IncidentProvider incident={incident}>
       <EvidenceProvider evidence={evidence} order={order}>
         <IncidentCommands incident={incident} />
-        <IncidentHeader incident={incident} view={view} />
+        <IncidentHeader incident={incident} view={view} shown={shown} />
         {/* A container, so the report lays out by its own width. */}
         <div className="@container mx-auto w-full max-w-6xl px-4 pt-5 pb-8 sm:px-6">
-          {(incident.reruns?.length ?? 0) > 0 && <RunSwitcher incident={incident} shown={shown} />}
+          <ArchivedNotice incident={incident} />
+          <RunNotice incident={incident} shown={shown} />
           {shown === "compare" ? (
             <RunComparison incident={incident} />
           ) : (

@@ -13,7 +13,8 @@ import type {
   Question,
   SandboxRun,
 } from "../investigation/schema";
-import { incidentHeadline } from "../investigation/summary";
+import type { IncidentSummary } from "../investigation/list-summary";
+import type { Audit, StoredFinding } from "../investigation/dependencies/model";
 
 // What Triage's MCP tools say, as Markdown a coding agent reads: the
 // incident, its evidence, its fix and an answer. Every claim keeps its
@@ -61,10 +62,14 @@ export type IncidentRow = {
   detected_at: string;
   headline?: string;
   example: boolean;
+  // When it was archived; absent on an active incident.
+  archived_at?: string;
   url: string;
 };
 
-export function incidentRow(incident: Incident, baseUrl: string, example: boolean): IncidentRow {
+// From the incident's summary (list-summary.ts), so list_incidents reads no
+// whole incident; get_incident summarises the one it has.
+export function incidentRow(incident: IncidentSummary, baseUrl: string, example: boolean): IncidentRow {
   return {
     id: incident.id,
     title: incident.title,
@@ -72,8 +77,9 @@ export function incidentRow(incident: Incident, baseUrl: string, example: boolea
     severity: incident.severity,
     status: statusInWords(incident),
     detected_at: incident.detectedAt,
-    headline: incidentHeadline(incident) ?? incident.report?.summary,
+    headline: incident.headline ?? incident.report?.summary,
     example,
+    ...(incident.archivedAt && { archived_at: incident.archivedAt }),
     url: incidentUrl(baseUrl, incident.id),
   };
 }
@@ -87,7 +93,7 @@ export function incidentListMarkdown(rows: IncidentRow[], total: number): string
     "|---|---|---|---|---|---|---|",
     ...rows.map(
       (r) =>
-        `| \`${r.id}\`${r.example ? " (example)" : ""} | ${cell(r.title)} | ${r.service} | ${r.severity} | ${r.status} | ${utc(r.detected_at)} | ${cell(r.headline ?? "")} |`,
+        `| \`${r.id}\`${r.example ? " (example)" : ""}${r.archived_at ? " (archived)" : ""} | ${cell(r.title)} | ${r.service} | ${r.severity} | ${r.status} | ${utc(r.detected_at)} | ${cell(r.headline ?? "")} |`,
     ),
   ].join("\n");
   const more = total > rows.length ? `\n\n${rows.length} of ${total} shown; raise \`limit\` for more.` : "";
@@ -107,6 +113,31 @@ function alertSection(incident: Incident): string {
   return `## Alert\n\n${lines.join("\n")}`;
 }
 
+// A dependency incident's advisory: what the audit found, where it comes
+// from and what fixes it.
+const chain = (path: string) => path.split(">").join(" > ");
+
+function dependencySection(incident: Incident): string | undefined {
+  const d = incident.dependency;
+  if (!d) return undefined;
+  const through = d.paths.length ? d.paths : [d.package];
+  const lines = [
+    `${d.advisoryId} (${d.severity}): ${d.title}`,
+    `Package: \`${d.package}\` ${d.versions.map((v) => `\`${v}\``).join(", ")} found; vulnerable \`${d.vulnerable}\`, ${d.patched ? `patched \`${d.patched}\`` : "no fixed version published"}.`,
+    `${d.dev ? "Dev" : "Runtime"} dependency, through: ${through.map((p) => `\`${chain(p)}\``).join("; ")}`,
+    d.cwe.length ? `CWE: ${d.cwe.join(", ")}` : undefined,
+    `Advisory: ${d.url}`,
+    `Found by ${d.audits} audit${d.audits === 1 ? "" : "s"}, last at ${utc(d.lastFoundAt)}.${d.goneAt ? ` No audit has found it since ${utc(d.goneAt)}.` : ""}`,
+  ];
+  return `## Dependency advisory\n\n${lines.filter(Boolean).join("\n")}`;
+}
+
+const exposureLabels = {
+  reachable: "reachable: the service's code reaches the vulnerable package",
+  transitive_only: "transitive only: in the dependency tree, but nothing found leads from the service's code to it",
+  not_reachable: "not reachable: only code that never runs in production would use it",
+};
+
 function verdictSection(incident: Incident): string {
   const { report, run } = incident;
   if (!report) {
@@ -123,15 +154,19 @@ function verdictSection(incident: Incident): string {
   const h = verdictHypothesis(incident);
   if (!h) return `## Verdict\n\nRoot cause: hypothesis ${verdict.hypothesisId} (not in the report).`;
   const grade = gradeLabels[gradeHypothesis(h, incident).grade];
+  const exposure = report.exposure;
   return [
     "## Verdict",
     `Root cause: **${h.title}** (confidence ${h.confidence}, ${grade.toLowerCase()})`,
+    exposure && `Exposure: ${exposureLabels[exposure.verdict]}. ${cite(exposure.rationale)}`,
     [
       `- Symptom: ${cite(h.causalChain.symptom)}`,
       `- Propagation: ${cite(h.causalChain.propagation)}`,
       `- Root cause: ${cite(h.causalChain.rootCause)}`,
     ].join("\n"),
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function alsoConsidered(incident: Incident): string | undefined {
@@ -147,7 +182,7 @@ function alsoConsidered(incident: Incident): string | undefined {
 
 function mitigationSection(incident: Incident): string | undefined {
   const m = incident.mitigation;
-  if (!m) return undefined;
+  if (!m) return incident.noMitigation ? `## Mitigation\n\nNone proposed. ${incident.noMitigation.why}` : undefined;
   const lines = [`${m.title} (\`${m.kind}\` of \`${m.target}\`, ${m.state}, risk ${m.risk.replace("_", " ")})`, `Why: ${cite(m.why)}`];
   if (m.recovery) {
     const at = m.recovery.recoveredAt ? ` at ${utc(m.recovery.recoveredAt)}` : "";
@@ -219,13 +254,19 @@ export function incidentMarkdown(incident: Incident, baseUrl: string): string {
   const header = [
     `# ${incident.title}`,
     `\`${incident.id}\` · ${incident.severity} · ${incident.service} · ${statusInWords(incident)} · detected ${utc(incident.detectedAt)}${opened}\nPage: ${incidentUrl(baseUrl, incident.id)}`,
-  ].join("\n\n");
+    // Up front, so an agent knows not to ask it questions.
+    incident.archivedAt &&
+      `Archived ${utc(incident.archivedAt)}: read-only, so ask_incident is refused. Restore it on its page to work on it again.`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const summary = incident.report?.summary && `## Summary\n\n${incident.report.summary}`;
   return [
     header,
     summary,
     verdictSection(incident),
     alsoConsidered(incident),
+    dependencySection(incident),
     alertSection(incident),
     mitigationSection(incident),
     fixSection(incident),
@@ -368,4 +409,33 @@ export function answerMarkdown(question: Question, incident: Incident, baseUrl: 
     `Saved as ${question.id} on ${incidentUrl(baseUrl, incident.id)}${question.mode === "evidence_only" ? " (answered from the recorded evidence; no tools for this incident)" : ""}.`,
   ];
   return parts.filter(Boolean).join("\n\n");
+}
+
+// The audited service's findings as list_dependency_findings returns them:
+// the latest audit, then a row per advisory, most severe first.
+export function dependencyFindingsMarkdown(
+  service: string,
+  findings: StoredFinding[],
+  audit: Audit | undefined,
+): string {
+  const advisories = (n: number) => `${n} runtime advisor${n === 1 ? "y" : "ies"}`;
+  const audited = !audit
+    ? `\`${service}\`'s dependencies haven't been audited yet. Start an audit from the Watch page.`
+    : audit.error
+      ? `The latest audit of \`${service}\` (${utc(audit.at)}) failed: ${firstLine(audit.error)}. The findings below are from the last audit that ran.`
+      : `Latest audit of \`${service}\`: ${utc(audit.at)}${audit.packageManager ? ` with ${audit.packageManager}` : ""}, ${advisories(audit.runtime)}.`;
+  if (!findings.length) return `${audited}\n\nNo vulnerable dependencies found.`;
+  const through = (f: StoredFinding) => {
+    const shown = f.paths.slice(0, 3).map(chain).join("; ");
+    return `${cell(shown || f.package)}${f.paths.length > 3 ? ` (+${f.paths.length - 3} more)` : ""}`;
+  };
+  const table = [
+    "| Advisory | Package | Found | Severity | Type | Vulnerable | Patched | Through | Incident |",
+    "|---|---|---|---|---|---|---|---|---|",
+    ...findings.map(
+      (f) =>
+        `| ${f.advisoryId} | \`${f.package}\` | ${f.versions.join(", ")} | ${f.severity} | ${f.dev ? "dev" : "runtime"} | ${cell(f.vulnerable)} | ${cell(f.patched ?? "none")} | ${through(f)} | ${f.incidentId ? `\`${f.incidentId}\`` : ""} |`,
+    ),
+  ].join("\n");
+  return `${audited}\n\n${table}\n\nUse get_incident with an incident's ID for its exposure check and fix. Dev dependencies and advisories under the severity floor open no incident.`;
 }

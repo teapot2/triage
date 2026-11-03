@@ -6,19 +6,23 @@ import { fanoutLead, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
 import { fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
 import { runAgentLoop } from "./agent-loop";
+import { NO_DEPENDENCY_MITIGATION, runExposureStage } from "./dependencies/exposure";
+import { isDependencySource } from "./dependencies/source";
 import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
+import { releaseShaOf } from "./fix/release-tree";
 import { liveAlert, p95, requestSamples } from "./live/live-source";
 import { takeRunSnapshot } from "./live/run-snapshot";
 import { liveService } from "../live/types";
-import { proposeMitigation } from "./mitigation/propose";
+import { proposeMitigation, whyNoMitigation } from "./mitigation/propose";
+import { notify, refreshSlackCard } from "../notifications/notify";
 import { readTelemetry, RETENTION_MS } from "./live/otlp-files";
 import { uptimeNote } from "./context";
 import { InvestigationRecorder, type ThoughtRecorder } from "./recorder";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
 import type { Incident, Thought } from "./schema";
-import type { MetricSeries, TelemetrySource } from "./source";
+import type { MetricSeries, SourceDescription, TelemetrySource } from "./source";
 import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
 import { beforeAnswer, type Part } from "./web-search";
@@ -48,7 +52,8 @@ export const reportRules = `Rules:
 - For a root_cause verdict give at least 3 hypotheses: one leading, the others plausible or rejected, each rejection with rejectedBecause citing evidence.
 - Confidence is a calibrated probability between 0 and 1; the hypotheses' confidences should roughly sum to 1.
 - If every signal is at baseline, the verdict is healthy. Do not invent a cause. If evidence is insufficient, the verdict is inconclusive and lists what is missing.
-- A breach with no fault behind it is also healthy: a false alarm, a one-off slow request that recovered (a dev server compiling a route on its first request), or too little traffic for the metric to mean anything. Put that in the healthy verdict's rationale. A root_cause verdict names a fault in the system (code, config, data, a dependency) that caused the breach.
+- A breach with no fault behind it is also healthy: a false alarm, a one-off slow request that recovered (a dev server compiling a route on its first request), or too little traffic for the metric to mean anything. Put that in the healthy verdict's rationale. A root_cause verdict names a fault in the system (code, config, data, a dependency) that caused the breach, or the load itself: more requests than the process serves, with no file at fault.
+- Name a file as the cause only when traces or logs in the window show its code on the slow path. A statement in slow_queries counts only if it ran in the window (window_calls), whatever its totals say: the totals go back to the last statistics reset.
 - Keep claims short and specific: name the file, function, metric, or commit.
 - The report's summary is for a human skimming the alert, not for you: plain English, under 40 words, no metric or tool names. Claims carry the specifics.
 - Finish by calling submit_report. If it is rejected, fix the listed problems and submit again.`;
@@ -71,9 +76,17 @@ export function prompt(incident: Incident, source: TelemetrySource, task = "Inve
 Service: ${incident.service}
 Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}
 Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
-Dependency path: ${services}
+Dependency path: ${services}${flagsLine(d.flags)}
 ${note ? `\n${note}\n` : ""}
 ${task}`;
+}
+
+// What the logs say each flag is now: code behind a flag that is off isn't
+// running, so it can't be the cause. Nothing when the source can't say.
+function flagsLine(flags: SourceDescription["flags"]): string {
+  const states = Object.entries(flags ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  if (!states.length) return "";
+  return `\nFeature flags now (from the logs): ${states.map(([flag, on]) => `${flag} ${on ? "on" : "off"}`).join(", ")}`;
 }
 
 function focusLine(focus: Incident["trigger"]["focus"]): string {
@@ -91,13 +104,15 @@ export async function createScenarioIncident(scenario: Scenario): Promise<Incide
 // the incident list.
 export async function scenarioIncident(scenario: Scenario): Promise<Incident> {
   const source = createScenarioSource(scenario);
-  const alert = await source.queryMetric({ name: scenario.alert.metric, windowMinutes: 30 });
+  // A dependency scenario's audits are hours apart: its chart reaches back a week.
+  const alert = await source.queryMetric({ name: scenario.alert.metric, windowMinutes: scenario.dependency ? 7 * 24 * 60 : 30 });
   if (!alert) throw new Error(`scenario ${scenario.id} has no series for ${scenario.alert.metric}`);
   return newIncident(source, alert, {
     title: scenario.alert.title,
     service: scenario.alert.service,
     severity: scenario.alert.severity,
     threshold: scenario.alert.threshold,
+    dependency: scenario.dependency,
   });
 }
 
@@ -209,10 +224,12 @@ type NewIncident = {
   route?: string;
   focus?: Incident["trigger"]["focus"];
   uptime?: Incident["uptime"];
+  dependency?: Incident["dependency"];
 };
 
 // Saves a new incident charting `alert`, ready for runInvestigation. Shared
-// by every way one opens, uptime/incident.ts included.
+// by every way one opens, uptime/incident.ts and dependencies/incident.ts
+// included.
 export async function saveNewIncident(source: TelemetrySource, alert: MetricSeries, a: NewIncident): Promise<Incident> {
   const incident = await newIncident(source, alert, a);
   await saveIncident(incident);
@@ -249,6 +266,7 @@ async function newIncident(source: TelemetrySource, alert: MetricSeries, a: NewI
       startedAt: new Date().toISOString(),
     },
     uptime: a.uptime,
+    dependency: a.dependency,
   };
   return incident;
 }
@@ -312,12 +330,17 @@ export async function runInvestigation(
     rerun?: { fix?: Stage; baseDir?: string };
   } = {},
 ): Promise<Incident> {
-  const recorder = new InvestigationRecorder(incident, opts.save ?? saveIncident);
+  const recorder = new InvestigationRecorder(incident, opts.save);
   const tools = createInvestigationTools(source, recorder);
+  // A dependency incident has no telemetry to investigate: its run checks
+  // whether the service's code reaches the vulnerable package instead
+  // (dependencies/exposure.ts), on the investigate stage's model, alone.
+  const dependency = incident.dependency !== undefined || isDependencySource(source.describe().id);
   // A live run saves what a re-run couldn't read again (live/run-snapshot.ts)
-  // as it starts, alongside the investigation.
+  // as it starts, alongside the investigation. A dependency incident's
+  // reads (the source and the audits) are no telemetry to keep.
   const snapshotting =
-    opts.appDir && !opts.rerun
+    opts.appDir && !opts.rerun && !dependency
       ? takeRunSnapshot(incident.id, source).then((snapshot) => snapshot && recorder.update({ snapshot }))
       : undefined;
 
@@ -325,7 +348,7 @@ export async function runInvestigation(
   // on the run. A stage that can't run (no key, no URL) fails the run, and
   // so does a fan-out's lead.
   const stage = opts.stage ?? (await stageModel("investigate"));
-  const lead = opts.fanout === undefined ? await fanoutLead() : opts.fanout ? opts.fanout.lead : undefined;
+  const lead = dependency ? undefined : opts.fanout === undefined ? await fanoutLead() : opts.fanout ? opts.fanout.lead : undefined;
   recorder.update({
     run: { ...recorder.incident.run!, provider: stage.provider, model: stage.model, reasoningEffort: recordedEffort(stage) },
   });
@@ -392,7 +415,8 @@ export async function runInvestigation(
         done: () => recorder.report !== undefined,
         tokens,
       });
-    if (lead) await runFanout({ incident, source, recorder, budget, tokens, leadTokens, count, lane: stage, lead, model, alone });
+    if (dependency) await runExposureStage({ recorder, source, stage, model: model(stage), abortSignal: budget, tokens, count });
+    else if (lead) await runFanout({ incident, source, recorder, budget, tokens, leadTokens, count, lane: stage, lead, model, alone });
     else await alone([{ role: "user", content: prompt(incident, source) }]);
 
     const report = recorder.report;
@@ -410,9 +434,18 @@ export async function runInvestigation(
         error: report ? undefined : `No accepted report after ${count.steps} model steps`,
       },
     });
-    if (report?.verdict.kind === "root_cause") {
-      const mitigation = proposeMitigation(report, recorder.evidence, incident.service, undefined, incident.detectedAt);
-      if (mitigation) recorder.update({ mitigation });
+    if (report?.verdict.kind === "root_cause" && dependency) {
+      recorder.update({ noMitigation: { why: NO_DEPENDENCY_MITIGATION, at: new Date().toISOString() } });
+    } else if (report?.verdict.kind === "root_cause") {
+      // What the logs say each flag is now, so a flag known to be off is
+      // never proposed; a source that can't say leaves every flag unknown.
+      const flags = source.describe().flags;
+      const mitigation = proposeMitigation(report, recorder.evidence, incident.service, undefined, incident.detectedAt, flags);
+      if (mitigation) {
+        recorder.update({ mitigation });
+        // Only for the incident's own run: not a re-run, not the benchmark.
+        if (!opts.rerun && !opts.save) void recorder.flush().then(() => notify("mitigation_proposed", recorder.incident));
+      } else recorder.update({ noMitigation: { why: whyNoMitigation(report, recorder.evidence, flags), at: new Date().toISOString() } });
     }
   } catch (err) {
     console.error("[triage] investigation failed", incident.id, err);
@@ -430,11 +463,18 @@ export async function runInvestigation(
   }
   recorder.dropUnfinishedThoughts();
   if (opts.appDir && recorder.incident.status === "diagnosed" && recorder.report?.verdict.kind === "root_cause") {
+    // A rollback's fix is written against the rolled-back release's commit,
+    // not the checkout the rollback changes (fix/release-tree.ts).
     await runFixStage(recorder, source, opts.appDir, {
+      releaseSha: releaseShaOf(recorder.incident),
       ...(opts.rerun && { stage: opts.rerun.fix, baseDir: opts.rerun.baseDir, notify: false }),
+      // Tests: the fix stage on the same scripted model.
+      ...(opts.languageModel && { stage, languageModel: opts.languageModel(stage) }),
     });
   }
   await snapshotting;
   await recorder.flush();
+  // The Slack card still says "Investigating" until told otherwise.
+  if (!opts.rerun && !opts.save) void refreshSlackCard(incident.id);
   return recorder.incident;
 }

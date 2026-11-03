@@ -1,15 +1,20 @@
 // Checks the fix sandbox end to end without the model: proves a known-good
 // fix for each of Shopfront's planted bugs (the reference test plus the
-// fix) and prints each run. The price list's test writes rows, so the check
+// fix) and prints each run, and proves one for the formatted-price release
+// against the release's commit rather than the checkout, as the fix stage
+// does after a rollback. The price list's test writes rows, so the check
 // also compares the real database before and after: the tests must only
-// have changed their throwaway copies. Needs Postgres up.
+// have changed their throwaway copies. Needs Postgres up. A word on the
+// command line keeps to the cases whose label has it.
 //
 //   pnpm --filter @triage/web check:sandbox
+//   pnpm --filter @triage/web check:sandbox formatted
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "pg";
 import { type Edit, proveFix, type RegressionTest } from "../src/lib/investigation/fix/prove";
+import { hasCommit } from "../src/lib/investigation/fix/release-tree";
 import { shopfrontDatabaseUrl, shopfrontDir } from "../src/lib/investigation/live/live-source";
 
 const reference = (file: string) => readFile(path.join(__dirname, "../src/lib/investigation/fix", file), "utf8");
@@ -26,7 +31,9 @@ async function withEndings(edits: Edit[]): Promise<Edit[]> {
   return out;
 }
 
-const cases = async (): Promise<{ label: string; test: RegressionTest; edits: Edit[] }[]> => [
+// `releaseSha`: proven against that commit's tree, as a rolled-back
+// release's fix is; its edits are written for the committed files (LF).
+const cases = async (): Promise<{ label: string; test: RegressionTest; edits: Edit[]; releaseSha?: string }[]> => [
   {
     label: "pool leak",
     test: {
@@ -131,6 +138,22 @@ const cases = async (): Promise<{ label: string; test: RegressionTest; edits: Ed
       },
     ],
   },
+  {
+    label: "formatted price (release 0dfdbac)",
+    releaseSha: "0dfdbac",
+    test: {
+      file: "src/lib/money.test.ts",
+      name: "formats in US dollars when STORE_CURRENCY is unset",
+      content: await reference("reference-money.test.ts.txt"),
+    },
+    edits: [
+      {
+        file: "src/lib/money.ts",
+        find: `export function formatPrice(cents: number, currency = process.env.STORE_CURRENCY): string {`,
+        replace: `export function formatPrice(cents: number, currency = process.env.STORE_CURRENCY || "USD"): string {`,
+      },
+    ],
+  },
 ];
 
 // What a test could have changed in the real database: every table's rows
@@ -171,14 +194,21 @@ async function leftoverCopies(): Promise<string[]> {
 }
 
 async function main() {
+  const only = process.argv[2];
   const before = await snapshot();
   for (const c of await cases()) {
+    if (only && !c.label.includes(only)) continue;
     console.log(`\n# ${c.label}`);
+    if (c.releaseSha && !(await hasCommit(shopfrontDir, c.releaseSha))) {
+      console.log(`check:sandbox: commit ${c.releaseSha} isn't in this checkout; skipped.`);
+      continue;
+    }
     const proof = await proveFix({
       appDir: shopfrontDir,
       name: "check-sandbox",
+      releaseSha: c.releaseSha,
       test: c.test,
-      edits: await withEndings(c.edits),
+      edits: c.releaseSha ? c.edits : await withEndings(c.edits),
       onStage: (stage) => console.log(`check:sandbox: running ${stage}…`),
     });
     for (const r of proof.runs) {

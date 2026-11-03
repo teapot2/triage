@@ -1,5 +1,7 @@
 import { after } from "next/server";
 import { z } from "zod";
+import { archivedRefusal, isArchived } from "@/lib/investigation/archive";
+import { startDependencyVerification } from "@/lib/investigation/dependencies";
 import type { Incident } from "@/lib/investigation/schema";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
 import { Refused, reopened, resolveRefusal, resolved, startVerification } from "@/lib/investigation/verify";
@@ -27,11 +29,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const now = new Date().toISOString();
   try {
     if (action === "verify") {
+      // A dependency incident is verified by the audit, which runs now.
+      if (incident.dependency) {
+        await startDependencyVerification(id, now);
+        return Response.json({ status: "verifying" }, { status: 202 });
+      }
       const { finished } = await startVerification(id, { after: "manual", since: now });
       after(() => finished);
       return Response.json({ status: "verifying" }, { status: 202 });
     }
     const next = await patchIncident(id, (i): Incident => {
+      if (isArchived(i)) throw new Refused(archivedRefusal);
       if (action === "resolve") {
         const refusal = resolveRefusal(i);
         if (refusal) throw new Refused(refusal);

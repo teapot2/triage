@@ -234,6 +234,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
         crumbs={isNew ? [{ label: "Watch", href: "/watch" }] : [{ label: "Watch", href: "/watch" }, { label: base.name, href: back }]}
         current={isNew ? "New rule" : "Edit"}
         title={isNew ? "New rule" : `Edit ${base.name}`}
+        divider={false}
       >
         <ReadBack text={unnamed && sentence(describeRule(unnamed))} />
       </WatchHeader>

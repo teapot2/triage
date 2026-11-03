@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { parseListParams } from "@/app/list-params";
 import { filterIncidents } from "@/lib/investigation/filter";
+import { toSummary } from "@/lib/investigation/list-summary";
 import { sortIncidents } from "@/lib/investigation/sort";
 import type { Incident } from "@/lib/investigation/schema";
 import { getIncident, listIncidents } from "@/lib/investigation/store";
 import { checkIdPattern, readChecks } from "@/lib/investigation/uptime/checks";
 import { readHourly, readSamplesSince } from "@/lib/investigation/uptime/samples";
+import { listFindings } from "@/lib/investigation/dependencies/store";
+import { dependencyFindings, shownFindings } from "./datasets/dependencies";
 import { endpointHourly, endpointResults } from "./datasets/endpoint";
 import {
   answerRows,
@@ -14,6 +17,7 @@ import {
   evidenceDb,
   evidenceLogs,
   evidenceMetrics,
+  evidenceSource,
   evidenceSpans,
   fixPatch,
   incidentRecord,
@@ -21,6 +25,7 @@ import {
   investigationTrace,
   logRows,
   metricRows,
+  sourceRows,
   spanRows,
   traceRows,
 } from "./datasets/incident";
@@ -45,9 +50,24 @@ const EPOCH = new Date(0).toISOString();
 const END_OF_TIME = new Date(8.64e15).toISOString();
 
 // The incident list's own query keys (app/list-params.ts), as its page's URL
-// has them; parseListParams reads them as the page does.
+// has them; parseListParams reads them as the page does. archived is the
+// export's own: active incidents only unless it says include (or only, for
+// Settings' archived list), as the list itself leaves them out.
 const listKey = z.string().optional();
-const listParams = z.object({ q: listKey, status: listKey, severity: listKey, service: listKey, sort: listKey, size: listKey, page: listKey });
+const listParams = z.object({
+  q: listKey,
+  status: listKey,
+  severity: listKey,
+  service: listKey,
+  sort: listKey,
+  size: listKey,
+  page: listKey,
+  archived: z.enum(["exclude", "include", "only"], "archived: exclude, include or only").optional(),
+});
+
+// The audited service, as the dependency audit files it: Shopfront, or the
+// folder name of the directory the settings name.
+const dependencyParams = z.object({ service: z.string().regex(/^[\w.@-]{1,200}$/, "service: the audited service's name") });
 
 // As the store names incident files.
 const incidentParams = z.object({ id: z.string().regex(/^inc_[a-z0-9_]+$/, "id: an incident id (inc_ and lowercase letters, digits or _)") });
@@ -89,9 +109,12 @@ export const exportEntries = exportRegistry([
     // What the list shows, with the bundled examples as it shows them, on
     // every page: the size and page are read and left out. Nothing matching
     // is a 404, as the list then offers no file.
-    load: async (params, { origin }) => {
+    load: async ({ archived, ...params }, { origin }) => {
       const asked = parseListParams(params);
-      const incidents = sortIncidents(filterIncidents(await listIncidents(), asked), asked.sort);
+      // Whole incidents, for the columns; filtered and sorted on their
+      // summaries, as the page does.
+      const listed = (await listIncidents({ archived })).map((incident) => ({ ...toSummary(incident), incident }));
+      const incidents = sortIncidents(filterIncidents(listed, asked), asked.sort).map((r) => r.incident);
       if (incidents.length === 0) return undefined;
       return {
         subject: { kind: "incidents", id: "list", name: "incidents" },
@@ -115,11 +138,22 @@ export const exportEntries = exportRegistry([
       };
     },
   }),
+  defineExport({
+    dataset: dependencyFindings,
+    params: dependencyParams,
+    // What the Watch page lists: no more than it shows, gone ones only
+    // within the week.
+    load: async ({ service }) => {
+      const rows = shownFindings(listFindings(service, { gone: true }), Date.now());
+      return rows.length > 0 ? { subject: { kind: "service", id: service, name: service }, rows } : undefined;
+    },
+  }),
   incidentExport(incidentRecord, (incident) => [incident]),
   incidentExport(evidenceLogs, logRows),
   incidentExport(evidenceSpans, spanRows),
   incidentExport(evidenceMetrics, metricRows),
   incidentExport(evidenceDb, dbRows),
+  incidentExport(evidenceSource, sourceRows),
   incidentExport(investigationTrace, traceRows),
   incidentExport(fixPatch, (incident) => (incident.fix ? [incident.fix] : [])),
   incidentExport(askAnswers, answerRows),

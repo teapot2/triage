@@ -17,7 +17,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   type BuiltInSection,
+  builtInInstructionText,
   builtInLabels,
   builtInSections,
   type CustomSection,
@@ -80,6 +80,8 @@ export function PostmortemTemplateSettings() {
   const [problems, setProblems] = useState<string[]>([]);
   // The dialog: a new custom section, or the one being edited.
   const [editing, setEditing] = useState<{ section?: CustomSection }>();
+  // The built-in section whose instructions are open, read-only.
+  const [viewing, setViewing] = useState<BuiltInSection>();
   const list = useRef<HTMLUListElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   // Where focus goes once a save finishes: a disabled button drops it.
@@ -176,7 +178,7 @@ export function PostmortemTemplateSettings() {
       <SettingsSectionHeader
         id="postmortems"
         title="Postmortems"
-        description="The sections Triage writes in a postmortem, in order. The header and the Evidence appendix are always there."
+        info="The header and the Evidence appendix are always there, around these sections."
       />
 
       {loadError && (
@@ -229,9 +231,7 @@ export function PostmortemTemplateSettings() {
                     >
                       <span className="flex flex-wrap items-center gap-2 font-medium text-sm">
                         {section.name}
-                        <Badge variant="outline" className="font-normal text-muted-foreground">
-                          Custom
-                        </Badge>
+                        <span className="font-normal text-muted-foreground text-xs">· custom</span>
                         <span className="sr-only">. Edit this section</span>
                       </span>
                       <span className="truncate text-muted-foreground text-xs">
@@ -239,7 +239,14 @@ export function PostmortemTemplateSettings() {
                       </span>
                     </button>
                   ) : (
-                    <span className="min-w-0 flex-1 basis-48 font-medium text-sm">{label}</span>
+                    <button
+                      type="button"
+                      onClick={() => setViewing(section.key)}
+                      className="-mx-2 min-w-0 flex-1 basis-48 rounded-md px-2 py-1 text-left font-medium text-sm outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      {label}
+                      <span className="sr-only">. Show its instructions</span>
+                    </button>
                   )}
                   <div className="ml-auto flex items-center gap-1">
                     <Button
@@ -338,6 +345,8 @@ export function PostmortemTemplateSettings() {
         </>
       )}
 
+      {viewing && <BuiltInDialog section={viewing} onClose={() => setViewing(undefined)} />}
+
       {editing && (
         <SectionDialog
           section={editing.section}
@@ -347,6 +356,37 @@ export function PostmortemTemplateSettings() {
         />
       )}
     </section>
+  );
+}
+
+// A built-in section's instructions, as the writer gets them, read-only:
+// these sections fill fields the renderer and the checks rely on, so a
+// different take on one is a custom section. The timeline has none: it's
+// built from the record, not written.
+function BuiltInDialog({ section, onClose }: { section: BuiltInSection; onClose: () => void }) {
+  const text = builtInInstructionText(section);
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{builtInLabels[section]}</DialogTitle>
+          <DialogDescription>Built in. For a different take, add a custom section.</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <span className="font-medium text-xs">Instructions</span>
+          <p className="whitespace-pre-wrap rounded-md border bg-muted/40 px-3 py-2 text-sm leading-relaxed">
+            {text ?? "None: no model writes it. Triage builds it from the incident's record."}
+          </p>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Close
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

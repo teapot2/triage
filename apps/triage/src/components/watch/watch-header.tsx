@@ -1,10 +1,15 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { StickyHeader } from "@/components/sticky-header";
+import { cn } from "@/lib/utils";
 
 // A Watch subpage's header: a breadcrumb back up (Watch / API latency /
 // Edit), the title with the page's actions beside it, and a line of facts
 // under it. The incident page's header, in miniature.
+//
+// The line under it sets the object off from what's on its page (charts,
+// lists, history). A form turns it off with `divider={false}`: its sections
+// start blocks of their own, and the line only stacks with them.
 //
 // With `sticky`, a compact bar keeps the title, `sticky.status` and the
 // actions (or `sticky.actions`, a shorter set) in view once the header scrolls
@@ -16,6 +21,7 @@ export function WatchHeader({
   title,
   actions,
   sticky,
+  divider = true,
   children,
 }: {
   // Every level above this page, nearest last.
@@ -25,6 +31,7 @@ export function WatchHeader({
   title: string;
   actions?: ReactNode;
   sticky?: { status?: ReactNode; actions?: ReactNode; column: string };
+  divider?: boolean;
   children?: ReactNode;
 }) {
   const body = (
@@ -49,7 +56,8 @@ export function WatchHeader({
       {children && <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-muted-foreground text-sm">{children}</div>}
     </>
   );
-  if (!sticky) return <header className="flex flex-col gap-2 border-b pb-6">{body}</header>;
+  const box = cn("flex flex-col gap-2", divider && "border-b pb-6");
+  if (!sticky) return <header className={box}>{body}</header>;
   const barActions = sticky.actions ?? actions;
   return (
     <StickyHeader
@@ -58,7 +66,7 @@ export function WatchHeader({
       actions={barActions && <div className="flex items-center gap-2">{barActions}</div>}
       column={sticky.column}
     >
-      <div className="flex flex-col gap-2 border-b pb-6">{body}</div>
+      <div className={box}>{body}</div>
     </StickyHeader>
   );
 }

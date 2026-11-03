@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { QuestionRecorder, questionEvidencePrefix } from "./recorder";
-import type { Question } from "./schema";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { after, before, describe, it } from "node:test";
+import { closeDb } from "../db";
+import { mitigated, poolLeak } from "./postmortem/test-incidents";
+import { InvestigationRecorder, QuestionRecorder, questionEvidencePrefix } from "./recorder";
+import type { Incident, Question } from "./schema";
 
 function question(id: string): Question {
   return {
@@ -92,5 +97,87 @@ describe("QuestionRecorder", () => {
     assert.equal(saved[0].status, "answering");
     await r.flush();
     assert.equal(saved.at(-1)?.status, "answered");
+  });
+});
+
+// The investigation's recorder saving into the store, on a temp working
+// directory so .data (and the database in it) is its own.
+describe("InvestigationRecorder in the store", () => {
+  const cwd = process.cwd();
+  let dir: string;
+  let store: typeof import("./store");
+  before(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "triage-recorder-"));
+    process.chdir(dir);
+    store = await import("./store");
+  });
+  after(async () => {
+    // Windows won't delete the temp directory while the database is open.
+    closeDb();
+    process.chdir(cwd);
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  // An incident whose investigation has just started.
+  async function started(id: string): Promise<Incident> {
+    const incident: Incident = {
+      ...poolLeak(),
+      id,
+      status: "investigating",
+      steps: [],
+      evidence: [],
+      thoughts: undefined,
+      report: undefined,
+      mitigation: undefined,
+      fixRun: undefined,
+      fix: undefined,
+      approval: undefined,
+      postmortem: undefined,
+    };
+    await store.saveIncident(incident);
+    return structuredClone(incident);
+  }
+
+  it("saves its own fields and leaves what others wrote meanwhile", async () => {
+    const r = new InvestigationRecorder(await started("inc_rec_own"));
+    r.startStep("call_1", "query_logs", {});
+    await r.flush();
+    // The Slack card and an archive land while the run goes on.
+    await store.patchIncident("inc_rec_own", (i) => ({ ...i, slack: { channel: "C1", ts: "1.2" }, archivedAt: "2026-11-02T10:00:00.000Z" }));
+    r.completeStep("call_1", "query_logs", "1 log group", [log]);
+    r.update({ status: "diagnosed", report: poolLeak().report });
+    await r.flush();
+
+    const stored = (await store.getIncident("inc_rec_own"))!;
+    assert.deepEqual(stored.slack, { channel: "C1", ts: "1.2" });
+    assert.equal(stored.archivedAt, "2026-11-02T10:00:00.000Z");
+    assert.equal(stored.status, "diagnosed");
+    assert.ok(stored.report);
+    assert.deepEqual(stored.steps.map((s) => s.status), ["completed"]);
+    assert.deepEqual(stored.evidence.map((e) => e.id), ["ev_log_1"]);
+  });
+
+  it("keeps a resolved incident resolved and a decided mitigation as decided", async () => {
+    const r = new InvestigationRecorder(await started("inc_rec_kept"));
+    const proposed = { ...mitigated().mitigation!, state: "proposed" as const, decidedAt: undefined, appliedAt: undefined, recovery: undefined };
+    r.update({ status: "diagnosed", mitigation: proposed });
+    await r.flush();
+    assert.equal((await store.getIncident("inc_rec_kept"))?.mitigation?.state, "proposed");
+
+    // Approved and resolved while the fix stage still runs here.
+    await store.patchIncident("inc_rec_kept", (i) => ({
+      ...i,
+      status: "resolved",
+      resolvedAt: "2026-11-02T10:00:00.000Z",
+      mitigation: { ...i.mitigation!, state: "approved" },
+    }));
+    r.update({ fixRun: { status: "failed", attempt: 1, startedAt: "2026-11-02T09:59:00.000Z", error: "no fix" } });
+    await r.flush();
+
+    const stored = (await store.getIncident("inc_rec_kept"))!;
+    assert.equal(stored.status, "resolved");
+    assert.equal(stored.resolvedAt, "2026-11-02T10:00:00.000Z");
+    assert.equal(stored.mitigation?.state, "approved");
+    assert.equal(stored.fixRun?.status, "failed");
   });
 });

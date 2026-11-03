@@ -134,6 +134,16 @@ function verificationSignals(incident: Incident): Signal[] {
   if (v.after === "uptime") {
     return [{ kind: "verification", status: "unknown", at: v.startedAt, text: "The endpoint answered in time again" }];
   }
+  // The dependency audit no longer finding the advisory: after a merged fix,
+  // that's the fix confirmed; otherwise it went away some other way.
+  if (v.after === "dependencies") {
+    const merged = incident.approval?.prMergedAt !== undefined;
+    if (v.status === "resolved") {
+      return [{ kind: "verification", status: merged ? "confirmed" : "unknown", at: v.finishedAt, text: merged ? "The dependency audit no longer finds the advisory after the merged fix" : "The dependency audit no longer finds the advisory" }];
+    }
+    if (v.status === "verifying") return [{ kind: "verification", status: "unknown", at: v.startedAt, text: "Waiting for a dependency audit that no longer finds the advisory" }];
+    return [];
+  }
   const after = afterInWords[v.after];
   switch (v.status) {
     case "resolved":

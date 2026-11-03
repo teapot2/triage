@@ -165,7 +165,7 @@ describe("summarize", () => {
       title: id,
       service,
       detectedAt: new Date(detectedAt).toISOString(),
-      trigger: { metric: "m", unit: "ms", threshold: 1, observed: 2, series: [] },
+      trigger: {},
     });
     const incidents = [incident("old", START - 1), incident("in", END - 1_000), incident("elsewhere", END - 1_000, "other")];
     const s = summarize(input({ incidents }), "shopfront", "5m", NOW);

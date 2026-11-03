@@ -1,5 +1,5 @@
 import type { Evidence, EvidenceKind, Incident, InvestigationReport, Question, Thought, ToolName } from "./schema";
-import { getIncident, patchIncident, withIncidentLock } from "./store";
+import { patchIncident } from "./store";
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
@@ -32,10 +32,47 @@ export interface ThoughtRecorder {
 
 type Step = Incident["steps"][number];
 
-// Owns the incident while the agent runs: assigns evidence IDs, tracks
-// steps and queried services, and saves after every change so the UI can
-// follow along. Saves are serialized so a slow write never lands after a
-// newer one.
+// The fields the investigation and fix stages write, through this recorder.
+// The rest of the incident is other writers' (the routes' decisions, the
+// questions, the verification and resolution, the uptime loop's counts,
+// the Slack card, the postmortem, archiving, re-runs), so a save leaves it
+// as stored.
+export const recordedFields = [
+  "steps",
+  "evidence",
+  "thoughts",
+  "report",
+  "run",
+  "status",
+  "snapshot",
+  "mitigation",
+  "noMitigation",
+  "fix",
+  "validation",
+  "fixRun",
+  "approval",
+] as const satisfies readonly (keyof Incident)[];
+
+export type RecordedField = (typeof recordedFields)[number];
+
+// The stored incident with the recorder's fields from its snapshot. Two of
+// them it only sets: a mitigation is proposed here once, and deciding and
+// applying it are the routes'; a resolved incident stays resolved when a
+// stage finishes after the verification resolved it.
+export function withRecorded(stored: Incident, snapshot: Incident): Incident {
+  const own = Object.fromEntries(recordedFields.map((f) => [f, snapshot[f]])) as Pick<Incident, RecordedField>;
+  return {
+    ...stored,
+    ...own,
+    status: stored.status === "resolved" ? "resolved" : snapshot.status,
+    mitigation: stored.mitigation ?? snapshot.mitigation,
+  };
+}
+
+// Owns the investigation's fields of the incident while the agent runs:
+// assigns evidence IDs, tracks steps and queried services, and saves after
+// every change so the UI can follow along. Saves are serialized so a slow
+// write never lands after a newer one.
 export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, ThoughtRecorder {
   readonly queriedServices = new Set<string>();
   rejectedReports = 0;
@@ -47,9 +84,12 @@ export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, Th
   // tagged on their steps and thoughts. Unset on single-agent runs.
   lane: string | undefined;
 
+  // `save`: somewhere other than the incident store (the benchmark, a
+  // re-run's record, tests), given the whole incident. Left out, each save
+  // patches the stored incident with only the recorder's fields.
   constructor(
     public incident: Incident,
-    private save: (incident: Incident) => Promise<void>,
+    private save?: (incident: Incident) => Promise<void>,
   ) {}
 
   get report(): InvestigationReport | undefined {
@@ -128,7 +168,8 @@ export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, Th
     this.updateStep(id, (step) => failedStep(step, error));
   }
 
-  update(patch: Partial<Incident>) {
+  // Only the recorder's fields: any other would never be saved.
+  update(patch: Partial<Pick<Incident, RecordedField>>) {
     this.incident = { ...this.incident, ...patch };
     this.persist();
   }
@@ -144,29 +185,12 @@ export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, Th
 
   private persist() {
     const snapshot = structuredClone(this.incident);
-    // Routes change the mitigation, the questions and the fix attempts, and
-    // the verification resolves or reopens the incident, and the uptime loop
-    // counts failing checks, while a stage still runs here; a whole-snapshot
-    // save would overwrite them. A resolved incident stays resolved when the
-    // fix stage finishes.
+    // Other writers change the incident while a stage still runs here, so
+    // the store gets only what the recorder owns (withRecorded).
+    const save = this.save;
     this.writes = this.writes
       .then(() =>
-        withIncidentLock(snapshot.id, async () => {
-          const stored = await getIncident(snapshot.id);
-          await this.save({
-            ...snapshot,
-            mitigation: stored?.mitigation ?? snapshot.mitigation,
-            questions: stored?.questions ?? snapshot.questions,
-            fixAttempts: stored?.fixAttempts ?? snapshot.fixAttempts,
-            ...(stored && {
-              status: stored.status === "resolved" ? "resolved" : snapshot.status,
-              verification: stored.verification,
-              resolvedAt: stored.resolvedAt,
-              reopenings: stored.reopenings,
-              uptime: stored.uptime,
-            }),
-          });
-        }),
+        save ? save(snapshot) : patchIncident(snapshot.id, (stored) => withRecorded(stored, snapshot)).then(() => {}),
       )
       .catch((err) => console.error("[triage] failed to save incident", snapshot.id, err));
   }

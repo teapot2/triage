@@ -7,7 +7,7 @@ import { providerLabels } from "./labels";
 //
 // Keys for the hosted providers come from the server's environment. Local
 // servers usually need none; when one does (llama-server --api-key), or for
-// a custom endpoint, the key is saved server-side in .data/settings.json
+// a custom endpoint, the key is saved server-side with the settings (settings.ts)
 // and never sent back to the browser.
 
 export const providerIds = [

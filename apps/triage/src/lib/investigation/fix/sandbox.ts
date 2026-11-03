@@ -3,18 +3,23 @@ import { cp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/pr
 import os from "node:os";
 import path from "node:path";
 import type { SandboxRun, TestCase } from "../schema";
+import { exportTreeAt } from "./release-tree";
 
 // A throwaway copy of the app where Triage tries a fix: the source, config
 // and migrations, with node_modules linked rather than copied. Tests run
 // against a throwaway copy of the app's database (database.ts), never the
 // one the app serves from. Never touches the app itself.
 
-const root = path.join(/* turbopackIgnore: true */ os.tmpdir(), "triage-sandbox");
+// Every sandbox lives under here, dependency ones too (dependencies/sandbox.ts).
+export const sandboxRoot = path.join(/* turbopackIgnore: true */ os.tmpdir(), "triage-sandbox");
+const root = sandboxRoot;
 
 // Top-level entries a sandbox doesn't need: deps (linked instead), build
 // output, product photos and anything holding secrets.
 const skipTop = new Set(["node_modules", ".next", "public", "tsconfig.tsbuildinfo"]);
-const skip = (rel: string) => skipTop.has(rel.split(path.sep)[0]) || path.basename(rel).startsWith(".env");
+// Paths come from the file system (the OS separator) or from git (forward
+// slashes).
+export const skip = (rel: string) => skipTop.has(rel.split(/[\\/]/)[0]) || path.basename(rel).startsWith(".env");
 
 // Stops a hung test run; a passing run takes a few seconds.
 const RUN_TIMEOUT_MS = 90_000;
@@ -22,13 +27,22 @@ const RUN_TIMEOUT_MS = 90_000;
 // store and show.
 const OUTPUT_LIMIT = 6_000;
 
-// `baseDir`, when given, is copied over the app's files: the source as a
-// re-run's first run read it.
-export async function createSandbox(appDir: string, name: string, baseDir?: string): Promise<string> {
+// The app's files come from the live checkout, or, with `releaseSha`, from
+// that commit's tree in git: a fix for a rolled-back release is proven
+// against the release's code, which the rollback has taken out of the
+// checkout. `baseDir`, when given, is copied over them: the source as a
+// re-run's first run read it. The dependencies and generated types are the
+// live app's either way.
+export async function createSandbox(
+  appDir: string,
+  name: string,
+  opts: { baseDir?: string; releaseSha?: string } = {},
+): Promise<string> {
   const dir = path.join(root, name);
   await rm(dir, { recursive: true, force: true });
-  await cp(appDir, dir, { recursive: true, filter: (src) => src === appDir || !skip(path.relative(appDir, src)) });
-  if (baseDir) await cp(baseDir, dir, { recursive: true, force: true });
+  if (opts.releaseSha) await exportTreeAt(appDir, opts.releaseSha, dir, (rel) => !skip(rel));
+  else await cp(appDir, dir, { recursive: true, filter: (src) => src === appDir || !skip(path.relative(appDir, src)) });
+  if (opts.baseDir) await cp(opts.baseDir, dir, { recursive: true, force: true });
   // A real node_modules folder whose entries link to the app's, so tools
   // that write caches there (vitest, vite) write into the sandbox.
   await mkdir(path.join(dir, "node_modules"));
@@ -70,7 +84,7 @@ export function sandboxEnv(databaseUrl?: string): NodeJS.ProcessEnv {
 
 // Runs a command, merging stdout and stderr, and kills the whole process
 // tree if it outlives the timeout (vitest forks workers).
-export function exec(cmd: string, args: string[], cwd: string, env = sandboxEnv()): Promise<Exec> {
+export function exec(cmd: string, args: string[], cwd: string, env = sandboxEnv(), timeoutMs = RUN_TIMEOUT_MS): Promise<Exec> {
   const started = performance.now();
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd, env, windowsHide: true });
@@ -83,13 +97,16 @@ export function exec(cmd: string, args: string[], cwd: string, env = sandboxEnv(
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      if (process.platform === "win32" && child.pid) {
+      // Windows from the environment, read at run time: Turbopack folds
+      // process.platform into a constant in the server build, which would
+      // leave vitest's forked workers running after a timeout.
+      if (process.env.OS === "Windows_NT" && child.pid) {
         spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true });
       } else child.kill("SIGKILL");
-    }, RUN_TIMEOUT_MS);
+    }, timeoutMs);
     const finish = (exitCode: number) => {
       clearTimeout(timer);
-      if (timedOut) output += `\nKilled after ${RUN_TIMEOUT_MS / 1000} s.`;
+      if (timedOut) output += `\nKilled after ${timeoutMs / 1000} s.`;
       resolve({ exitCode, output, durationMs: Math.round(performance.now() - started) });
     };
     child.on("error", (err) => {

@@ -6,6 +6,7 @@ import { after, before, describe, it } from "node:test";
 import { exampleIncidents } from "../investigation/fixtures";
 import { poolLeak, resolved } from "../investigation/postmortem/test-incidents";
 import type { Incident } from "../investigation/schema";
+import { closeDb } from "../db";
 
 // The incident list and postmortem action item exports through the route,
 // on a temp working directory so .data is ours. The store resolves its
@@ -38,10 +39,13 @@ before(async () => {
   // A postmortem still being written has no action items yet.
   await saveIncident({ ...poolLeak(), id: "inc_export_writing", postmortem: { status: "writing", startedAt: "2026-10-23T02:20:00.000Z", model: "muse-spark-1.3" } });
   for (let n = 1; n <= 12; n++) await saveIncident(checkout(n));
+  // Archived: left out of the counts below unless asked for.
+  await saveIncident({ ...resolved(), id: "inc_export_archived", archivedAt: "2026-11-02T09:00:00.000Z" });
 });
 after(async () => {
   process.chdir(cwd);
   // Windows may still hold a just-renamed file for a moment.
+  closeDb();
   await rm(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
@@ -66,9 +70,9 @@ describe("GET /api/export/incidents", () => {
       header,
       "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,confidence_grade,verdict_outcome,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
     );
-    // 15 saved and the 4 bundled examples, as the list shows them.
-    assert.equal(rows.length, 19);
-    for (const id of ["inc_pool_leak", "inc_control", "inc_price_gap", "inc_live_ratings"]) {
+    // 15 saved and the 6 bundled examples, as the list shows them.
+    assert.equal(rows.length, 21);
+    for (const id of ["inc_pool_leak", "inc_control", "inc_price_gap", "inc_live_ratings", "inc_bad_deploy", "inc_traffic_rush"]) {
       assert.ok(
         rows.some((r) => r.startsWith(`${id},`)),
         id,
@@ -129,6 +133,20 @@ describe("GET /api/export/incidents", () => {
     assert.deepEqual(await ids(await get("incidents", "format=json&q=errors%201&sort=oldest")), all.slice(9));
     // Nothing matching: a 404, as the list then offers no Export.
     assert.equal((await get("incidents", "format=json&service=nope")).status, 404);
+  });
+
+  it("leaves archived incidents out unless archived says include or only", async () => {
+    const active = await ids(await get("incidents", "format=json"));
+    assert.ok(!active.includes("inc_export_archived"));
+    const all = await ids(await get("incidents", "format=json&archived=include"));
+    assert.equal(all.length, active.length + 1);
+    assert.ok(all.includes("inc_export_archived"));
+    assert.deepEqual(await ids(await get("incidents", "format=json&archived=only")), ["inc_export_archived"]);
+    // The list's filters still apply on top.
+    assert.equal((await get("incidents", "format=json&archived=only&service=checkout")).status, 404);
+    const bad = await get("incidents", "format=json&archived=yes");
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).error, /archived: exclude, include or only/);
   });
 });
 

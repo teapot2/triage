@@ -23,6 +23,11 @@ const isPoolEvidence = (e: Evidence) =>
 const recycleStep = "Recycle pooled connections held longer than 5 s (what a restart would do)";
 
 type Candidate = { kind: Mitigation["kind"]; target: string; from: Evidence; turnedOn?: boolean; branch?: string };
+// The flags' states now, as the source read them from the logs (`flags:
+// loaded` at boot plus the flips since); a flag missing from it is unknown.
+type FlagStates = Record<string, boolean>;
+
+const flagOf = (e: Commit) => e.sha.slice("config:".length);
 
 // The leading hypothesis' causal chain, as the evidence items it cites (the
 // set the alert chart's deploy markers come from). A deploy counts when the
@@ -41,13 +46,25 @@ function cited(report: InvestigationReport, evidence: Evidence[]): { items: Evid
 }
 
 // First match wins: a flag turned on, then a flag the blamed code checks,
-// then a flag turned on after the blamed deploy, then the deploy itself.
-function candidate(items: Evidence[], deploys: Commit[], evidence: Evidence[], alertAt?: string): Candidate | undefined {
-  const flagOn = deploys.find((e) => isConfig(e) && e.message.includes("turned on"));
-  if (flagOn) return { kind: "flag_off", target: flagOn.sha.slice("config:".length), from: flagOn, turnedOn: true };
+// then a flag turned on after the blamed deploy, then the deploy itself. A
+// flag the logs say is off now is skipped at every step: the code behind it
+// isn't running, so turning it off would change nothing (the blamed code
+// may check a flag that was never on, or one turned off again before the
+// alert). Skipping it falls through to the next rule. An unknown flag is
+// proposed as before.
+function candidate(
+  items: Evidence[],
+  deploys: Commit[],
+  evidence: Evidence[],
+  alertAt?: string,
+  flags?: FlagStates,
+): Candidate | undefined {
+  const off = (flag: string) => flags?.[flag] === false;
+  const flagOn = deploys.find((e) => isConfig(e) && e.message.includes("turned on") && !off(flagOf(e)));
+  if (flagOn) return { kind: "flag_off", target: flagOf(flagOn), from: flagOn, turnedOn: true };
   for (const e of items) {
     const flag = e.kind === "source" ? flagCheck.exec(e.code)?.[1] : undefined;
-    if (flag) return { kind: "flag_off", target: flag, from: e };
+    if (flag && !off(flag)) return { kind: "flag_off", target: flag, from: e };
   }
   const deploy = deploys.find(isRollbackable);
   if (!deploy) return undefined;
@@ -61,8 +78,9 @@ function candidate(items: Evidence[], deploys: Commit[], evidence: Evidence[], a
   const later = evidence
     .filter(isDeploy)
     .filter((e) => isConfig(e) && e.message.includes("turned on") && at(e) >= at(deploy) && at(e) <= until)
+    .filter((e) => !off(flagOf(e)))
     .sort((a, b) => at(a) - at(b))[0];
-  if (later) return { kind: "flag_off", target: later.sha.slice("config:".length), from: later, turnedOn: true };
+  if (later) return { kind: "flag_off", target: flagOf(later), from: later, turnedOn: true };
   return { kind: "rollback", target: deploy.sha, from: deploy, branch: deploy.branch };
 }
 
@@ -89,19 +107,37 @@ function why(c: Candidate, service: string, recycles: boolean): string {
   return recycles ? `${change}; turning it off stops new leaks, and recycling the held connections frees the pool.` : `${change}.`;
 }
 
+// Why proposeMitigation proposed nothing, for the page: what the diagnosis
+// cites that can't be undone, or that it cites no change at all.
+export function whyNoMitigation(report: InvestigationReport, evidence: Evidence[], flags?: FlagStates): string {
+  const { items, deploys } = cited(report, evidence);
+  const checked = items.flatMap((e) => (e.kind === "source" ? (flagCheck.exec(e.code)?.[1] ?? []) : []));
+  const flagsOff = [...new Set([...deploys.filter(isConfig).map(flagOf), ...checked])].filter((f) => flags?.[f] === false);
+  const undone = [...new Set(deploys.filter((e) => e.deployKind === "rollback").map((e) => e.sha))];
+  const parts = [
+    ...(flagsOff.length ? [`${flagsOff.join(" and ")} ${flagsOff.length > 1 ? "are" : "is"} already off`] : []),
+    ...(undone.length ? [`${undone.join(" and ")} ${undone.length > 1 ? "were" : "was"} already rolled back`] : []),
+  ];
+  if (parts.length) return `Nothing to undo: ${parts.join("; ")}.`;
+  return "Nothing to undo: the diagnosis cites no flag flip or deploy. If the load itself is the cause, scale out or wait for the rate to settle.";
+}
+
 // A fast, reversible step to propose beside a root-cause verdict, chosen by
 // rule from the evidence the diagnosis cites. Nothing when no cited change
 // can be undone that way. `alertAt`, when given, is the latest a flag can
-// have been turned on to count as the cause.
+// have been turned on to count as the cause; `flags`, when given, is what
+// the logs say each flag is now, and a flag they say is off is never
+// proposed (see candidate).
 export function proposeMitigation(
   report: InvestigationReport,
   evidence: Evidence[],
   service: string,
   now = new Date().toISOString(),
   alertAt?: string,
+  flags?: FlagStates,
 ): Mitigation | undefined {
   const { items, deploys } = cited(report, evidence);
-  const c = candidate(items, deploys, evidence, alertAt);
+  const c = candidate(items, deploys, evidence, alertAt, flags);
   if (!c) return undefined;
   const pool = c.kind === "flag_off" ? items.filter(isPoolEvidence) : [];
   const t = templates[c.kind](c.target, service);

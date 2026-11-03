@@ -167,11 +167,7 @@ export function ModelSettings() {
 
       {settings && (
         <section aria-labelledby="providers" className="flex flex-col gap-3">
-          <SettingsSectionHeader
-            id="providers"
-            title="Providers"
-            description="Every provider speaks the OpenAI API."
-          />
+          <SettingsSectionHeader id="providers" title="Providers" />
           <div className="divide-y overflow-hidden rounded-lg border">
             <ListGroup label="In use" />
             {hosted.filter(inUse).map(hostedRow)}
@@ -196,7 +192,7 @@ export function ModelSettings() {
                   )}
                   {idleHosted.map(hostedRow)}
                   {idleLocal.length > 0 && (
-                    <ListGroup label="Local and custom" note="Saved on the server; keys never reach the browser" />
+                    <ListGroup label="Local and custom" />
                   )}
                   {idleLocal.map(endpointRow)}
                 </CollapsibleContent>
@@ -405,7 +401,7 @@ function HostedProvider({ provider, usedBy, ...row }: RowProps) {
             {ready ? [provider.baseUrlEnv, provider.keyEnv].filter(Boolean).join(", ") : line}
           </span>
           {ready ? (
-            <Badge variant="success">set</Badge>
+            <StatusBadge tone="success">Set</StatusBadge>
           ) : (
             <Button variant="ghost" size="xs" onClick={copy}>
               {copied ? "Copied" : "Copy"}
@@ -521,6 +517,7 @@ function EndpointProvider({ provider, usedBy, onSave, ...row }: RowProps & { onS
       <FormField
         label="Base URL"
         htmlFor={`${id}-url`}
+        info="Triage talks to every provider through the OpenAI API: the URL its /v1 endpoints answer on."
         hint={!result && list.error}
         error={noUrl && !url ? "Enter the server's base URL to test it." : undefined}
       >

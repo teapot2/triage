@@ -18,6 +18,12 @@ export const toolNameSchema = z.enum([
   "deploy_history",
   // Meta's built-in search, run on its side (Fix and Ask only).
   "web_search",
+  // A dependency incident's exposure stage (dependencies/exposure.ts): the
+  // audit's advisory as the run's first step, then listing and searching
+  // the service's source.
+  "dependency_audit",
+  "list_files",
+  "grep_source",
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -186,6 +192,19 @@ export const reportSummarySchema = z
     "What happened, for the on-call engineer, in plain English: one or two short sentences, under 40 words. Say what broke, why, and since when. Name a file, function or commit only if it is the cause. No metric names, tool names or evidence IDs.",
   );
 
+// On a dependency incident (dependencies/exposure.ts): whether the service's
+// code reaches the vulnerable package. reachable: the service imports it, or
+// a direct dependency it calls uses the vulnerable part. transitive_only: it
+// is in the tree, but nothing found leads from the service's code to it.
+// not_reachable: the code that would use it never runs in production.
+// The rationale cites the importing files (source evidence).
+export const exposureVerdicts = ["reachable", "transitive_only", "not_reachable"] as const;
+export const exposureSchema = z.object({
+  verdict: z.enum(exposureVerdicts),
+  rationale: claimSchema,
+});
+export type Exposure = z.infer<typeof exposureSchema>;
+
 // What the model returns as structured output at the end of Stage 2.
 // `summary` is optional here only so reports saved before it existed still
 // load; submit_report requires it.
@@ -194,6 +213,8 @@ export const investigationReportSchema = z.object({
   hypotheses: z.array(hypothesisSchema),
   verdict: verdictSchema,
   servicesQueried: z.array(z.string()),
+  // Dependency incidents only.
+  exposure: exposureSchema.optional(),
 });
 export type InvestigationReport = z.infer<typeof investigationReportSchema>;
 
@@ -223,6 +244,19 @@ export const fixSchema = z.object({
   // The web pages the fix stage cited while writing it, as evidence on the
   // incident.
   sourceIds: z.array(z.string()).optional(),
+  // A dependency incident's fix (dependencies/fix.ts): the package raised to
+  // its patched version, as the service's own dependency (direct) or by a
+  // package manager override (override); major when it crosses a major
+  // version. Its regressionTest names the sandbox's re-audit.
+  bump: z
+    .object({
+      package: z.string(),
+      from: z.string(),
+      to: z.string(),
+      kind: z.enum(["direct", "override"]),
+      major: z.boolean(),
+    })
+    .optional(),
 });
 export type Fix = z.infer<typeof fixSchema>;
 
@@ -259,12 +293,25 @@ export const mitigationSchema = z.object({
   state: z.enum(["proposed", "approved", "denied", "running", "applied", "failed"]),
   proposedAt: timestamp,
   decidedAt: timestamp.optional(),
+  // Who decided, by name, and their Slack member ID when they clicked a
+  // button in Slack. Both missing when decided on the incident page.
+  decidedBy: z.string().optional(),
+  decidedInSlack: z.string().optional(),
   appliedAt: timestamp.optional(),
   output: z.string().optional(),
   error: z.string().optional(),
   recovery: recoverySchema.optional(),
 });
 export type Mitigation = z.infer<typeof mitigationSchema>;
+
+// Why no mitigation stands beside a root-cause verdict, so the page says so
+// rather than showing nothing: the diagnosis cites no flag flip or deploy to
+// undo (the load itself, say), or only ones already undone.
+export const noMitigationSchema = z.object({
+  why: z.string(),
+  at: timestamp,
+});
+export type NoMitigation = z.infer<typeof noMitigationSchema>;
 
 export const testCaseSchema = z.object({
   name: z.string(),
@@ -298,6 +345,8 @@ export const approvalSchema = z.object({
   requestedAt: timestamp,
   decidedAt: timestamp.optional(),
   decidedBy: z.string().optional(),
+  // The approver's Slack member ID, when they approved with a Slack button.
+  decidedInSlack: z.string().optional(),
   reason: z.string().optional(),
   // Set when the fix changes stored data and the approver said they
   // reviewed that change.
@@ -629,8 +678,11 @@ export type Reopening = z.infer<typeof reopeningSchema>;
 // incident when it completes; reopens it on the first minute over.
 // After an uptime check's healthy run, the window is that run: its samples'
 // response times, already judged, so the record is written resolved.
+// After a dependency fix's PR is merged ("dependencies"), the audit loop
+// verifies: the first audit that no longer finds the advisory resolves it;
+// each one that still does is a point on the series (1) and a note.
 export const verificationSchema = z.object({
-  after: z.enum(["mitigation", "fix", "manual", "uptime"]),
+  after: z.enum(["mitigation", "fix", "manual", "uptime", "dependencies"]),
   since: timestamp,
   windowMinutes: z.number().int().positive(),
   metric: z.string(),
@@ -658,6 +710,31 @@ export const uptimeEpisodeSchema = z.object({
   recoveredAt: timestamp.optional(),
 });
 export type UptimeEpisode = z.infer<typeof uptimeEpisodeSchema>;
+
+// The advisory behind an incident the dependency audit opened
+// (dependencies/), as the latest audit that found it saw it: the package,
+// the versions the service's tree holds, the range that fixes it, and the
+// chains from the service's own dependencies down to it. audits counts the
+// audits that found it while the incident was open; goneAt is when one
+// first didn't.
+export const dependencyAdvisorySchema = z.object({
+  advisoryId: z.string(),
+  package: z.string(),
+  title: z.string(),
+  versions: z.array(z.string()).min(1),
+  vulnerable: z.string(),
+  patched: z.string().optional(),
+  severity: z.enum(["info", "low", "moderate", "high", "critical"]),
+  cwe: z.array(z.string()),
+  url: z.string(),
+  dev: z.boolean(),
+  direct: z.array(z.string()),
+  paths: z.array(z.string()),
+  audits: z.number().int().nonnegative(),
+  lastFoundAt: timestamp,
+  goneAt: timestamp.optional(),
+});
+export type DependencyAdvisory = z.infer<typeof dependencyAdvisorySchema>;
 
 // A stage's model as a run was asked to use it, safe for the browser
 // (models/settings.ts checks the provider when a re-run starts).
@@ -722,6 +799,7 @@ const incidentBaseSchema = z.object({
   evidence: z.array(evidenceSchema),
   report: investigationReportSchema.optional(),
   mitigation: mitigationSchema.optional(),
+  noMitigation: noMitigationSchema.optional(),
   fix: fixSchema.optional(),
   validation: z.array(sandboxRunSchema).optional(),
   fixRun: fixRunSchema.optional(),
@@ -741,9 +819,19 @@ const incidentBaseSchema = z.object({
   reopenings: z.array(reopeningSchema).optional(),
   // The uptime check that opened it. Missing on every other incident.
   uptime: uptimeEpisodeSchema.optional(),
+  // The advisory the dependency audit opened it for. Missing on every other
+  // incident.
+  dependency: dependencyAdvisorySchema.optional(),
   // The models a re-run was started with, on a run that was one (now or
   // before it was promoted). Missing on a first run: its records say.
   models: runModelsSchema.optional(),
+  // The incident's first Slack message, posted through the Slack bot: later
+  // events reply in its thread and it is updated with the incident's status.
+  // Missing when no bot was set up when the incident opened.
+  slack: z.object({ channel: z.string(), ts: z.string() }).optional(),
+  // When it was archived (investigation/archive.ts): hidden from the lists
+  // and read-only until restored. Missing on an active incident.
+  archivedAt: timestamp.optional(),
 });
 
 // The fields that make one investigation run: the investigation itself and
@@ -756,6 +844,7 @@ export const runFields = [
   "evidence",
   "report",
   "mitigation",
+  "noMitigation",
   "fix",
   "validation",
   "fixRun",

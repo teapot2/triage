@@ -1,22 +1,17 @@
 "use client";
 
-import {
-  ChevronRightIcon,
-  CircleCheckIcon,
-  CircleHelpIcon,
-  CircleXIcon,
-  CrosshairIcon,
-} from "lucide-react";
-import type { ReactNode } from "react";
-import { StatusBadge } from "@/components/ui/badge";
+import { ChevronRightIcon, CircleHelpIcon, CircleXIcon, CrosshairIcon, InfoIcon, ShieldAlertIcon } from "lucide-react";
+import { Fragment, type ReactNode } from "react";
+import { StatusBadge, type StatusTone } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCountUp } from "@/hooks/use-count-up";
 import { otherHypotheses } from "@/lib/investigation/citations";
 import { gradeHypothesis, gradeLabels, gradeTone } from "@/lib/investigation/confidence-grade";
-import { rollupLabels, rollupTone, type VerdictOutcome, verdictOutcome } from "@/lib/investigation/outcome";
-import type { Claim, Evidence, Hypothesis, Incident, InvestigationReport } from "@/lib/investigation/schema";
+import { rollupLabels, rollupTone, verdictOutcome } from "@/lib/investigation/outcome";
+import type { Claim, Evidence, Exposure, Hypothesis, Incident, InvestigationReport } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent } from "./format";
@@ -45,12 +40,10 @@ export function citedDeploys(report: InvestigationReport, evidence: Evidence[]):
   return [...markers.values()];
 }
 
-// The answer, as one card: the verdict and how sure the agent is on top,
-// its plain-English summary below, and the argument behind it folded into
-// the footer. Reports from before the summary existed fall back to the
-// verdict's own claim. Beside the model's own confidence, the grade the
-// record gives the hypothesis, and once something checked the diagnosis,
-// whether it held.
+// The answer, as one card: the verdict with one line on how far to trust
+// it, and the model's own confidence beside it; its plain-English summary
+// below, and the argument behind it folded into the footer. Reports from
+// before the summary existed fall back to the verdict's own claim.
 export function VerdictCard({
   incident,
   report,
@@ -72,7 +65,7 @@ export function VerdictCard({
 
   let label: ReactNode;
   let title: string;
-  let aside: ReactNode;
+  let trust: ReactNode;
   let body: ReactNode;
   if (leading) {
     label = (
@@ -82,32 +75,17 @@ export function VerdictCard({
       </>
     );
     title = leading.title;
-    aside = (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:flex-col sm:items-end">
-        <Confidence value={leading.confidence} />
-        <GradeChip hypothesis={leading} incident={incident} />
-      </div>
-    );
+    trust = <TrustLine hypothesis={leading} incident={incident} />;
     body = report.summary ?? leading.causalChain.rootCause.text;
   } else if (verdict.kind === "healthy") {
     label = "Verdict";
     title = "No issue found";
-    aside = (
-      <span className="flex items-center gap-1.5 text-sm text-success">
-        <CircleCheckIcon className="size-4" />
-        Healthy
-      </span>
-    );
+    trust = <StatusBadge tone="success">Healthy</StatusBadge>;
     body = report.summary ?? verdict.rationale.text;
   } else {
     label = "Verdict";
     title = "Not enough evidence";
-    aside = (
-      <span className="flex items-center gap-1.5 text-sm text-warning">
-        <CircleHelpIcon className="size-4" />
-        Inconclusive
-      </span>
-    );
+    trust = <StatusBadge tone="warning">Inconclusive</StatusBadge>;
     body = (
       <>
         {report.summary && <span className="block">{report.summary}</span>}
@@ -121,15 +99,23 @@ export function VerdictCard({
       <div className="flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="flex min-w-0 flex-col gap-1">
-            <span className="flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
-              {label}
-              {leading && <OutcomeChip outcome={verdictOutcome(incident)} />}
-            </span>
+            <span className="flex items-center gap-1.5 text-muted-foreground text-xs">{label}</span>
             <h2 className="font-heading font-medium text-lg leading-snug">{title}</h2>
+            {trust}
           </div>
-          <div className="shrink-0 sm:pt-0.5">{aside}</div>
+          {leading && (
+            <div className="shrink-0 sm:pt-0.5">
+              <Confidence value={leading.confidence} />
+            </div>
+          )}
         </div>
         <p className="text-muted-foreground text-sm leading-relaxed">{body}</p>
+        {report.exposure && (
+          <ExposureLine
+            exposure={report.exposure}
+            struck={report.exposure.rationale.evidenceIds.some((id) => unknownEvidenceIds.includes(id))}
+          />
+        )}
       </div>
 
       {hasReasoning && (
@@ -161,6 +147,40 @@ export function VerdictCard({
   );
 }
 
+// A dependency incident's exposure: whether the service's code reaches the
+// vulnerable package, the question its severity hangs on, under the verdict
+// as a line of its own with the files it cites.
+export const exposureLabels: Record<Exposure["verdict"], { label: string; tone: StatusTone; text: string }> = {
+  reachable: { label: "Reachable", tone: "destructive", text: "The service's code reaches the vulnerable package." },
+  transitive_only: {
+    label: "Transitive only",
+    tone: "warning",
+    text: "In the dependency tree, but nothing found leads from the service's code to it.",
+  },
+  not_reachable: { label: "Not reachable", tone: "success", text: "The code that would use it never runs in production." },
+};
+
+function ExposureLine({ exposure, struck }: { exposure: Exposure; struck: boolean }) {
+  const { label, tone, text } = exposureLabels[exposure.verdict] ?? {
+    label: exposure.verdict,
+    tone: "muted" as const,
+    text: "",
+  };
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md bg-muted/50 px-3 py-2.5">
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="flex items-center gap-1.5 text-muted-foreground">
+          <ShieldAlertIcon className="size-3.5" aria-hidden />
+          Exposure
+        </span>
+        <StatusBadge tone={tone}>{label}</StatusBadge>
+        {text && <span className="text-muted-foreground">{text}</span>}
+      </span>
+      <ClaimText claim={exposure.rationale} struck={struck} />
+    </div>
+  );
+}
+
 // How far the record bears the hypothesis out (confidence-grade.ts), as a
 // small chip with why on hover. Worked out from the evidence and what came
 // after, never from the model's say-so.
@@ -178,21 +198,58 @@ function GradeChip({ hypothesis, incident }: { hypothesis: Hypothesis; incident:
   );
 }
 
-// Whether the diagnosis held (outcome.ts), once something checked it: one
-// quiet chip by the verdict's label, with the first signal that settled it
-// on hover. Nothing while it is unverified.
-function OutcomeChip({ outcome }: { outcome: VerdictOutcome | undefined }) {
-  if (!outcome || outcome.rollup === "unverified") return null;
-  const signal = outcome.signals.find((s) => s.status !== "unknown");
-  const chip = <StatusBadge tone={rollupTone[outcome.rollup]}>{rollupLabels[outcome.rollup]}</StatusBadge>;
-  if (!signal) return chip;
+// How far to trust the verdict, as one line under its title. The signal
+// that says most leads, with its color: whether the diagnosis held
+// (outcome.ts) once something checked it, else the grade the record gives
+// it (confidence-grade.ts), then the grade muted when the outcome leads.
+// The model's own confidence has its bar beside the title, so here it's
+// only in the popover, with each signal's reason.
+function TrustLine({ hypothesis, incident }: { hypothesis: Hypothesis; incident: Incident }) {
+  const { grade, reason } = gradeHypothesis(hypothesis, incident);
+  const outcome = verdictOutcome(incident);
+  const held = outcome && outcome.rollup !== "unverified" ? outcome : undefined;
+  const signal = held?.signals.find((s) => s.status !== "unknown");
+  const confidence = formatPercent(hypothesis.confidence);
+  const gradeLabel = gradeLabels[grade];
+  const lead = held
+    ? { tone: rollupTone[held.rollup], label: rollupLabels[held.rollup] }
+    : { tone: gradeTone[grade], label: gradeLabel };
+  const rest = held ? gradeLabel.charAt(0).toLowerCase() + gradeLabel.slice(1) : undefined;
+  const rows = [
+    ...(held
+      ? [{ term: "What happened", label: rollupLabels[held.rollup], text: signal && signal.text.replace(/\.?$/, ".") }]
+      : []),
+    { term: "Evidence", label: gradeLabel, text: reason },
+    { term: "Model", label: `${confidence} sure`, text: "By its own estimate." },
+  ];
+
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex cursor-default">{chip}</span>
-      </TooltipTrigger>
-      <TooltipContent>{signal.text}</TooltipContent>
-    </Tooltip>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="-mx-1 flex w-fit flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded-sm px-1 text-left text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <StatusBadge tone={lead.tone}>{lead.label}</StatusBadge>
+          {rest && <span className="text-muted-foreground">· {rest}</span>}
+          <InfoIcon aria-hidden className="size-3.5 text-muted-foreground" />
+          <span className="sr-only">Why</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-96 max-w-[calc(100vw-2rem)] text-sm">
+        <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2.5">
+          {rows.map((r) => (
+            <Fragment key={r.term}>
+              <dt className="text-muted-foreground text-xs leading-5">{r.term}</dt>
+              <dd className="leading-snug">
+                <span className="font-medium">{r.label}.</span>
+                {r.text && <span className="text-muted-foreground"> {r.text}</span>}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      </PopoverContent>
+    </Popover>
   );
 }
 

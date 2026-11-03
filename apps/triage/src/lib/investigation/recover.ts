@@ -1,25 +1,26 @@
 import { isDemo } from "./demo";
 import type { Incident } from "./schema";
-import { isExample, listIncidents, saveIncident } from "./store";
+import { isExample, listIncidents, patchIncident } from "./store";
 
 // Work runs in this server's process, so a restart (a deploy, a crash, a
 // dev server stopped mid-run) leaves incidents saying they're still
 // running forever. At startup nothing can be running yet: mark each one as
 // cut off, so it shows as failed (with Retry where there is one) instead of
 // spinning. The demo incidents pose as running on purpose and are left alone.
+// Archived incidents are checked as well, so none is left claiming to run.
 
 const RESTARTED = "Triage restarted";
 
 export async function failInterruptedRuns(): Promise<number> {
   const now = new Date().toISOString();
   let fixed = 0;
-  for (const incident of await listIncidents()) {
+  for (const incident of await listIncidents({ archived: "include" })) {
     if (isDemo(incident.id)) continue;
-    const next = recovered(incident, now, isExample(incident.id));
-    if (next) {
-      await saveIncident(next);
-      fixed += 1;
-    }
+    const example = isExample(incident.id);
+    if (!recovered(incident, now, example)) continue;
+    // Worked out again on the incident as it is when saved.
+    await patchIncident(incident.id, (i) => recovered(i, now, example) ?? i);
+    fixed += 1;
   }
   return fixed;
 }
@@ -39,7 +40,10 @@ export function recovered(incident: Incident, now: string, example = false): Inc
     });
   }
   const verification = incident.verification;
-  if (verification?.status === "verifying") {
+  // A merged dependency fix's verification is no loop in this process: the
+  // audits judge it whenever they run (dependencies.ts), so a restart
+  // doesn't cut it off.
+  if (verification?.status === "verifying" && verification.after !== "dependencies") {
     edit({
       verification: { ...verification, status: "stopped", finishedAt: now, note: `${RESTARTED} before the verification finished` },
     });

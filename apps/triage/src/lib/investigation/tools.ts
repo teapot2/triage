@@ -180,13 +180,13 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
 
     db_diagnostics: tool({
       description:
-        "Inspect Postgres: 'activity' (pg_stat_activity: connection states and how long), 'locks' (blocked sessions), 'slow_queries' (pg_stat_statements by total time).",
+        "Inspect Postgres: 'activity' (pg_stat_activity: connection states and how long), 'locks' (blocked sessions), 'slow_queries' (pg_stat_statements: each statement's calls and time in the window before the alert, beside its totals since the statistics were reset).",
       inputSchema: z.object({ check: z.enum(["activity", "locks", "slow_queries"]) }),
       execute: recorded("db_diagnostics", async ({ check }) => {
         if (external) return notConnected("database");
         const result = await source.dbDiagnostics(check);
-        const summary =
-          result.rows.length === 0 ? `${check}: no rows` : `${check}: ${result.rows.length} rows`;
+        const count = result.rows.length === 0 ? `${check}: no rows` : `${check}: ${result.rows.length} rows`;
+        const summary = result.note ? `${count}; ${result.note}` : count;
         return {
           summary,
           evidence: [{ kind: "db", summary, query: result.query, rows: result.rows }],

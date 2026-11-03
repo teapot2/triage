@@ -1,0 +1,18 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { formatPrice } from "@/lib/money";
+
+// The store's currency comes from the deployment's STORE_CURRENCY; a
+// deployment without it must still format a price, not throw.
+describe("formatPrice", () => {
+  const saved = process.env.STORE_CURRENCY;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.STORE_CURRENCY;
+    else process.env.STORE_CURRENCY = saved;
+  });
+
+  it("formats in US dollars when STORE_CURRENCY is unset", () => {
+    delete process.env.STORE_CURRENCY;
+    expect(formatPrice(2400)).toBe("$24.00");
+  });
+});

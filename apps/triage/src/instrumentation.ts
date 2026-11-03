@@ -15,5 +15,10 @@ export async function register() {
       const { startWatch } = await import("./lib/investigation/watch");
       startWatch();
     }
+
+    // The Slack bot's Socket Mode client, for button clicks in Slack. Stays
+    // off until an app token is saved; Settings restarts it on a change.
+    const { startSlackSocket } = await import("./lib/notifications/socket");
+    startSlackSocket();
   }
 }

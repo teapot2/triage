@@ -250,6 +250,7 @@ function EndpointFormBody({ check, count }: { check?: UptimeCheck; count: number
         crumbs={isNew ? [{ label: "Watch", href: "/watch" }] : [{ label: "Watch", href: "/watch" }, { label: base.name, href: back }]}
         current={isNew ? "New endpoint" : "Edit"}
         title={isNew ? "New endpoint" : `Edit ${base.name}`}
+        divider={false}
       >
         <ReadBack text={unnamed && describeCheck(urlOk ? unnamed : { ...unnamed, url: "the URL" })} />
       </WatchHeader>

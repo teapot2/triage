@@ -52,6 +52,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useDictation, useDictationSupported } from "@/hooks/use-dictation";
 import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shrink";
+import { isArchived } from "@/lib/investigation/archive";
 import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
@@ -406,6 +407,7 @@ export function useAskQuestion(incident: Incident, webSearchDefault?: boolean): 
 // report. Its other refusal, a question already being answered, the queue
 // waits out instead.
 function composerRefusal(incident: Incident): string | undefined {
+  if (isArchived(incident)) return "Restore the incident to ask about it";
   if (!askRefusal(incident) || (incident.questions ?? []).some((q) => q.status === "answering")) return undefined;
   return "Questions open once the investigation has a report";
 }
@@ -640,6 +642,9 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
   // scenario is gone) answers come from the recorded evidence alone
   // (evidence_only), as the route decides.
   const mode: Question["mode"] = sourceKind(incident) ? "tools" : "evidence_only";
+  // Archived, the conversation is read-only: no composer, suggestions or
+  // asking again.
+  const archived = isArchived(incident);
   const composer = (
     <Composer
       ask={ask}
@@ -650,6 +655,10 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
     />
   );
   const suggestions = suggestedQuestions(incident);
+
+  if (archived && views.length === 0) {
+    return <p className="text-muted-foreground text-sm">Nothing was asked about this incident.</p>;
+  }
 
   // Nothing asked yet: the composer first, then questions to start from.
   if (views.length === 0) {
@@ -688,24 +697,26 @@ export function QuestionsPanel({ incident, ask }: { incident: Incident; ask: Ask
       >
         <ol aria-label="Conversation with Triage" className="flex flex-col gap-9">
           {views.map((v) => (
-            <ChatTurn key={v.key} view={v} latest={v === last} onAskAgain={askAgain} />
+            <ChatTurn key={v.key} view={v} latest={v === last} onAskAgain={archived ? undefined : askAgain} />
           ))}
         </ol>
       </div>
       {/* Follow-ups sit right above the composer, outside the scrolling
           conversation, so picking one is next to where you'd type. */}
-      <div
-        ref={endRef}
-        className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:mt-4 @2xl:pb-0"
-      >
-        {/* Under what follows (-z-10), so it doesn't cut the top of their
-            focus rings; still over the conversation, as this row is z-10. */}
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-6 -z-10 h-6 bg-linear-to-t from-background" />
-        {last?.status === "answered" && followUps.length > 0 && (
-          <FollowUps suggestions={followUps} disabled={ask.refusal !== undefined} onPick={ask.send} />
-        )}
-        {composer}
-      </div>
+      {!archived && (
+        <div
+          ref={endRef}
+          className="sticky bottom-0 z-10 mt-6 flex flex-col gap-2 bg-background pb-4 @2xl:relative @2xl:mt-4 @2xl:pb-0"
+        >
+          {/* Under what follows (-z-10), so it doesn't cut the top of their
+              focus rings; still over the conversation, as this row is z-10. */}
+          <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-6 -z-10 h-6 bg-linear-to-t from-background" />
+          {last?.status === "answered" && followUps.length > 0 && (
+            <FollowUps suggestions={followUps} disabled={ask.refusal !== undefined} onPick={ask.send} />
+          )}
+          {composer}
+        </div>
+      )}
     </div>
   );
 }
@@ -889,7 +900,8 @@ function ChatTurn({
 }: {
   view: QuestionView;
   latest: boolean;
-  onAskAgain: (view: QuestionView) => void;
+  // Absent where the conversation is read-only (an archived incident).
+  onAskAgain?: (view: QuestionView) => void;
 }) {
   const answering = view.status === "answering";
   const t0 = Date.parse(view.askedAt);
@@ -989,10 +1001,12 @@ function ChatTurn({
               <CircleXIcon className="mt-[3px] size-3.5 shrink-0" />
               {view.error ?? "The answer failed."}
             </p>
-            <Button variant="outline" size="sm" onClick={() => onAskAgain(view)}>
-              <RotateCcwIcon />
-              Ask again
-            </Button>
+            {onAskAgain && (
+              <Button variant="outline" size="sm" onClick={() => onAskAgain(view)}>
+                <RotateCcwIcon />
+                Ask again
+              </Button>
+            )}
           </div>
         ) : (
           (view.answer || !answering) && <AnswerText text={view.answer} streaming={answering} />

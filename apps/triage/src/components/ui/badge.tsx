@@ -120,4 +120,33 @@ function StatusBadge({
   )
 }
 
-export { Badge, badgeVariants, StatusBadge, StatusBadgeDot, type StatusTone }
+// What a check returned (a test passing, an HTTP status, a value against its
+// limit), where something ran: a small square chip, tinted by the outcome,
+// in mono. Never a label: a fact goes in plain text, a state in StatusBadge.
+const resultTones = {
+  success: "bg-success/10 text-[color-mix(in_oklab,var(--success)_70%,black)] dark:bg-success/20 dark:text-success",
+  destructive: "bg-destructive/10 text-[color-mix(in_oklab,var(--destructive)_80%,black)] dark:bg-destructive/20 dark:text-destructive",
+  warning: "bg-warning/15 text-[color-mix(in_oklab,var(--warning)_55%,black)] dark:bg-warning/20 dark:text-warning",
+  info: "bg-info/10 text-[color-mix(in_oklab,var(--info)_80%,black)] dark:bg-info/20 dark:text-info",
+  muted: "bg-muted text-muted-foreground",
+} as const
+
+function ResultChip({
+  tone,
+  className,
+  ...props
+}: React.ComponentProps<"span"> & { tone: keyof typeof resultTones }) {
+  return (
+    <span
+      data-slot="result-chip"
+      className={cn(
+        "inline-flex h-[18px] w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-[4px] px-1.5 font-mono text-[11px] tabular-nums [&>svg]:size-3 [&>svg]:shrink-0",
+        resultTones[tone],
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+export { Badge, badgeVariants, ResultChip, StatusBadge, StatusBadgeDot, type StatusTone }

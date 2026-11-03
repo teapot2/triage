@@ -139,10 +139,11 @@ export function runModelsOf(run: Pick<Rerun, "models" | "run" | "fixRun" | "post
 }
 
 // Whether a run of the incident goes on to write and prove a fix: one that
-// reads the live Shopfront's code (a live run, or an uptime check of it).
+// reads the live Shopfront's code (a live run, or an uptime check of it),
+// or a dependency incident's, whose fix is the bump.
 export function runsFix(incident: Pick<Incident, "run" | "snapshot">): boolean {
   const kind = sourceKind(incident as Incident);
-  return kind === "live" || (kind === "uptime" && incident.snapshot !== undefined);
+  return kind === "live" || kind === "dependency" || (kind === "uptime" && incident.snapshot !== undefined);
 }
 
 // A run's models in a few words: "muse-glimmer-30b · high", or with its

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { Incident } from "../schema";
+import { findLockfile, runPackageManager } from "../dependencies/audit";
+import { type DeployedRelease, dependencyPrBase } from "../dependencies/fix";
 import { dataChangeOf } from "./data-change";
 
 // Stage 5: once a human approves a proven fix, open a pull request with the
@@ -15,6 +17,9 @@ import { dataChangeOf } from "./data-change";
 const run = promisify(execFile);
 
 export type PullRequestTarget = {
+  // A dependency bump's: the release deployed now, which may be the base
+  // (dependencies/fix.ts dependencyPrBase). Defaults to Shopfront's ops API.
+  release?: () => Promise<DeployedRelease | undefined>;
   // The app's folder inside its git repository (the patch's paths are
   // relative to it).
   appDir: string;
@@ -52,17 +57,105 @@ async function ghCreate({ cwd, base, branch, title, body }: Parameters<NonNullab
   }
 }
 
+const proofTable = (validation: Incident["validation"]) =>
+  (validation ?? [])
+    .map((r) => `| ${r.label} | \`${r.command}\` | ${r.exitCode} | ${r.tests.map((t) => `${t.status}`).join(", ") || "–"} |`)
+    .join("\n");
+
+const exposureLabels = { reachable: "Reachable", transitive_only: "Transitive only", not_reachable: "Not reachable" } as const;
+
+// A dependency fix's PR: the advisory, whether the service's code reaches
+// the package, the bump, and the install-based proof. `lockfile` says
+// whether the PR's commit carries the regenerated lockfile (openPullRequest
+// regenerates it when it can).
+function dependencyPullRequestText(incident: Incident, lockfile?: "regenerated" | "failed"): { title: string; body: string } {
+  const { report, fix, validation, dependency: advisory } = incident;
+  const bump = fix!.bump!;
+  const id = advisory?.advisoryId ?? "the advisory";
+  const title = `fix(deps): bump ${bump.package} to ${bump.to} (${id})`.slice(0, 120);
+  const runs = validation ?? [];
+  const offline = runs.some((r) => r.label === "Install (lockfile only)");
+  const exposure = report?.exposure;
+  const chains = (advisory?.paths ?? []).slice(0, 5).map((p) => `  - \`${p}\``);
+  const how =
+    bump.kind === "direct"
+      ? `**Direct dependency.** \`${bump.package}\` is the service's own dependency, so its range in \`package.json\` is raised to take ${bump.to}.`
+      : `**Override.** \`${bump.package}\` only comes in through other packages, so a pnpm override in the workspace root's \`pnpm-workspace.yaml\` moves the vulnerable copies to ${bump.to} (pnpm reads overrides only there). Keyed on the vulnerable range, it leaves the copies that are already safe alone.`;
+  const lock =
+    lockfile === "regenerated"
+      ? "`pnpm-lock.yaml` was regenerated for this change with `pnpm install --lockfile-only`."
+      : "`pnpm-lock.yaml` is not in this PR: run `pnpm install` on the branch to regenerate it (a frozen-lockfile install in CI fails until it is committed).";
+  const major = bump.major
+    ? `
+> [!WARNING]
+> **This crosses a major version** (${bump.from} to ${bump.to}). The sandbox installed it, typechecked the app and ran its tests, but read the package's changelog for breaking changes the tests don't cover.
+`
+    : "";
+  const proof = offline
+    ? `The sandbox couldn't reach the registry, so nothing was installed: the lockfile was resolved from pnpm's cache with the bump, and \`pnpm audit\` no longer lists ${id} there. **Typecheck and tests did not run.**`
+    : `In a sandbox copy of the service with its own install: \`pnpm audit\` lists ${id} before the bump and not after it, \`pnpm install\` succeeds with the bump, the app typechecks against the installed versions, and its tests pass.`;
+  const body = `${fix!.summary}
+${major}
+## Advisory
+
+- **[${id}](${advisory?.url ?? ""})**${advisory?.title ? `: ${advisory.title}` : ""}
+- Severity: ${advisory?.severity ?? "unknown"}${advisory?.cwe.length ? ` · ${advisory.cwe.join(", ")}` : ""}
+- Package: \`${bump.package}\` ${advisory?.versions.join(", ") ?? bump.from} (vulnerable: \`${advisory?.vulnerable || "unknown"}\`, patched: \`${advisory?.patched ?? "none"}\`)
+${chains.length ? `- Pulled in by:\n${chains.join("\n")}` : ""}
+
+## Exposure
+
+${exposure ? `**${exposureLabels[exposure.verdict]}.** ${exposure.rationale.text}` : "No exposure verdict was recorded."}
+
+## The bump
+
+${how}
+
+- ${bump.from} to ${bump.to}${bump.major ? " (major)" : ""}
+- ${lock}
+
+## Proof
+
+${proof}
+
+| Run | Command | Exit code | Tests |
+| --- | --- | --- | --- |
+${proofTable(validation)}
+
+Risk: ${fix!.risk}. Approved in Triage (incident \`${incident.id}\`). Opened as a draft: nothing is deployed until it is marked ready and merged. Once it is merged, Triage audits again, and the incident resolves when the audit no longer finds ${id}.
+
+---
+Opened by Triage, an AI SRE.
+`;
+  return { title, body };
+}
+
+// `pnpm install --lockfile-only` at the worktree's copy of the workspace
+// root, once the bump's patch is applied there. Only the lockfile changes;
+// nothing is installed. On a failure the worktree's lockfile is put back.
+async function regenerateLockfile(appDir: string, root: string, worktree: string): Promise<"regenerated" | "failed"> {
+  const lock = await findLockfile(appDir);
+  if (lock?.packageManager !== "pnpm") return "failed";
+  const cwd = path.join(worktree, path.relative(root, lock.root));
+  const r = await runPackageManager("pnpm", ["install", "--lockfile-only", "--no-frozen-lockfile"], cwd, 120_000);
+  if (r.exitCode !== 0 || r.timedOut) {
+    console.error(`[triage] couldn't regenerate the lockfile for the PR: ${(r.stderr || r.stdout).trim().split("\n").at(-1)}`);
+    await git(cwd, ["checkout", "--", "pnpm-lock.yaml"]).catch(() => undefined);
+    return "failed";
+  }
+  return "regenerated";
+}
+
 // What the PR says: the diagnosis, the change, and the sandbox proof, so a
 // reviewer can judge it without opening Triage.
-export function pullRequestText(incident: Incident): { title: string; body: string } {
+export function pullRequestText(incident: Incident, opts: { lockfile?: "regenerated" | "failed" } = {}): { title: string; body: string } {
   const { report, fix, validation } = incident;
   if (!report || !fix) throw new Error("no proven fix to open a PR for");
+  if (fix.bump) return dependencyPullRequestText(incident, opts.lockfile);
   const verdict = report.verdict;
   const cause = verdict.kind === "root_cause" ? report.hypotheses.find((h) => h.id === verdict.hypothesisId) : undefined;
   const title = `Fix: ${cause?.title ?? incident.title}`.slice(0, 120);
-  const runs = (validation ?? [])
-    .map((r) => `| ${r.label} | \`${r.command}\` | ${r.exitCode} | ${r.tests.map((t) => `${t.status}`).join(", ") || "–"} |`)
-    .join("\n");
+  const runs = proofTable(validation);
   // A data change the sandbox couldn't prove gets a warning and a checklist
   // at the top, where a reviewer reads first.
   const data = dataChangeOf(fix);
@@ -114,9 +207,29 @@ export function pullRequestBase(incident: Incident): string | undefined {
   return m?.kind === "rollback" && m.branch ? m.branch : undefined;
 }
 
+// A patch whose paths are relative to the app, with any file outside it
+// ("../../pnpm-workspace.yaml", a dependency override at the workspace
+// root) among them, rewritten relative to the repository root: git apply
+// refuses ".." in a path, so such a patch is applied from the root instead
+// of with --directory. Undefined when every file is inside the app.
+export function repoRootPatch(patch: string, prefix: string): string | undefined {
+  const header = /^(--- a\/|\+\+\+ b\/)(.+?)(\r?)$/;
+  const lines = patch.split("\n");
+  if (!lines.some((l) => header.exec(l)?.[2].startsWith("../"))) return undefined;
+  return lines
+    .map((l) => {
+      const m = header.exec(l);
+      if (!m) return l;
+      const file = path.posix.normalize(path.posix.join(prefix, m[2]));
+      if (file.startsWith("../")) throw new Error(`${m[2]} is outside the repository`);
+      return `${m[1]}${file}${m[3]}`;
+    })
+    .join("\n");
+}
+
 export async function openPullRequest(incident: Incident, target: PullRequestTarget): Promise<string> {
   if (!incident.fix) throw new Error("no proven fix to open a PR for");
-  const { title, body } = pullRequestText(incident);
+  const { title } = pullRequestText(incident);
 
   let root: string;
   try {
@@ -128,9 +241,15 @@ export async function openPullRequest(incident: Incident, target: PullRequestTar
   // app-relative paths land in the right place.
   const prefix = (await git(target.appDir, ["rev-parse", "--show-prefix"])).replace(/\/$/, "");
 
-  // The release branch when the fix is for a rolled-back release, else the
-  // remote's default branch (or TRIAGE_PR_BASE), freshly fetched.
-  let base = pullRequestBase(incident) ?? process.env.TRIAGE_PR_BASE ?? "";
+  // The release branch when the fix is for a rolled-back release, or, for a
+  // dependency bump, the deployed release that brought the package in
+  // (main doesn't have it then); else the remote's default branch (or
+  // TRIAGE_PR_BASE), freshly fetched.
+  let base =
+    pullRequestBase(incident) ??
+    (incident.fix.bump ? await dependencyPrBase(incident, target.appDir, target.release) : undefined) ??
+    process.env.TRIAGE_PR_BASE ??
+    "";
   if (!base) {
     const head = await git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).catch(() => "origin/main");
     base = head.replace(/^origin\//, "");
@@ -146,22 +265,28 @@ export async function openPullRequest(incident: Incident, target: PullRequestTar
   const patchFile = path.join(os.tmpdir(), `${path.basename(dir)}.patch`);
   try {
     await git(root, ["worktree", "add", "-B", branch, dir, `origin/${base}`]);
+    const fromRoot = repoRootPatch(incident.fix.patch, prefix);
     const apply = async (patch: string) => {
       await writeFile(patchFile, `${patch}\n`);
-      await git(dir, ["apply", "-p1", ...(prefix ? [`--directory=${prefix}`] : []), patchFile]);
+      await git(dir, ["apply", "-p1", ...(prefix && !fromRoot ? [`--directory=${prefix}`] : []), patchFile]);
     };
+    const original = fromRoot ?? incident.fix.patch;
     try {
-      await apply(incident.fix.patch);
+      await apply(original);
     } catch (err) {
       // A fix proven in a checkout made with core.autocrlf=true diffs CRLF
       // files, while this worktree has the repository's LF ones: try again
       // with the line endings the base branch has.
-      const lf = incident.fix.patch.replace(/\r\n/g, "\n");
-      const retried = lf !== incident.fix.patch && (await apply(lf).then(() => true, () => false));
+      const lf = original.replace(/\r\n/g, "\n");
+      const retried = lf !== original && (await apply(lf).then(() => true, () => false));
       if (!retried) {
         throw new Error(`the patch no longer applies to ${base}; the code changed since the fix was proven (${why(err)})`);
       }
     }
+    // A bump's lockfile, regenerated in the worktree so the PR installs with
+    // a frozen lockfile; without it the PR says to run pnpm install.
+    const lockfile = incident.fix.bump ? await regenerateLockfile(target.appDir, root, dir) : undefined;
+    const { body } = pullRequestText(incident, { lockfile });
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-m", title, "-m", incident.fix.summary]);
     try {

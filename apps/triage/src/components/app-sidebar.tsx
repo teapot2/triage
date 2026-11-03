@@ -12,10 +12,10 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Incident } from "@/lib/investigation/schema";
+import type { IncidentSummary } from "@/lib/investigation/list-summary";
 import { investigationOptions } from "@/lib/investigation/options";
-import { listIncidents } from "@/lib/investigation/store";
-import { activityAt, incidentPreview, openStatuses, rootCauseTitle } from "@/lib/investigation/summary";
+import { listIncidentSummaries } from "@/lib/investigation/store";
+import { openStatuses } from "@/lib/investigation/summary";
 import { attentionRank, needsAttention, parseRecentFilters, SIDEBAR_FILTERS_COOKIE } from "@/lib/sidebar-filters";
 import { parseCollapsedSections, SIDEBAR_SECTIONS_COOKIE } from "@/lib/sidebar-sections";
 import { AppSidebarNav } from "./app-sidebar-nav";
@@ -78,19 +78,19 @@ async function IncidentsNav() {
 // sort is stable), for the search palette. The sidebar's Recent list is
 // filtered from `all` in the browser, by the bell and the filter menu.
 async function loadNav() {
-  const incidents = await listIncidents();
+  const incidents = await listIncidentSummaries();
   const openCount = incidents.filter((i) => openStatuses.includes(i.status)).length;
-  const toItem = (i: Incident) => ({
+  const toItem = (i: IncidentSummary) => ({
     id: i.id,
-    label: rootCauseTitle(i) ?? i.title,
+    label: i.rootCause ?? i.title,
     title: i.title,
     service: i.service,
     status: i.status,
     fixPending: i.approval?.state === "pending",
     severity: i.severity,
     at: i.run?.startedAt ?? i.detectedAt,
-    activityAt: activityAt(i),
-    preview: incidentPreview(i),
+    activityAt: i.activityAt,
+    preview: { takeaway: i.takeaway },
   });
   const items = incidents.map(toItem);
   const attention = items

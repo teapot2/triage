@@ -5,6 +5,8 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { GET } from "../../app/api/export/[dataset]/route";
 import { closeDb, getDb, transaction } from "../db";
+import type { Finding } from "../investigation/dependencies/model";
+import { recordAudit, setFindingIncident } from "../investigation/dependencies/store";
 import { defaultCheck, saveChecks } from "../investigation/uptime/checks";
 import { exportEntries } from "./exports";
 
@@ -57,11 +59,13 @@ describe("GET /api/export/[dataset]", () => {
       "endpoint-hourly",
       "incidents",
       "postmortem-actions",
+      "dependency-findings",
       "incident",
       "evidence-logs",
       "evidence-spans",
       "evidence-metrics",
       "evidence-db",
+      "evidence-source",
       "investigation-trace",
       "fix-patch",
       "ask-answers",
@@ -146,5 +150,67 @@ describe("GET /api/export/[dataset]", () => {
     assert.match((await unknown.json()).error, /unknown export: nope/);
     assert.equal((await get("endpoint-results", "format=csv&id=chk_zzzzzz")).status, 404);
     assert.equal((await get("endpoint-hourly", "format=json&id=chk_zzzzzz")).status, 404);
+  });
+});
+
+// A finding as the audit parses it, for the dependency store.
+function finding(advisoryId: string, pkg: string, over: Partial<Finding> = {}): Finding {
+  return {
+    advisoryId,
+    service: "deptest",
+    package: pkg,
+    title: `${pkg} is vulnerable`,
+    versions: ["1.0.0"],
+    vulnerable: "<1.0.1",
+    patched: ">=1.0.1",
+    severity: "moderate",
+    cwe: ["CWE-1333"],
+    url: `https://github.com/advisories/${advisoryId}`,
+    dev: false,
+    direct: ["app-dep"],
+    paths: [`app-dep>${pkg}`],
+    ...over,
+  };
+}
+
+describe("GET /api/export/dependency-findings", () => {
+  // Four audits: an old finding gone 11 days ago (left out, as the page
+  // shows a week), one gone an hour ago (in, with gone_at), one current.
+  before(() => {
+    const hour = 3_600_000;
+    const audit = (ago: number, findings: Finding[]) =>
+      recordAudit(
+        { service: "deptest", at: new Date(Date.now() - ago).toISOString(), durationMs: 900, packageManager: "pnpm", counts: { info: 0, low: 0, moderate: findings.length, high: 0, critical: 0 }, runtime: 0 },
+        findings,
+      );
+    const old = finding("GHSA-old0-0000-0000", "oldpkg");
+    const current = finding("GHSA-mini-0000-0000", "minimatch", { versions: ["3.0.4", "3.1.1"], direct: ["glob", "rimraf"], paths: ["glob>minimatch", "rimraf>glob>minimatch"] });
+    const dev = finding("GHSA-esbu-0000-0000", "esbuild", { dev: true, patched: undefined, direct: ["tsx"], paths: ["tsx>esbuild"] });
+    audit(12 * 24 * hour, [old]);
+    audit(11 * 24 * hour, []);
+    audit(2 * hour, [current, dev]);
+    audit(1 * hour, [current]);
+    setFindingIncident("deptest", "GHSA-mini-0000-0000", "inc_deps_test");
+  });
+
+  it("writes what the Watch page lists, gone ones of the last week with gone_at", async () => {
+    const res = await get("dependency-findings", "format=csv&service=deptest");
+    assertDownload(res, "text/csv; charset=utf-8", new RegExp(`^dependency-findings_deptest_${STAMP}\\.csv$`));
+    const lines = new TextDecoder("utf-8", { ignoreBOM: true }).decode(await res.arrayBuffer()).slice(1).split("\r\n").filter(Boolean);
+    assert.equal(lines[0], "advisory_id,package,versions,patched,severity,runtime_or_dev,direct,first_seen,last_seen,gone_at,incident_id");
+    assert.equal(lines.length, 3);
+    const byId = new Map(lines.slice(1).map((l) => [l.split(",")[0], l.split(",")]));
+    const mini = byId.get("GHSA-mini-0000-0000")!;
+    assert.deepEqual([mini[1], mini[2], mini[3], mini[4], mini[5], mini[6], mini[9], mini[10]], ["minimatch", "3.0.4 3.1.1", ">=1.0.1", "moderate", "runtime", "glob rimraf", "", "inc_deps_test"]);
+    const esbuild = byId.get("GHSA-esbu-0000-0000")!;
+    assert.equal(esbuild[3], "");
+    assert.equal(esbuild[5], "dev");
+    assert.match(esbuild[9], /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(byId.has("GHSA-old0-0000-0000"), false);
+  });
+
+  it("answers 404 for a service with nothing to show, 400 for a bad name", async () => {
+    assert.equal((await get("dependency-findings", "format=csv&service=nothing-here")).status, 404);
+    assert.equal((await get("dependency-findings", "format=csv&service=..%2Fetc")).status, 400);
   });
 });

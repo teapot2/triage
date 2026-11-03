@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -40,19 +41,44 @@ describe("uptime checks store", () => {
     ];
     await saveChecks(checks);
     assert.deepEqual(await readChecks(), checks);
-    const raw = JSON.parse(await readFile(path.join(dir, ".data", "uptime-checks.json"), "utf8"));
-    assert.deepEqual(Object.keys(raw), ["checks"]);
+    const row = getDb().prepare("SELECT body FROM documents WHERE name = 'uptime-checks'").get() as { body: string };
+    assert.deepEqual(Object.keys(JSON.parse(row.body)), ["checks"]);
   });
 
   it("refuses to save a list the model refuses", async () => {
     await assert.rejects(saveChecks([defaultCheck()]));
   });
 
-  it("throws on a file that doesn't parse, naming it and why", async () => {
-    await writeFile(path.join(dir, ".data", "uptime-checks.json"), "{ not json");
+  // The checks used to be .data/uptime-checks.json. Each case starts as a
+  // restart would: a fresh handle, with nothing saved yet.
+  const legacyFile = () => path.join(dir, ".data", "uptime-checks.json");
+  const fresh = () => {
+    getDb().prepare("DELETE FROM documents WHERE name = 'uptime-checks'").run();
+    closeDb();
+  };
+
+  it("imports the old file once, then deletes it", async () => {
+    fresh();
+    const checks = [defaultCheck({ id: "chk_legacy", name: "Old", url: "https://example.com/health" })];
+    await writeFile(legacyFile(), JSON.stringify({ checks }, null, 2));
+    assert.deepEqual(await readChecks(), checks);
+    assert.equal(existsSync(legacyFile()), false);
+    assert.deepEqual(await readChecks(), checks);
+  });
+
+  it("throws on an old file that doesn't parse, naming it and why, and won't save over it", async () => {
+    fresh();
+    await writeFile(legacyFile(), "{ not json");
     await assert.rejects(readChecks(), (err: Error) => err.message.includes("uptime-checks.json") && /isn't valid \(/.test(err.message));
-    await writeFile(path.join(dir, ".data", "uptime-checks.json"), JSON.stringify({ checks: [{ id: "nope" }] }));
+    await writeFile(legacyFile(), JSON.stringify({ checks: [{ id: "nope" }] }));
     await assert.rejects(readChecks(), /uptime-checks\.json isn't valid/);
+    await assert.rejects(
+      saveChecks([defaultCheck({ id: "chk_hhhhhh", name: "New", url: "https://example.com" })]),
+      /uptime-checks\.json isn't valid/,
+    );
+    assert.equal(existsSync(legacyFile()), true);
+    await rm(legacyFile());
+    assert.deepEqual(await readChecks(), []);
   });
 });
 

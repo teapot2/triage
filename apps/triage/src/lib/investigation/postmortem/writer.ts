@@ -18,7 +18,7 @@ import { forModel } from "../tools";
 import { draftContent, nextAttempt, writingSection } from "./draft";
 import { endDraft, publishDraft } from "./live";
 import { citedEvidenceIds, MAX_FACTORS, MIN_FACTORS, type PostmortemSubmission, postmortemProblems } from "./rules";
-import { type BuiltInSection, customSections, keptBuiltIns, type Template } from "./template";
+import { type BuiltInSection, builtInInstructions, customSections, keptBuiltIns, type Template } from "./template";
 import { postmortemTimeline } from "./timeline";
 
 // Stage "postmortem": the blameless postmortem's judgment (summary, impact,
@@ -35,20 +35,12 @@ const MAX_STEPS = 3;
 const MAX_NUDGES = 1;
 const NUDGE = "You have not submitted an accepted postmortem yet. Fix any problems listed, then call submit_postmortem.";
 
-// The writer's rules for each built-in section the template can keep. The
-// timeline has none: the renderer builds it.
-const sectionRules: Partial<Record<BuiltInSection, string>> = {
-  summary: "- summary: three plain sentences, under 80 words, on what happened, the impact and how long it lasted. No evidence IDs.",
-  impact: "- impact: who was affected and how.",
-  outcome:
-    "- verdictReview: one or two sentences on whether the first diagnosis held, judged only from the Outcome block below: name what confirmed or contradicted it, cite the evidence IDs that block gives. If nothing checked it, say it stands unverified. Never call it confirmed because a fix was written or merged; only a recovered mitigation, a proven regression test or a completed verification confirms it.",
-  factors: `- contributingFactors: ${MIN_FACTORS} to ${MAX_FACTORS} conditions that each had to hold for the incident to happen, where the evidence supports them: the code path, the input that triggered it, capacity (a pool size, a limit), detection (an alert that was missing or late). When the alert fired on a symptom (latency, errors) and nothing watched the resource that actually ran out (a pool, a queue, a disk), that missing alert is a contributing factor in its own right, cited to the metric evidence that shows the resource saturating.`,
-  lessons:
-    "- wentWell and wentBadly judge detection, response and tooling, never the symptoms themselves: what caught the problem or missed it (an alert on latency but none on the pool), what made the response faster or slower (a flag made the mitigation quick; no test covered the failing path), what tooling helped or was missing. A symptom belongs in impact or the factors, not here.",
-  lucky: "- lucky: what could have made it worse and did not.",
-  actions:
-    "- actionItems: mix the four kinds (fix_this, prevent_class, detect_sooner, mitigate_faster), with a priority each. Never repeat the fix (\"merge the PR\", \"approve the fix\", or the fix's own words) or the mitigation's steps: both are covered separately. fix_this items are what this instance still needs beyond the fix and the mitigation; if nothing is left, give fewer items rather than restating them.",
-};
+// The writer's rules for each built-in section the template keeps, as
+// prompt lines. The rules themselves are in template.ts, where Settings
+// shows them too.
+const sectionRules = Object.fromEntries(
+  Object.entries(builtInInstructions).map(([key, rule]) => [key, `- ${rule}`]),
+) as Partial<Record<BuiltInSection, string>>;
 
 // The system prompt: the general rules, then the rules of the sections the
 // template keeps, then its custom sections.

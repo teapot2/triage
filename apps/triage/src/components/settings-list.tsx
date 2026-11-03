@@ -2,22 +2,27 @@
 
 import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";import { cn } from "@/lib/utils";
+import { InfoTip } from "@/components/info-tip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
 
 // The pieces of Settings' lists: a section heading, group headings inside a
 // list, and rows that open in place to an editor. A row's status is a
 // StatusBadge, as everywhere else.
 
+// `info` puts an InfoTip beside the title: what the section needs to say
+// once, kept off the page.
 export function SettingsSectionHeader({
   id,
   title,
   description,
+  info,
   children,
 }: {
   id: string;
   title: string;
   description?: string;
+  info?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -26,6 +31,7 @@ export function SettingsSectionHeader({
         <h2 id={id} className="font-heading font-medium text-base">
           {title}
         </h2>
+        {info && <InfoTip label={`About ${title.toLowerCase()}`}>{info}</InfoTip>}
         {children}
       </div>
       {description && <p className="text-muted-foreground text-sm">{description}</p>}
@@ -89,9 +95,7 @@ export function DisclosureRow({
           <span className="flex flex-wrap items-center gap-2 font-medium text-sm">
             {title}
             {tag && (
-              <Badge variant="outline" className="font-normal text-muted-foreground">
-                {tag}
-              </Badge>
+              <span className="font-normal text-muted-foreground text-xs">· {tag}</span>
             )}
           </span>
           {subtitle && (

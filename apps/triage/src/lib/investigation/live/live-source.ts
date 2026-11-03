@@ -4,15 +4,20 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { Client } from "pg";
 import type { MetricPoint } from "../schema";
-import type {
-  CommitRecord,
-  DbCheck,
-  DbResult,
-  DeployRecord,
-  LogGroup,
-  SourceDescription,
-  SpanRecord,
-  TelemetrySource,
+import {
+  type CommitRecord,
+  type DbCheck,
+  type DbResult,
+  type DeployRecord,
+  deriveFlagStates,
+  type FlagEvent,
+  flagEventFromMessage,
+  flagsFromAttributes,
+  type LogGroup,
+  slowQueriesNote,
+  type SourceDescription,
+  type SpanRecord,
+  type TelemetrySource,
 } from "../source";
 import { type Attrs, type LogRow, type MetricRow, readTelemetry, type SpanRow } from "./otlp-files";
 import { errorMessage } from "../../errors";
@@ -195,6 +200,9 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
     now: new Date(now).toISOString(),
     services,
     metrics: catalog.map(({ name, service, unit, description }) => ({ name, service, unit, description })),
+    // From every log kept, not a window: the boot line that names each
+    // flag may be hours older than the alert.
+    flags: flagStates(logs),
   };
 
   return {
@@ -248,7 +256,7 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
       return { name: s.name, service: s.service, unit: s.unit, description: s.description, points: s.points(windowMinutes) };
     },
 
-    dbDiagnostics,
+    dbDiagnostics: (check) => dbDiagnostics(check, now),
 
     async readSource(file) {
       const rel = normalize(file);
@@ -269,6 +277,23 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
       return deployRecords(logs.filter((l) => l.time >= since(sinceMinutes)));
     },
   };
+}
+
+// The flag events in Shopfront's logs: the `flags: loaded` it logs at boot,
+// with a `flag.FF_X` attribute per flag, and the `ops: FF_X turned on|off`
+// warning the ops API logs on each flip.
+export function flagEvents(logs: LogRow[]): FlagEvent[] {
+  return logs.flatMap((l): FlagEvent[] => {
+    if (l.service !== "shopfront") return [];
+    if (l.body.startsWith("flags: loaded")) return [{ at: l.time, kind: "loaded", flags: flagsFromAttributes(l.attributes) }];
+    const flip = flagEventFromMessage(l.body, l.time);
+    return flip ? [flip] : [];
+  });
+}
+
+// The flags' states at the end of these logs (deriveFlagStates).
+export function flagStates(logs: LogRow[]): Record<string, boolean> {
+  return deriveFlagStates(flagEvents(logs));
 }
 
 // What changed on the running store, newest first, from what Shopfront logs
@@ -586,18 +611,85 @@ export const dbQueries: Record<DbCheck, string> = {
   // query. One-off statements (a seed, creating and dropping the copies)
   // can't be what slows a route either, so the list keeps to statements run
   // at least ten times.
-  slow_queries: `SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND query NOT LIKE '%${ownQueryTag}%' AND query NOT LIKE '%pg_stat_statements%' AND query NOT ILIKE 'CREATE DATABASE%' AND query NOT ILIKE 'DROP DATABASE%' AND calls >= 10 ORDER BY total_exec_time DESC LIMIT 5`,
+  // The fifty by total, with the id and total the window is counted from
+  // (windowedSlowQueries picks the five to show and drops those two).
+  slow_queries: `SELECT queryid::text AS id, left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms, round(total_exec_time::numeric, 2) AS total_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND query NOT LIKE '%${ownQueryTag}%' AND query NOT LIKE '%pg_stat_statements%' AND query NOT ILIKE 'CREATE DATABASE%' AND query NOT ILIKE 'DROP DATABASE%' AND calls >= 10 ORDER BY total_exec_time DESC LIMIT 50`,
 };
+
+// pg_stat_statements counts since the server's statistics were last reset,
+// so a statement that ran hours before the alert (the fix sandbox copying a
+// table, a seed) can top slow_queries during an alert it had nothing to do
+// with, and runs have cited it as the cause. The watch samples the counters
+// every SAMPLE_EVERY (sampleStatements), kept for SAMPLES_KEPT, and
+// slow_queries counts each statement's calls and time since the sample
+// SLOW_WINDOW before the alert beside its totals (windowedSlowQueries). On
+// globalThis: one list per server process, across dev hot reloads.
+export type StatementSample = { at: number; stats: Map<string, { calls: number; totalMs: number }> };
+const SAMPLE_EVERY = 30_000;
+const SAMPLES_KEPT = 3 * 60 * MINUTE;
+export const SLOW_WINDOW = 15 * MINUTE;
+const samplesGlobal = globalThis as unknown as { triageStatementSamples?: StatementSample[] };
+const statementSamples = () => (samplesGlobal.triageStatementSamples ??= []);
+
+export async function sampleStatements(at = Date.now()): Promise<void> {
+  const list = statementSamples();
+  if (list.length && at - list.at(-1)!.at < SAMPLE_EVERY) return;
+  const client = new Client({ connectionString: shopfrontDatabaseUrl, connectionTimeoutMillis: 3000, application_name: "triage" });
+  try {
+    await client.connect();
+    const { rows } = await client.query<{ id: string; calls: string; total_ms: string }>(
+      ownQuery(
+        "SELECT queryid::text AS id, calls, total_exec_time AS total_ms FROM pg_stat_statements WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())",
+      ),
+    );
+    list.push({ at, stats: new Map(rows.map((r) => [r.id, { calls: Number(r.calls), totalMs: Number(r.total_ms) }])) });
+    while (list.length && list[0].at < at - SAMPLES_KEPT) list.shift();
+  } catch {
+    // No database to reach, or no pg_stat_statements: slow_queries says so.
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+// The sample to count the window from: the latest taken SLOW_WINDOW or more
+// before `now`, else the oldest at least a minute before it (the watch has
+// just started), else none.
+export function baselineSample(now: number, list = statementSamples()): StatementSample | undefined {
+  const kept = list.filter((s) => s.at >= now - SAMPLES_KEPT && s.at <= now - MINUTE);
+  return [...kept].reverse().find((s) => s.at <= now - SLOW_WINDOW) ?? kept[0];
+}
+
+type SlowRow = Record<string, string | number | null>;
+
+// The slow_queries rows as reported: the five with the most time in the
+// window, each with its calls and time there beside its totals, or the
+// five by total when there is no sample to count from. A counter below the
+// sample's (the statistics were reset since) counts as nothing.
+export function windowedSlowQueries(query: string, rows: SlowRow[], baseline: StatementSample | undefined, now: number): DbResult {
+  const shown = (r: SlowRow) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "id" && k !== "total_ms"));
+  if (!baseline) return { query, rows: rows.slice(0, 5).map(shown), note: slowQueriesNote(now, undefined) };
+  const windowed = rows
+    .map((r) => {
+      const before = baseline.stats.get(String(r.id));
+      const calls = Math.max(0, Number(r.calls) - (before?.calls ?? 0));
+      const ms = Math.max(0, Number(r.total_ms) - (before?.totalMs ?? 0));
+      return { ...shown(r), window_calls: calls, window_ms: Math.round(ms * 100) / 100 };
+    })
+    .sort((a, b) => b.window_ms - a.window_ms || b.window_calls - a.window_calls)
+    .slice(0, 5);
+  return { query, rows: windowed, note: slowQueriesNote(now, Math.round((now - baseline.at) / MINUTE)) };
+}
 
 // Its own connection, not the app's pool: it has to work while the app's
 // pool is exhausted.
-async function dbDiagnostics(check: DbCheck): Promise<DbResult> {
+async function dbDiagnostics(check: DbCheck, now = Date.now()): Promise<DbResult> {
   const query = dbQueries[check];
   const client = new Client({ connectionString: shopfrontDatabaseUrl, connectionTimeoutMillis: 3000, application_name: "triage" });
   try {
     await client.connect();
     const { rows } = await client.query(ownQuery(query));
-    return { query, rows: rows.map(cells) };
+    const plain = rows.map(cells);
+    return check === "slow_queries" ? windowedSlowQueries(query, plain, baselineSample(now), now) : { query, rows: plain };
   } catch (err) {
     const message = errorMessage(err);
     return { query, rows: [{ error: message }] };
@@ -645,7 +737,12 @@ export const harnessPaths = [
   "releases/",
   "scripts/release.ts",
 ];
-const isHarness = (rel: string) => harnessPaths.some((h) => (h.endsWith("/") ? rel.startsWith(h) : rel === h));
+// A harness file's test is harness too: traffic-profile.test.ts spells out
+// the rushes the profile sends.
+const isHarness = (rel: string) => {
+  const plain = rel.replace(/\.test\.(tsx?)$/, ".$1");
+  return harnessPaths.some((h) => (h.endsWith("/") ? rel.startsWith(h) : plain === h));
+};
 
 // What read_source may open: the app's code and migrations, never .env or
 // the harness.

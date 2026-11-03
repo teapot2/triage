@@ -1,7 +1,8 @@
 import { p95, requestSamples } from "@/lib/investigation/live/live-source";
 import { type LogRow, type MetricRow, readTelemetry, type SpanRow } from "@/lib/investigation/live/otlp-files";
-import type { ChartPoint, Incident } from "@/lib/investigation/schema";
-import { listIncidents } from "@/lib/investigation/store";
+import type { IncidentSummary } from "@/lib/investigation/list-summary";
+import type { ChartPoint } from "@/lib/investigation/schema";
+import { listIncidentSummaries } from "@/lib/investigation/store";
 import { matchesTarget, readRules, type WatchRule } from "@/lib/investigation/watch-rules";
 import { type LiveRoute, type LiveSnapshot, type LiveWindow, liveService, liveWindows } from "./types";
 
@@ -34,7 +35,7 @@ export interface SnapshotInput {
   logs: LogRow[];
   metrics: MetricRow[];
   rules: WatchRule[];
-  incidents: Pick<Incident, "id" | "title" | "service" | "detectedAt" | "trigger">[];
+  incidents: Pick<IncidentSummary, "id" | "title" | "service" | "detectedAt" | "trigger">[];
 }
 
 // Snapshots computed in the last CACHE_MS, per service and window: several
@@ -50,7 +51,7 @@ export function liveSnapshot(service: string, window: LiveWindow): Promise<LiveS
   // isn't held for the life of the server.
   for (const [k, v] of cache) if (Date.now() - v.at >= CACHE_MS) cache.delete(k);
   const snapshot = (async () => {
-    const [telemetry, rules, incidents] = await Promise.all([readTelemetry(), readRules(), listIncidents()]);
+    const [telemetry, rules, incidents] = await Promise.all([readTelemetry(), readRules(), listIncidentSummaries({ service })]);
     return summarize({ ...telemetry, rules, incidents }, service, window, Date.now());
   })();
   cache.set(key, { at: Date.now(), snapshot });

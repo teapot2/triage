@@ -5,8 +5,9 @@ import Link from "next/link";
 import { type ComponentProps, type ReactNode, useEffect, useState } from "react";
 import { formatTime } from "@/components/incident/format";
 import { type ChartMarker, MetricChart, type TimeRange } from "@/components/incident/metric-chart";
+import { LogLevelBadge } from "@/components/incident/outcome-badges";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge, StatusBadge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -340,9 +341,7 @@ function SelectedRange({
             {clock(Date.parse(selection.from))} – {clock(toMs)}
             <span className="text-muted-foreground"> UTC</span>
           </span>
-          <Badge variant="secondary" className="font-normal tabular-nums">
-            {duration(toMs - Date.parse(selection.from))}
-          </Badge>
+          <span className="text-muted-foreground tabular-nums">· {duration(toMs - Date.parse(selection.from))}</span>
         </span>
         <span aria-hidden className="h-4 w-px bg-border max-sm:hidden" />
         <span className="text-muted-foreground text-xs tabular-nums">
@@ -667,13 +666,6 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
   );
 }
 
-const levelBadge: Record<LiveLog["level"], "destructive" | "warning" | "secondary" | "outline"> = {
-  error: "destructive",
-  warn: "warning",
-  info: "secondary",
-  debug: "outline",
-};
-
 type ActivityView = "requests" | "logs";
 
 // The newest requests or logs, picked with the same kind of switch as the
@@ -747,9 +739,7 @@ function ActivitySection({
                 )}
               >
                 <span className="font-mono text-muted-foreground tabular-nums">{clock(l.time)}</span>
-                <Badge variant={levelBadge[l.level]} className="uppercase">
-                  {l.level}
-                </Badge>
+                <LogLevelBadge level={l.level} className="uppercase" />
                 <span className="min-w-0 break-words font-mono">
                   {l.body}
                   {fields.length > 0 && (

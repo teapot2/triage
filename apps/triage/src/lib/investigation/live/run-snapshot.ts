@@ -24,6 +24,11 @@ const dirFor = (id: string) => {
 export const snapshotSourceDir = (id: string) => path.join(/* turbopackIgnore: true */ dirFor(id), "source");
 const dbFile = (id: string) => path.join(/* turbopackIgnore: true */ dirFor(id), "db.json");
 
+// The whole snapshot, for a permanent delete of its incident.
+export async function deleteRunSnapshot(id: string): Promise<void> {
+  await rm(dirFor(id), { recursive: true, force: true });
+}
+
 const run = promisify(execFile);
 
 async function headSha(): Promise<string | undefined> {

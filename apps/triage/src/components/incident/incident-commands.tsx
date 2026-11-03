@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { type PaletteCommand, useRegisterCommands } from "@/components/command-registry";
+import { isArchived } from "@/lib/investigation/archive";
 import type { Incident } from "@/lib/investigation/schema";
 import { evidenceIcons, useEvidence } from "./evidence";
 import { evidenceTitle } from "./metric-labels";
@@ -51,7 +52,8 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
           },
         ]
       : []),
-    ...(incident.report
+    // Archived, the conversation can't take a question.
+    ...(incident.report && !isArchived(incident)
       ? [
           {
             id: "ask",
@@ -67,7 +69,7 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
           },
         ]
       : []),
-    ...(hasPostmortem(incident)
+    ...(hasPostmortem(incident) && (!isArchived(incident) || incident.postmortem)
       ? [
           {
             id: "section-postmortem",

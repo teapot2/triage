@@ -1,10 +1,18 @@
 "use client";
 
-import { ArrowUpFromLineIcon, CheckIcon, CircleAlertIcon, Columns3Icon, LoaderCircleIcon, XIcon } from "lucide-react";
+import {
+  ArrowUpFromLineIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CircleAlertIcon,
+  Columns3Icon,
+  LayersIcon,
+  LoaderCircleIcon,
+  XIcon,
+} from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,12 +24,20 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { errorMessage } from "@/lib/errors";
+import { cn } from "@/lib/utils";
 import { formatCost, incidentUsage } from "@/lib/investigation/cost";
+import { isArchived } from "@/lib/investigation/archive";
 import { allRuns, currentRun, isRunning, promoteBlocker, runModelsLabel, runView } from "@/lib/investigation/reruns";
 import type { Incident, Rerun } from "@/lib/investigation/schema";
 import { grade } from "@/lib/investigation/scenarios/grade";
@@ -41,67 +57,97 @@ export function useShownRun(incident: Incident): ShownRun {
   return Number.isInteger(n) && allRuns(incident).some((r) => r.number === n) ? n : currentRun(incident);
 }
 
-// Above the report once the incident has more than one run: a switch
-// between them and their comparison, and what the shown run is, with the
-// way to make it the incident's run.
-export function RunSwitcher({ incident, shown }: { incident: Incident; shown: ShownRun }) {
+// Shows a run, or the comparison. The incident's own run is the page
+// without ?run, and each run opens on its own Overview (or its live log
+// while it runs).
+function useSelectRun(incident: Incident) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const runs = allRuns(incident);
   const current = currentRun(incident);
-
-  const select = (value: string) => {
+  return (value: ShownRun) => {
     const params = new URLSearchParams(searchParams);
-    // The incident's own run is the page without ?run, and each run opens
-    // on its own Overview (or its live log while it runs).
-    if (value === String(current)) params.delete("run");
-    else params.set("run", value);
+    if (value === current) params.delete("run");
+    else params.set("run", String(value));
     params.delete("section");
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
+}
 
-  const run = shown === "compare" ? undefined : runs.find((r) => r.number === shown);
+// Beside Re-run once the incident has more than one run: which run is on
+// screen, and a menu of them and their comparison. It stays a quiet button
+// on the run in use, and turns amber on any other, where RunNotice says why.
+export function RunPicker({ incident, shown }: { incident: Incident; shown: ShownRun }) {
+  const select = useSelectRun(incident);
+  const runs = allRuns(incident);
+  const current = currentRun(incident);
+  const away = shown !== current;
   return (
-    <div className="mb-6 flex flex-col gap-2.5 rounded-lg border bg-muted/30 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <SegmentedControl
-          aria-label="Runs"
-          value={String(shown)}
-          onValueChange={select}
-          options={[
-            ...runs.map((r) => ({ value: String(r.number), label: `Run ${r.number}` })),
-            { value: "compare", label: "Compare", icon: Columns3Icon },
-          ]}
-        />
-        {run && run.number !== current && <PromoteButton incident={incident} number={run.number} />}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn("border border-border", away && "border-warning/50 text-warning hover:text-warning")}
+        >
+          {shown === "compare" ? <Columns3Icon /> : <LayersIcon />}
+          {shown === "compare" ? "Comparing runs" : `Run ${shown} of ${runs.length}`}
+          <ChevronDownIcon className="text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        {runs.map((r) => (
+          <DropdownMenuItem key={r.number} onSelect={() => select(r.number)} className={cn(r.number === shown && "bg-muted")}>
+            <CheckIcon className={cn(r.number !== shown && "invisible")} />
+            <span className="shrink-0 whitespace-nowrap">Run {r.number}</span>
+            {r.number === current && (
+              <span className="text-muted-foreground text-xs">· in use</span>
+            )}
+            {isRunning(r) && <LoaderCircleIcon className="animate-spin text-muted-foreground" />}
+            <span title={runModelsLabel(r)} className="ml-auto min-w-0 truncate font-mono text-muted-foreground text-xs">
+              {runModelsLabel(r)}
+            </span>
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => select("compare")} className={cn(shown === "compare" && "bg-muted")}>
+          <Columns3Icon />
+          Compare runs
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// Above the report only while it shows something other than the run in
+// use: what's on screen, the way back, and the way to make it the
+// incident's run.
+export function RunNotice({ incident, shown }: { incident: Incident; shown: ShownRun }) {
+  const select = useSelectRun(incident);
+  const current = currentRun(incident);
+  if (shown === current) return null;
+  const run = shown === "compare" ? undefined : allRuns(incident).find((r) => r.number === shown);
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-warning/60 border-l-2 py-0.5 pl-3 text-muted-foreground text-sm">
+      <p className="min-w-0 flex-1">
+        {run ? (
+          <>
+            Viewing run {run.number}, <span className="font-mono text-foreground text-xs">{runModelsLabel(run)}</span>.{" "}
+            {isRunning(run)
+              ? "It's still running, and acts on nothing and notifies no one."
+              : "Its mitigation and fix are shown, not carried out, until you use it."}
+          </>
+        ) : (
+          <>Every run of this incident on the same telemetry. Run {current} is the one in use.</>
+        )}
+      </p>
+      <div className="flex items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={() => select(current)}>
+          Back to run {current}
+        </Button>
+        {run && !isArchived(incident) && <PromoteButton incident={incident} number={run.number} />}
       </div>
-      {run && (
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
-          <span className="font-mono text-foreground">{runModelsLabel(run)}</span>
-          {run.number === current ? (
-            <Badge variant="secondary" className="gap-1 font-normal">
-              <CheckIcon />
-              In use
-            </Badge>
-          ) : (
-            <>
-              <IncidentStatusBadge status={run.status} />
-              <span>
-                {isRunning(run)
-                  ? "Running. It acts on nothing and notifies no one."
-                  : "A re-run: its mitigation and fix are shown, not carried out, until you use it."}
-              </span>
-            </>
-          )}
-        </p>
-      )}
-      {shown === "compare" && (
-        <p className="text-muted-foreground text-xs">
-          Every run of this incident on the same telemetry. Run {current} is the one in use.
-        </p>
-      )}
     </div>
   );
 }
@@ -177,8 +223,7 @@ function PromoteButton({ incident, number }: { incident: Incident; number: numbe
 // The runs side by side: what each concluded, what it would do, and what it
 // took. On a recorded scenario, whether each matched the known answer.
 export function RunComparison({ incident }: { incident: Incident }) {
-  const router = useRouter();
-  const pathname = usePathname();
+  const select = useSelectRun(incident);
   const current = currentRun(incident);
   const runs = allRuns(incident).map((r) => ({ r, view: runView(incident, r.number)! }));
   const scenario = incident.run?.source.startsWith("scenario:") ? getScenario(incident.run.source.slice("scenario:".length)) : undefined;
@@ -242,7 +287,6 @@ export function RunComparison({ incident }: { incident: Incident }) {
     },
   ];
 
-  const open = (n: number) => router.replace(n === current ? pathname : `${pathname}?run=${n}`, { scroll: false });
   return (
     <div className="overflow-x-auto rounded-lg border">
       <Table>
@@ -251,12 +295,10 @@ export function RunComparison({ incident }: { incident: Incident }) {
             <TableHead className="w-40" />
             {runs.map(({ r }) => (
               <TableHead key={r.number} className="min-w-48">
-                <button type="button" onClick={() => open(r.number)} className="flex items-center gap-1.5 hover:underline">
+                <button type="button" onClick={() => select(r.number)} className="flex items-center gap-1.5 hover:underline">
                   Run {r.number}
                   {r.number === current && (
-                    <Badge variant="secondary" className="font-normal">
-                      In use
-                    </Badge>
+                    <span className="text-muted-foreground text-xs">· in use</span>
                   )}
                   {isRunning(r) && <LoaderCircleIcon className="size-3.5 animate-spin text-muted-foreground" />}
                 </button>

@@ -3,7 +3,7 @@ import { recordedEffort } from "../../models/stages";
 import { knownEvidenceIds } from "../ask/rules";
 import { type OutcomeRollup, rollupLabels, type VerdictOutcome, verdictOutcome } from "../outcome";
 import type { Claim, Incident, Postmortem } from "../schema";
-import { customSections, keptBuiltIns, type Template } from "./template";
+import { customSections, keptBuiltIns, MAX_FACTORS, MIN_FACTORS, type Template } from "./template";
 
 // The pure rules around the postmortem, apart from the writer so they can
 // be tested without a model.
@@ -20,8 +20,8 @@ export type PostmortemSubmission = Partial<
   >
 > & { custom?: { id: string; text: string; evidenceIds: string[] }[] };
 
-export const MIN_FACTORS = 2;
-export const MAX_FACTORS = 5;
+// Kept in template.ts, where the writer's instructions quote them.
+export { MAX_FACTORS, MIN_FACTORS } from "./template";
 
 // Why the incident can't have its postmortem written now, or undefined
 // when it can: once a report names something wrong, and once nothing that

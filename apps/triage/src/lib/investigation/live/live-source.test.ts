@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { deployRecords, fetchRelease, gitLogArgs, harnessPaths, listSourceFiles, shopfrontDir } from "./live-source";
+import { deriveFlagStates } from "../source";
+import { deployRecords, fetchRelease, flagEvents, flagStates, gitLogArgs, harnessPaths, listSourceFiles, shopfrontDir } from "./live-source";
 import type { LogRow } from "./otlp-files";
 
 const at = (iso: string) => Date.parse(iso);
@@ -72,6 +73,44 @@ describe("deployRecords", () => {
   });
 });
 
+describe("flagStates", () => {
+  const loaded = (time: string, flags: Record<string, boolean>): LogRow => ({
+    time: at(time),
+    service: "shopfront",
+    level: "info",
+    body: "flags: loaded",
+    attributes: Object.fromEntries(Object.entries(flags).map(([k, v]) => [`flag.${k}`, v])),
+  });
+  const flip = (time: string, flag: string, on: boolean) => warn(time, `ops: ${flag} turned ${on ? "on" : "off"}`, { "flag.name": flag });
+  const boot = loaded("2026-11-01T11:00:00Z", { FF_STOCK_DIRECT_QUERY: false, FF_LIST_PRICES: false, FF_LIVE_RATINGS: false });
+
+  it("starts from the newest boot line and applies the flips after it, whatever order the rows come in", () => {
+    const rows = [
+      flip("2026-11-01T11:30:00Z", "FF_LIST_PRICES", true),
+      // An earlier boot and the flips before it say nothing about now.
+      loaded("2026-11-01T09:00:00Z", { FF_LIVE_RATINGS: true }),
+      flip("2026-11-01T10:00:00Z", "FF_STOCK_DIRECT_QUERY", true),
+      boot,
+      flip("2026-11-01T11:10:00Z", "FF_LIVE_RATINGS", true),
+      flip("2026-11-01T11:20:00Z", "FF_LIVE_RATINGS", false),
+    ];
+    assert.deepEqual(deriveFlagStates(flagEvents(rows)), { FF_STOCK_DIRECT_QUERY: false, FF_LIST_PRICES: true, FF_LIVE_RATINGS: false });
+    assert.deepEqual(flagStates(rows), deriveFlagStates(flagEvents(rows)));
+  });
+
+  it("with no boot line, a flag's last flip decides it and the rest are unknown", () => {
+    const rows = [flip("2026-11-01T12:00:00Z", "FF_LIST_PRICES", true), flip("2026-11-01T12:01:00Z", "FF_LIST_PRICES", false), flip("2026-11-01T11:00:00Z", "FF_LIVE_RATINGS", true)];
+    assert.deepEqual(flagStates(rows), { FF_LIST_PRICES: false, FF_LIVE_RATINGS: true });
+  });
+
+  it("says nothing from logs that mention no flag", () => {
+    assert.deepEqual(flagStates([]), {});
+    assert.deepEqual(flagStates([deployed, rolledBack, warn("2026-11-01T12:01:00Z", "fetched product", { "product.id": 3 })]), {});
+    // Another service's flags are not Shopfront's.
+    assert.deepEqual(flagStates([{ ...boot, service: "postgres" }]), {});
+  });
+});
+
 describe("fetchRelease", () => {
   const ok = (body: unknown) => (async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
 
@@ -128,5 +167,11 @@ describe("listSourceFiles", () => {
     const files = await listSourceFiles();
     const shown = files.filter((f) => f === "src/lib/releases.ts" || f === "scripts/release.ts" || f.startsWith("releases/"));
     assert.deepEqual(shown, []);
+  });
+
+  it("never lists a harness file's test either", async () => {
+    const files = await listSourceFiles();
+    assert.ok(files.includes("src/lib/products.ts"));
+    assert.deepEqual(files.filter((f) => /^src\/lib\/traffic(-profile)?\.test\.ts$/.test(f)), []);
   });
 });

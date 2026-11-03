@@ -93,6 +93,9 @@ export async function proveFix(opts: {
   // Files to lay over the app's in the sandbox: a re-run's snapshot of the
   // source as its first run read it.
   baseDir?: string;
+  // The commit whose tree the sandbox is built from instead of the live
+  // checkout: a rolled-back release's (release-tree.ts).
+  releaseSha?: string;
   name: string;
   edits: Edit[];
   test: RegressionTest;
@@ -107,7 +110,7 @@ export async function proveFix(opts: {
     );
   }
 
-  const dir = await createSandbox(appDir, name, opts.baseDir);
+  const dir = await createSandbox(appDir, name, { baseDir: opts.baseDir, releaseSha: opts.releaseSha });
   const databases: SandboxDatabase[] = [];
   try {
     const before = new Map<string, string>();

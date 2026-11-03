@@ -133,20 +133,53 @@ export const severityLabel: Record<Incident["severity"], string> = {
   sev4: "Low",
 };
 
-// How severe, at a glance: four bars of rising height, like a signal or
-// priority meter, filling as severity goes up. Neighbouring levels never
-// share a hue: warm for act now (sev1 red, sev2 amber), blue for look when
-// you can (sev3), gray for a health check that found nothing (sev4). The
-// unfilled bars stay faint so the scale still reads.
-const severityLevel: Record<Incident["severity"], { filled: number; color: string }> = {
-  sev1: { filled: 4, color: "text-destructive" },
-  sev2: { filled: 3, color: "text-warning" },
-  sev3: { filled: 2, color: "text-info" },
-  sev4: { filled: 1, color: "text-muted-foreground" },
+// How severe, on one scale for incidents and dependency advisories: four
+// bars of rising height, like a signal or priority meter, filling as
+// severity goes up, each level in its own hue (red, orange, amber, gray) so
+// neighbours never look alike. An incident's sev1 to sev4 read as Critical
+// to Low, the same words an advisory uses. The unfilled bars stay faint so
+// the scale still reads.
+export type SeverityLevel = "critical" | "high" | "moderate" | "low";
+
+const levelStyle: Record<SeverityLevel, { filled: number; color: string }> = {
+  critical: { filled: 4, color: "text-destructive" },
+  high: { filled: 3, color: "text-high" },
+  moderate: { filled: 2, color: "text-warning" },
+  low: { filled: 1, color: "text-muted-foreground" },
 };
 
-export function SeverityBars({ severity, className }: { severity: Incident["severity"]; className?: string }) {
-  const { filled, color } = severityLevel[severity];
+export const severityLevel: Record<Incident["severity"], SeverityLevel> = {
+  sev1: "critical",
+  sev2: "high",
+  sev3: "moderate",
+  sev4: "low",
+};
+
+// An advisory's severity on the same scale: info sits with low.
+export const advisoryLevel = (s: "info" | "low" | "moderate" | "high" | "critical"): SeverityLevel => (s === "info" ? "low" : s);
+
+const levelWords: Record<SeverityLevel, string> = { critical: "Critical", high: "High", moderate: "Moderate", low: "Low" };
+
+// The word's color. In light mode it's the hue mixed toward black, as the
+// tinted badges do: orange and amber text at their own lightness fail
+// contrast on white. The bars keep the plain hue.
+const wordColor: Record<SeverityLevel, string> = {
+  critical: "text-[color-mix(in_oklab,var(--destructive)_80%,black)] dark:text-destructive",
+  high: "text-[color-mix(in_oklab,var(--high)_70%,black)] dark:text-high",
+  moderate: "text-[color-mix(in_oklab,var(--warning)_55%,black)] dark:text-warning",
+  low: "text-muted-foreground",
+};
+
+export function SeverityBars({
+  severity,
+  level = severity && severityLevel[severity],
+  className,
+}: {
+  severity?: Incident["severity"];
+  level?: SeverityLevel;
+  className?: string;
+}) {
+  const { filled, color } = levelStyle[level ?? "low"];
   return (
     <svg viewBox="0 0 16 14" aria-hidden="true" className={cn("h-3.5 w-4 shrink-0", color, className)}>
       {[4, 7, 10, 13].map((height, i) => (
@@ -169,7 +202,7 @@ export function SeverityBars({ severity, className }: { severity: Incident["seve
 // Screen readers get the same name from the label, since the link around the
 // row takes focus rather than the bars.
 export function SeverityMeter({ severity }: { severity: Incident["severity"] }) {
-  const name = `${severity.toUpperCase()} · ${severityLabel[severity]}`;
+  const name = `${severityLabel[severity]} · ${severity.toUpperCase()}`;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -182,13 +215,28 @@ export function SeverityMeter({ severity }: { severity: Incident["severity"] }) 
   );
 }
 
-export function SeverityBadge({ severity }: { severity: Incident["severity"] }) {
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1.5">
-      <SeverityBars severity={severity} />
-      <Badge variant={severity === "sev1" ? "destructive" : "secondary"} className="font-mono uppercase">
-        {severity}
-      </Badge>
+// Severity with its word, where there's room: the bars and "High" in the
+// level's hue, no pill around them (a pill is a status's shape). `hint`
+// adds a tooltip, an incident's "SEV2" say.
+export function SeverityMark({ level, hint, className }: { level: SeverityLevel; hint?: string; className?: string }) {
+  const mark = (
+    <span className={cn("inline-flex shrink-0 items-center gap-1.5 font-medium text-xs", wordColor[level], className)}>
+      <SeverityBars level={level} />
+      {levelWords[level]}
     </span>
   );
+  if (!hint) return mark;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-default">{mark}</span>
+      </TooltipTrigger>
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// An incident's severity as a SeverityMark, its sev number on hover.
+export function SeverityBadge({ severity }: { severity: Incident["severity"] }) {
+  return <SeverityMark level={severityLevel[severity]} hint={severity.toUpperCase()} />;
 }

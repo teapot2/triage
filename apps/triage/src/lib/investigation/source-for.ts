@@ -1,3 +1,4 @@
+import { createDependencySource } from "./dependencies/source";
 import { createLiveSource } from "./live/live-source";
 import { createScenarioSource, getScenario } from "./scenarios";
 import type { Incident } from "./schema";
@@ -28,6 +29,9 @@ export async function sourceFor(incident: Incident): Promise<TelemetrySource | u
         defaultCheck({ id, name: incident.service, url: incident.trigger.route ?? "" });
       return (await createUptimeSource(check, await readSamples(id), { now })).source;
     }
+    // The audits up to the alert; the source as it is on disk now.
+    case "dependency":
+      return createDependencySource(incident.service, { now });
     default:
       return undefined;
   }

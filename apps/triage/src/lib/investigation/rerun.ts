@@ -1,6 +1,8 @@
-import { choiceModel, stageProblem } from "../models/settings";
+import { choiceModel, readDependencySettings, stageProblem } from "../models/settings";
 import { recordedEffort, type StageId } from "../models/stages";
 import { runInvestigation } from "./agent";
+import { archivedRefusal, isArchived } from "./archive";
+import { auditTarget } from "./dependencies";
 import type { Stage } from "./fanout/run";
 import { shopfrontDir } from "./live/live-source";
 import { readTelemetry } from "./live/otlp-files";
@@ -36,6 +38,7 @@ async function rerunSource(incident: Incident): Promise<TelemetrySource | undefi
 // Why the incident can't be re-run now, or undefined: what the record says
 // (reruns.ts), then whether what a run reads is still there.
 export async function rerunProblem(incident: Incident): Promise<string | undefined> {
+  if (isArchived(incident)) return archivedRefusal;
   const blocked = rerunBlocker(incident, Date.now());
   if (blocked) return blocked;
   if (incident.snapshot && !(await hasSnapshotFiles(incident.id))) {
@@ -90,7 +93,7 @@ export async function startRerun(id: string, models: RunModels): Promise<number>
   let number = 0;
   // Numbered under the incident's lock, so two quick re-runs get two numbers.
   await patchIncident(id, (i) => {
-    const blocked = rerunBlocker(i, Date.now());
+    const blocked = isArchived(i) ? archivedRefusal : rerunBlocker(i, Date.now());
     if (blocked) throw new RerunRefused(blocked);
     number = Math.max(i.runNumber ?? 1, ...(i.reruns ?? []).map((r) => r.number)) + 1;
     const rerun: Rerun = {
@@ -123,6 +126,13 @@ const saveRun = (id: string, number: number) => (work: Incident) =>
     reruns: (i.reruns ?? []).map((r) => (r.number === number ? runOf(number, work) : r)),
   })).then(() => undefined);
 
+// Where a re-run's fix is written and proven: the audited service's
+// checkout for a dependency incident, Shopfront's for the rest.
+async function appDirOf(incident: Incident): Promise<string> {
+  if (sourceKind(incident) !== "dependency") return shopfrontDir;
+  return auditTarget(await readDependencySettings()).dir;
+}
+
 // Runs re-run `number` of the incident, saving it on the incident as it
 // goes. Never throws: a failure is recorded on the re-run.
 export async function runRerun(id: string, number: number): Promise<void> {
@@ -142,6 +152,9 @@ export async function runRerun(id: string, number: number): Promise<void> {
     openedBy: incident.openedBy,
     trigger: incident.trigger,
     uptime: incident.uptime,
+    // A dependency incident's advisory: the run checks its exposure again
+    // instead of investigating telemetry (agent.ts).
+    dependency: incident.dependency,
     steps: [],
     thoughts: [],
     evidence: [],
@@ -160,7 +173,7 @@ export async function runRerun(id: string, number: number): Promise<void> {
       stage: stages.investigate,
       fanout: stages.lead ? { lead: stages.lead } : false,
       save,
-      appDir: runsFix(incident) ? shopfrontDir : undefined,
+      appDir: runsFix(incident) ? await appDirOf(incident) : undefined,
       rerun: { fix: stages.fix, baseDir: incident.snapshot ? snapshotSourceDir(incident.id) : undefined },
     });
   } catch (err) {
@@ -172,7 +185,7 @@ export async function runRerun(id: string, number: number): Promise<void> {
 // Makes run `number` the incident's run. Throws RerunRefused when it can't.
 export async function promoteRun(id: string, number: number): Promise<Incident> {
   return patchIncident(id, (i) => {
-    const blocked = promoteBlocker(i, number);
+    const blocked = isArchived(i) ? archivedRefusal : promoteBlocker(i, number);
     if (blocked) throw new RerunRefused(blocked);
     return promote(i, number);
   });

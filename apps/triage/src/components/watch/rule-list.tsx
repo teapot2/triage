@@ -3,6 +3,7 @@
 import { ChevronRightIcon, LoaderCircleIcon, PlusIcon, RadarIcon, RotateCcwIcon } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { SeverityBadge } from "@/components/incident/status-badges";
 import {
   activeFacetCount,
   FilterChips,
@@ -12,7 +13,6 @@ import {
 import { SearchInput } from "@/components/list-controls/search-input";
 import { SortMenu } from "@/components/list-controls/sort-menu";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useUrlParams } from "@/hooks/use-url-params";
@@ -182,9 +182,7 @@ function RuleRows({
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="flex flex-wrap items-center gap-2 font-medium text-sm">
                   {rule.name}
-                  <Badge variant="outline" className="font-normal text-muted-foreground">
-                    {rule.severity.toUpperCase()}
-                  </Badge>
+                  <SeverityBadge severity={rule.severity} />
                 </span>
                 <span className="truncate text-muted-foreground text-xs">{sentence(describeRule(rule))}</span>
               </span>

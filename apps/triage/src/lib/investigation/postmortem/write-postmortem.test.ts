@@ -8,6 +8,7 @@ import { exampleIncidents } from "../fixtures";
 import { type Call, inOrder, lastUserText, scriptedModel, toolOutputs, type Turn } from "../scripted-model";
 import { nextPostmortem, type PostmortemSubmission } from "./rules";
 import { defaultTemplate } from "./template";
+import { closeDb } from "../../db";
 
 // The postmortem writer's loop with a scripted model, streamed, on a temp
 // working directory so .data is ours. The store resolves its folder when it
@@ -27,6 +28,7 @@ before(async () => {
 after(async () => {
   process.chdir(cwd);
   // Windows may still hold a just-renamed file for a moment.
+  closeDb();
   await rm(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckIcon, ExternalLinkIcon, GitPullRequestIcon, LoaderCircleIcon, RotateCcwIcon, XIcon } from "lucide-react";
+import { CheckIcon, ExternalLinkIcon, GitMergeIcon, GitPullRequestIcon, LoaderCircleIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
@@ -15,7 +15,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { FormField } from "@/components/form-fields";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -89,6 +88,8 @@ export function ApprovalActions({
   onApprove,
   onDeny,
   error,
+  archived = false,
+  quietOnceMerged = false,
 }: {
   incidentId: string;
   fix: Fix;
@@ -97,6 +98,10 @@ export function ApprovalActions({
   onApprove: () => void;
   onDeny: () => void;
   error?: string | null;
+  // Read-only: the decision as it stands, and nothing to decide or retry.
+  archived?: boolean;
+  // Once the PR is merged, the PR alone: a merged PR was approved.
+  quietOnceMerged?: boolean;
 }) {
   // A decision made here lands with a pop (and the check draws in); one
   // already made when the page opened just shows.
@@ -104,22 +109,23 @@ export function ApprovalActions({
   const land = decided && "animate-in fade-in-0 zoom-in-95 duration-200 ease-out motion-reduce:animate-none";
 
   if (decision === "approved") {
+    if (quietOnceMerged && approval?.prMergedAt) return <PullRequestStatus incidentId={incidentId} approval={approval} archived={archived} />;
     return (
       <div className="flex items-center gap-2">
-        <Badge variant="success" className={cn("gap-1", land)}>
-          <CheckIcon className={cn(decided && "*:animate-check-draw motion-reduce:*:animate-none")} />
+        <span className={cn("inline-flex items-center gap-1 font-medium text-success text-xs", land)}>
+          <CheckIcon className={cn("size-3.5", decided && "*:animate-check-draw motion-reduce:*:animate-none")} aria-hidden />
           Approved
-        </Badge>
-        {approval && <PullRequestStatus incidentId={incidentId} approval={approval} />}
+        </span>
+        {approval && <PullRequestStatus incidentId={incidentId} approval={approval} archived={archived} />}
       </div>
     );
   }
   if (decision === "denied") {
     const badge = (
-      <Badge variant="secondary" className={cn("gap-1", land)}>
-        <XIcon />
+      <span className={cn("inline-flex items-center gap-1 font-medium text-muted-foreground text-xs", land)}>
+        <XIcon className="size-3.5" aria-hidden />
         Denied
-      </Badge>
+      </span>
     );
     if (!approval?.reason) return badge;
     return (
@@ -131,6 +137,7 @@ export function ApprovalActions({
       </Tooltip>
     );
   }
+  if (archived) return null;
   return (
     <div className="flex items-center gap-2">
       {error && <span className="text-destructive text-xs">{error}</span>}
@@ -154,7 +161,7 @@ export function ApprovalActions({
 
 // Stage 5 after an approval: the PR opening, a link to it, or why it failed
 // with a way to try again. Nothing for an approval that opens no PR.
-function PullRequestStatus({ incidentId, approval }: { incidentId: string; approval: Approval }) {
+function PullRequestStatus({ incidentId, approval, archived }: { incidentId: string; approval: Approval; archived: boolean }) {
   const router = useRouter();
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -183,11 +190,13 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
   }
   if (approval.prState === "opened" && approval.prUrl) {
     const number = approval.prUrl.match(/\/pull\/(\d+)/)?.[1];
+    // Merged, as the PR check last saw it: no longer a draft.
+    const merged = approval.prMergedAt !== undefined;
     return (
       <Button variant="outline" size="sm" asChild>
         <a href={approval.prUrl} target="_blank" rel="noreferrer">
-          <GitPullRequestIcon />
-          {number ? `Draft PR #${number}` : "View draft PR"}
+          {merged ? <GitMergeIcon /> : <GitPullRequestIcon />}
+          {merged ? (number ? `PR #${number} merged` : "View merged PR") : number ? `Draft PR #${number}` : "View draft PR"}
           <ExternalLinkIcon className="opacity-60" />
         </a>
       </Button>
@@ -202,10 +211,12 @@ function PullRequestStatus({ incidentId, approval }: { incidentId: string; appro
           </TooltipTrigger>
           <TooltipContent className="max-w-80">{approval.prError}</TooltipContent>
         </Tooltip>
-        <Button variant="outline" size="sm" disabled={retrying} onClick={() => void retry()}>
-          {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
-          Retry
-        </Button>
+        {!archived && (
+          <Button variant="outline" size="sm" disabled={retrying} onClick={() => void retry()}>
+            {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
+            Retry
+          </Button>
+        )}
       </div>
     );
   }

@@ -1,5 +1,5 @@
 import type { MetricPoint } from "../schema";
-import type { MetricSeries } from "../source";
+import { slowQueriesNote, type MetricSeries } from "../source";
 import { priceGapFiles } from "./price-gap-files";
 import { minutesBefore, type Scenario } from "./scenario-source";
 import { commonCommits, services } from "./shopfront-base";
@@ -319,12 +319,14 @@ export const priceGap: Scenario = {
       query:
         "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
       rows: [
-        { query: 'select "id", "name", "price_cents", "category", "description', calls: "14342", mean_ms: "0.04", max_ms: "0.66" },
-        { query: 'select "on_hand" from "stock_levels" where "stock_levels"."p', calls: "11850", mean_ms: "0.03", max_ms: "1.08" },
-        { query: 'select "id", "name", "price_cents", "category", "description', calls: "4059", mean_ms: "0.05", max_ms: "0.32" },
-        { query: 'select "id", "name", "price_cents", "category", "description', calls: "2331", mean_ms: "0.03", max_ms: "0.68" },
-        { query: 'select "amount_cents" from "product_prices" where "product_p', calls: "338", mean_ms: "0.04", max_ms: "0.40" },
+        { query: 'select "id", "name", "price_cents", "category", "description', calls: "14342", mean_ms: "0.04", max_ms: "0.66", window_calls: 1900, window_ms: 76 },
+        { query: 'select "on_hand" from "stock_levels" where "stock_levels"."p', calls: "11850", mean_ms: "0.03", max_ms: "1.08", window_calls: 1500, window_ms: 45 },
+        { query: 'select "id", "name", "price_cents", "category", "description', calls: "4059", mean_ms: "0.05", max_ms: "0.32", window_calls: 500, window_ms: 25 },
+        // Every call since the flag went on: the window holds them all.
+        { query: 'select "amount_cents" from "product_prices" where "product_p', calls: "338", mean_ms: "0.04", max_ms: "0.40", window_calls: 338, window_ms: 13.5 },
+        { query: 'select "id", "name", "price_cents", "category", "description', calls: "2331", mean_ms: "0.03", max_ms: "0.68", window_calls: 300, window_ms: 9 },
       ],
+      note: slowQueriesNote(now, 15),
     },
   },
   files: priceGapFiles,

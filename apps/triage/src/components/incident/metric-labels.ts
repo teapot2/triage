@@ -16,6 +16,8 @@ const known: Record<string, string> = {
   // An uptime check's results; the {check=…} label is an id, left off.
   "uptime.response_time": "Response time",
   "uptime.availability": "Availability",
+  // The dependency audit's: 1 per audit that found the {advisory=…}.
+  vulnerable_dependencies: "Advisory found",
 };
 
 // Metrics where less is worse, so an alert on one is under its limit, not
@@ -40,6 +42,7 @@ export function metricLabel(metric: string): string {
   if (percentile) label = `${percentile} ${label}`;
   if (labels.state) label = `${label} (${labels.state})`;
   if (labels.route) label = `${label} · ${labels.route}`;
+  if (labels.advisory) label = `${label} · ${labels.advisory}`;
   return label;
 }
 

@@ -1,4 +1,5 @@
 import { metricLabel } from "@/components/incident/metric-labels";
+import { archivedRefusal, isArchived } from "./archive";
 import { createLiveSource } from "./live/live-source";
 import { withUnit } from "./postmortem/timeline";
 import type { Incident, MetricPoint, Reopening, Verification } from "./schema";
@@ -61,8 +62,9 @@ export function reopened(incident: Incident, reopening: Omit<Reopening, "resolve
 
 // Why a verification can't start now, or undefined when it can: once the
 // investigation has a report, one at a time, and on a resolved incident
-// only when a person asks for it.
+// only when a person asks for it. Never on an archived one: it's read-only.
 export function verificationRefusal(incident: Incident, after: Verification["after"]): string | undefined {
+  if (isArchived(incident)) return archivedRefusal;
   if (incident.status === "investigating" || !incident.report) {
     return "the investigation has no report yet: verify once it has finished";
   }

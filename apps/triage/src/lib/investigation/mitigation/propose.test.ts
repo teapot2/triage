@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Evidence, Hypothesis, InvestigationReport } from "../schema";
-import { proposeMitigation } from "./propose";
+import { proposeMitigation, whyNoMitigation } from "./propose";
 
 const now = "2026-10-23T02:15:00.000Z";
 
@@ -174,6 +174,62 @@ describe("proposeMitigation", () => {
     assert.equal(withPool?.steps.length, 2);
     assert.match(withPool?.steps[1] ?? "", /^Recycle pooled connections/);
     assert.deepEqual(withPool?.why.evidenceIds, ["ev_commit_1", "ev_metric_1"]);
+  });
+
+  describe("with the flags' states from the logs", () => {
+    const cited = (evidence: Evidence[], flags?: Record<string, boolean>) =>
+      proposeMitigation(report(evidence.map((e) => e.id)), evidence, "shopfront", now, undefined, flags);
+
+    it("never turns off a flag the blamed code checks when the logs say it is off", () => {
+      assert.equal(cited([latency, source], { FF_STOCK_DIRECT_QUERY: false }), undefined);
+      // With a deploy to roll back, that is the next rule.
+      const m = cited([latency, source, codeDeploy], { FF_STOCK_DIRECT_QUERY: false });
+      assert.equal(m?.kind, "rollback");
+      assert.equal(m?.target, "a1b9c4e");
+    });
+
+    it("turns it off as before when the logs say it is on or say nothing", () => {
+      assert.equal(cited([latency, source], undefined)?.kind, "flag_off");
+      assert.equal(cited([latency, source], {})?.kind, "flag_off");
+      assert.equal(cited([latency, source], { FF_STOCK_DIRECT_QUERY: true })?.kind, "flag_off");
+      assert.equal(cited([latency, source], { FF_LIST_PRICES: false })?.target, "FF_STOCK_DIRECT_QUERY");
+    });
+
+    it("skips a flag turned on in the evidence that the logs say is off again", () => {
+      assert.equal(cited([latency, flagOn], { FF_STOCK_DIRECT_QUERY: false }), undefined);
+      assert.equal(cited([latency, flagOn, codeDeploy], { FF_STOCK_DIRECT_QUERY: false })?.kind, "rollback");
+      // Another flag turned on, still on, is the candidate instead.
+      const other = deploy("ev_commit_3", "config:FF_NEW_CHECKOUT", "ops: FF_NEW_CHECKOUT turned on");
+      assert.equal(cited([latency, flagOn, other], { FF_STOCK_DIRECT_QUERY: false })?.target, "FF_NEW_CHECKOUT");
+    });
+
+    it("skips a flag turned on after the blamed deploy that is off again", () => {
+      const later = { ...flagOn, observedAt: "2026-10-23T02:05:00.000Z" };
+      const evidence = [latency, codeDeploy, later];
+      const m = proposeMitigation(report([latency.id, codeDeploy.id]), evidence, "shopfront", now, undefined, {
+        FF_STOCK_DIRECT_QUERY: false,
+      });
+      assert.equal(m?.kind, "rollback");
+    });
+  });
+
+  describe("whyNoMitigation", () => {
+    const why = (evidence: Evidence[], flags?: Record<string, boolean>) =>
+      whyNoMitigation(report(evidence.map((e) => e.id)), evidence, flags);
+
+    it("says the cited flag is already off", () => {
+      assert.equal(why([latency, source], { FF_STOCK_DIRECT_QUERY: false }), "Nothing to undo: FF_STOCK_DIRECT_QUERY is already off.");
+      assert.equal(why([latency, flagOn], { FF_STOCK_DIRECT_QUERY: false }), "Nothing to undo: FF_STOCK_DIRECT_QUERY is already off.");
+    });
+
+    it("says the cited deploy was already rolled back", () => {
+      const rollback = deploy("ev_commit_5", "a1b9c4e", "deploy: rolled back a1b9c4e", { deployKind: "rollback" });
+      assert.equal(why([latency, rollback]), "Nothing to undo: a1b9c4e was already rolled back.");
+    });
+
+    it("points at the load when the diagnosis cites no change", () => {
+      assert.match(why([latency]), /cites no flag flip or deploy.*scale out or wait/);
+    });
   });
 
   it("doesn't recycle for database diagnostics or a pool at its usual level", () => {

@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { archivedRefusal, isArchived } from "@/lib/investigation/archive";
 import { nextPostmortem, postmortemRefusal } from "@/lib/investigation/postmortem/rules";
 import { writePostmortem } from "@/lib/investigation/postmortem/writer";
 import { getIncident, patchIncident } from "@/lib/investigation/store";
@@ -13,6 +14,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params;
   const incident = await getIncident(id);
   if (!incident) return Response.json({ error: `unknown incident: ${id}` }, { status: 404 });
+  if (isArchived(incident)) return Response.json({ error: archivedRefusal }, { status: 409 });
   // A promoted re-run's own model, else Settings'.
   const stage = await runStageModel("postmortem", incident.models?.postmortem);
   const problem = stageProblem(stage);
@@ -27,7 +29,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     // Checked and saved under the incident's lock, so two quick POSTs can't
     // both start one.
     await patchIncident(id, (i) => {
-      const refusal = postmortemRefusal(i);
+      const refusal = isArchived(i) ? archivedRefusal : postmortemRefusal(i);
       if (refusal) throw new Refused(refusal);
       return { ...i, postmortem: { ...nextPostmortem(stage), template } };
     });

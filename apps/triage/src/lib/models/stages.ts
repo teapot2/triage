@@ -7,27 +7,14 @@ export const stageIds = ["investigate", "lead", "fix", "ask", "postmortem"] as c
 export const stageIdSchema = z.enum(stageIds);
 export type StageId = z.infer<typeof stageIdSchema>;
 
-export const stageLabels: Record<StageId, { label: string; description: string }> = {
-  investigate: {
-    label: "Investigate",
-    description: "Reads the telemetry, database and code, and writes the diagnosis. Needs tool calling.",
-  },
-  lead: {
-    label: "Lead",
-    description: "With hypotheses checked in parallel, proposes them and merges the checks' findings into the diagnosis.",
-  },
-  fix: {
-    label: "Fix",
-    description: "Writes the patch and its regression test, retrying until the sandbox proves them.",
-  },
-  ask: {
-    label: "Ask",
-    description: "Answers follow-up questions on an incident with the investigation's tools.",
-  },
-  postmortem: {
-    label: "Postmortem",
-    description: "Writes the blameless postmortem from the incident's record. No tools.",
-  },
+// Each stage's name, and a line under it in Settings only where the name
+// doesn't say what the stage does.
+export const stageLabels: Record<StageId, { label: string; description?: string }> = {
+  investigate: { label: "Investigate" },
+  lead: { label: "Lead", description: "Proposes and merges hypotheses checked in parallel." },
+  fix: { label: "Fix" },
+  ask: { label: "Ask" },
+  postmortem: { label: "Postmortem" },
 };
 
 // A stage with nothing saved uses the model this one has, until changed in

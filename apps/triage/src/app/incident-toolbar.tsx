@@ -86,7 +86,13 @@ export function IncidentToolbar({
   const facets = incidentFacets(counts);
   // The list's own query (search, filters, sort), so the file holds the rows
   // shown, on every page; the size and page are left out of the link.
-  const exportParams = Object.fromEntries(new URLSearchParams(listHref({ ...params, size: defaultPageSize, page: 1 }).split("?")[1]));
+  // Archived incidents stay out of the list, and out of the file unless
+  // asked for.
+  const [withArchived, setWithArchived] = useState(false);
+  const exportParams = {
+    ...Object.fromEntries(new URLSearchParams(listHref({ ...params, size: defaultPageSize, page: 1 }).split("?")[1])),
+    ...(withArchived && { archived: "include" }),
+  };
   return (
     <div className="flex flex-col gap-2">
       {/* The search box gives way to its own row on narrow screens. */}
@@ -102,7 +108,10 @@ export function IncidentToolbar({
           <FilterMenu facets={facets} values={params.filters} onChange={setFilters} />
           <IncidentSortMenu params={params} variant="outline" />
           {/* No file to offer when nothing matches. */}
-          <ExportMenu exports={shown > 0 ? [{ dataset: incidentList, params: exportParams }] : []} />
+          <ExportMenu
+            exports={shown > 0 ? [{ dataset: incidentList, params: exportParams }] : []}
+            option={{ label: "Include archived", checked: withArchived, onCheckedChange: setWithArchived }}
+          />
         </div>
       </div>
       {(isFiltering(params) || query.trim() !== "") && (

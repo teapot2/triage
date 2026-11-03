@@ -1,6 +1,7 @@
 import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
 import { runInvestigation } from "./agent";
+import { isArchived } from "./archive";
 import { incidentToReopen, isOpen } from "./reopen";
 import type { Incident } from "./schema";
 import type { TelemetrySource } from "./source";
@@ -309,12 +310,13 @@ const failed = (s: UptimeSample | undefined) => s !== undefined && s.outcome !==
 
 // The incident for this check's episode, or undefined once there is none:
 // the episode ends when its incident was resolved (by a person, or by a
-// verification) or deleted.
+// verification), archived (one where nothing was wrong can be, and it's
+// read-only then) or deleted.
 async function episodeIncident(check: UptimeCheck): Promise<Incident | undefined> {
   const episode = state.episodes.get(check.id);
   if (!episode) return undefined;
   const incident = await getIncident(episode.incidentId);
-  if (incident && incident.status !== "resolved") return incident;
+  if (incident && incident.status !== "resolved" && !isArchived(incident)) return incident;
   state.episodes.delete(check.id);
   return undefined;
 }
@@ -466,7 +468,9 @@ async function open(check: UptimeCheck, rule: UptimeRule, samples: UptimeSample[
   let failing = 0;
   for (let i = samples.length - 1; i >= 0 && failed(samples[i]); i--) failing++;
 
-  const previous = incidentToReopen(await listIncidents(), { ruleId: ruleId(check, rule), route: check.url }, now);
+  // Only the rule's incidents: the others can't be reopened by it.
+  const tripped = ruleId(check, rule);
+  const previous = incidentToReopen(await listIncidents({ ruleId: tripped }), { ruleId: tripped, route: check.url }, now);
   if (previous) {
     const incident = await patchIncident(previous.id, (i) => ({
       // Already reopened (its verification saw the failure first): the

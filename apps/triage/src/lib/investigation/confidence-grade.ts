@@ -37,6 +37,12 @@ type Lane = Fanout["hypotheses"][number];
 // happen (the source, a deploy or config change).
 const runtimeKinds = new Set<Evidence["kind"]>(["log", "span", "db", "metric"]);
 const codeKinds = new Set<Evidence["kind"]>(["source", "commit"]);
+// The dependency audit's advisory (dependencies/exposure.ts) counts as
+// runtime: the package manager read the installed tree, so it shows the
+// vulnerable version is what the service runs, not only what it could.
+const fromAudit = (e: Evidence) => e.kind === "web" && e.tool === "dependency_audit";
+const observed = (e: Evidence) => runtimeKinds.has(e.kind) || fromAudit(e);
+const noun = (e: Evidence) => (fromAudit(e) ? "the dependency audit" : kindNouns[e.kind]);
 
 // How each kind reads in a reason: "cited by a trace and the source".
 const kindNouns: Record<Evidence["kind"], string> = {
@@ -114,7 +120,7 @@ function evidenceGrade(hypothesis: Hypothesis, incident: Incident, byId: Map<str
   const counts = (e: Evidence) => !(e.kind === "metric" && e.metric === incident.trigger.metric);
   const chain = citedBy([symptom, propagation, rootCause], byId).filter(counts);
   const cause = citedBy([propagation, rootCause], byId).filter(counts);
-  const runtime = cause.filter((e) => runtimeKinds.has(e.kind));
+  const runtime = cause.filter(observed);
   const code = chain.filter((e) => codeKinds.has(e.kind));
   const lane = laneOf(hypothesis, incident);
 
@@ -137,7 +143,7 @@ function evidenceGrade(hypothesis: Hypothesis, incident: Incident, byId: Map<str
   }
   // An uptime check sees only its own results: no source or history to cite.
   const external = incident.uptime !== undefined && code.length === 0;
-  const kinds = [...new Set([...runtime, ...code].map((e) => e.kind))].map((k) => kindNouns[k]);
+  const kinds = [...new Set([...runtime, ...code].map(noun))];
   if (runtime.length > 0 && (code.length > 0 || external)) {
     return {
       grade: "supported",

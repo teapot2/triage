@@ -1,6 +1,7 @@
 import { stageModel, stageProblem, webSearchOn } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import type { Incident, Question } from "../schema";
+import { archivedRefusal, isArchived } from "../archive";
 import { sourceKind } from "../source-kind";
 import { getIncident, patchIncident } from "../store";
 import { saveQuestionImage } from "./images";
@@ -23,7 +24,10 @@ export async function startQuestion(
   text: string,
   opts: { image?: QuestionImage; webSearch?: boolean; via?: Question["via"] } = {},
 ): Promise<StartedQuestion> {
-  if (!(await getIncident(id))) return { ok: false, status: 404, error: `unknown incident: ${id}` };
+  const found = await getIncident(id);
+  if (!found) return { ok: false, status: 404, error: `unknown incident: ${id}` };
+  // Before the model's checks, so an archived incident says why first.
+  if (isArchived(found)) return { ok: false, status: 409, error: archivedRefusal };
   const stage = await stageModel("ask");
   const problem = stageProblem(stage);
   if (problem) return { ok: false, status: 409, error: problem };
@@ -37,7 +41,7 @@ export async function startQuestion(
     // Checked and appended under the incident's lock, so two quick asks
     // can't both start a question.
     incident = await patchIncident(id, (i) => {
-      const refusal = askRefusal(i);
+      const refusal = isArchived(i) ? archivedRefusal : askRefusal(i);
       if (refusal) throw new Refused(refusal);
       const image = opts.image && {
         mediaType: opts.image.mediaType,

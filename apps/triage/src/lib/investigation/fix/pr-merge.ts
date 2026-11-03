@@ -2,13 +2,15 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Incident } from "../schema";
 import { patchIncident } from "../store";
+import { startDependencyVerification } from "../dependencies";
 import { startVerification, verificationRefusal } from "../verify";
 import { errorMessage } from "../../errors";
 
 // After Stage 5: notices that the fix's PR was merged, records when, and
-// starts verifying the fix from that moment. There's no background poll:
-// the incident page asks, at most once a minute per incident, while the PR
-// is open. Nothing here merges anything.
+// starts verifying the fix from that moment: a code fix by watching the
+// alert's metric, a dependency bump by auditing until the advisory is gone.
+// There's no background poll: the incident page asks, at most once a
+// minute per incident, while the PR is open. Nothing here merges anything.
 
 const run = promisify(execFile);
 
@@ -50,13 +52,19 @@ export async function checkPrMerged(incident: Incident): Promise<void> {
     );
     logOnce(incident.id, `${url} merged at ${mergedAt}`);
     if (saved.status === "resolved") return;
-    const refusal = verificationRefusal(saved, "fix");
+    // A dependency bump touches no traffic: its verification is the audit
+    // that no longer finds the advisory (dependencies.ts).
+    const after = saved.dependency ? "dependencies" : "fix";
+    const refusal = verificationRefusal(saved, after);
     if (refusal) {
       logOnce(incident.id, `not verifying the merged fix: ${refusal}`);
       return;
     }
     // The loop runs on its own; a refusal it raises before saving is logged.
-    void startVerification(saved.id, { after: "fix", since: mergedAt }).catch((err: unknown) =>
+    const started = saved.dependency
+      ? startDependencyVerification(saved.id, mergedAt)
+      : startVerification(saved.id, { after: "fix", since: mergedAt });
+    void started.catch((err: unknown) =>
       logOnce(incident.id, `couldn't verify the merged fix: ${errorMessage(err)}`),
     );
   } catch (err) {

@@ -1,7 +1,8 @@
 import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
 import { createRuleIncident, runInvestigation } from "./agent";
-import { createLiveSource, recentRequests, shopfrontDir } from "./live/live-source";
+import { type DependencyState, dependencyState, startDependencies, stopDependencies } from "./dependencies";
+import { createLiveSource, recentRequests, sampleStatements, shopfrontDir } from "./live/live-source";
 import { incidentToReopen, isOpen } from "./reopen";
 import { isExample, listIncidents, patchIncident } from "./store";
 import { type EndpointState, startUptime, stopUptime, uptimeState } from "./uptime";
@@ -57,9 +58,11 @@ export type WatchState = {
   error?: string;
   // The uptime checks (see uptime), which start and pause with the watch.
   endpoints: EndpointState[];
+  // The dependency audit (see dependencies), which does too.
+  dependencies: DependencyState;
 };
 
-type Internal = Omit<WatchState, "rules" | "endpoints"> & {
+type Internal = Omit<WatchState, "rules" | "endpoints" | "dependencies"> & {
   version: number;
   timer?: ReturnType<typeof setInterval>;
   checking: boolean;
@@ -100,7 +103,7 @@ g.triageWatchCheck = check;
 export function watchState(): WatchState {
   const { enabled, status, lastCheck, lastOpened, error } = state;
   const rules = enabled ? state.rules : state.rules.map((r) => ({ ...r, status: "paused" as const, summary: undefined }));
-  return { enabled, status, rules, lastCheck, lastOpened, error, endpoints: uptimeState() };
+  return { enabled, status, rules, lastCheck, lastOpened, error, endpoints: uptimeState(), dependencies: dependencyState() };
 }
 
 export function startWatch() {
@@ -111,6 +114,7 @@ export function startWatch() {
   state.timer = setInterval(() => void g.triageWatchCheck?.(), CHECK_MS);
   void check();
   startUptime();
+  startDependencies();
 }
 
 export function stopWatch() {
@@ -119,6 +123,7 @@ export function stopWatch() {
   state.streaks.clear();
   state.tripped.clear();
   stopUptime();
+  stopDependencies();
 }
 
 // Checks now rather than at the next tick: after the rules change.
@@ -136,6 +141,9 @@ async function check() {
   try {
     const rules = await readRules();
     const now = Date.now();
+    // The database's statement counters, for slow_queries' window (see
+    // live-source). Not awaited: a slow database must not delay the check.
+    void sampleStatements(now);
     const longest = Math.max(MINUTE, ...rules.map((r) => r.windowSeconds * 1000));
     const samples = (await recentRequests(longest)).filter(isWatched);
     state.lastCheck = { at: new Date(now).toISOString(), requests: samples.filter((s) => s.start > now - MINUTE).length };
@@ -201,8 +209,9 @@ async function check() {
 // instead, without investigating again.
 async function open(rule: WatchRule, trip: { route: string; method: string }, summary?: string): Promise<boolean> {
   const now = new Date().toISOString();
-  // The bundled examples are never the live outage, though one carries a rule.
-  const runs = (await listIncidents()).filter((i) => !isExample(i.id));
+  // The bundled examples are never the live outage, though one carries a
+  // rule. Only the rule's incidents: the others can't be reopened by it.
+  const runs = (await listIncidents({ ruleId: rule.id })).filter((i) => !isExample(i.id));
   const previous = incidentToReopen(runs, { ruleId: rule.id, route: trip.route }, Date.parse(now));
   if (previous) {
     // Already reopened (its verification saw the breach first): the episode

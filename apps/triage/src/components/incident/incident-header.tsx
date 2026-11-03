@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
   CheckCheckIcon,
   CheckIcon,
   EllipsisIcon,
@@ -12,11 +14,10 @@ import {
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
 import { type ExportSource, ExportSubmenu, useExportCommands } from "@/components/export-menu";
 import { StickyHeader } from "@/components/sticky-header";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,19 +26,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
-import { rerunBlocker } from "@/lib/investigation/reruns";
+import { archiveBlocker, isArchived } from "@/lib/investigation/archive";
+import { currentRun, rerunBlocker } from "@/lib/investigation/reruns";
 import { incidentUsage } from "@/lib/investigation/cost";
 import type { Incident } from "@/lib/investigation/schema";
-import { cn } from "@/lib/utils";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
+import { useArchiveActions } from "./archive-actions";
 import { Timestamp } from "@/components/timestamp";
+import { cn } from "@/lib/utils";
 import { THIS_INCIDENT } from "./incident-commands";
 import { incidentExports } from "./incident-export";
 import { MetricBadges } from "./outcome-badges";
 import { RerunDialog } from "./rerun-dialog";
+import { RunPicker, type ShownRun } from "./run-switcher";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 import { UsageLine } from "./usage-line";
 import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution } from "./verification";
@@ -56,9 +59,22 @@ export function noRerunReason(incident: Pick<Incident, "run" | "fixRun">): NoRer
 // The incident at a glance: the title, then one line with its state, where
 // and when, and how far past the limit. Once it scrolls away, a compact bar
 // keeps the title, status and approval in view.
-// `view` is the run on screen, which a re-run starts from.
-export function IncidentHeader({ incident, view = incident }: { incident: Incident; view?: Incident }) {
+// `view` is the run on screen, which a re-run starts from, and `shown` which
+// one it is, for the run picker.
+export function IncidentHeader({
+  incident,
+  view = incident,
+  shown = currentRun(incident),
+}: {
+  incident: Incident;
+  view?: Incident;
+  shown?: ShownRun;
+}) {
   const { trigger, fix, approval, mitigation, verification } = incident;
+  // An archived incident is read-only: no decisions, here or in the sticky
+  // bar, until it's restored (resolutionOptions offers nothing then either).
+  const archived = isArchived(incident);
+  const dependency = incident.dependency !== undefined;
   const mitigated = mitigation?.state === "applied";
   const recovered = mitigated && mitigation.recovery?.status === "recovered";
   // Once recovered or being verified, the value now rather than the one
@@ -82,7 +98,7 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
   // The same decisions from the search palette, while it's still open.
   useRegisterCommands(
     "incident-approval",
-    fix && decision === "pending"
+    fix && decision === "pending" && !archived
       ? [
           {
             id: "approve",
@@ -117,26 +133,58 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
   // The palette's export commands, whether or not the menu shows them.
   useExportCommands(exports);
   const hasOptions = options.resolve || options.reopen || options.verify;
-  const menuFor = (withExports: boolean) =>
-    (hasOptions || (withExports && exports.length > 0)) && (
+  // Investigating again with other models: in the header's menu only, not
+  // the sticky bar's, since it's not a decision the incident waits on.
+  const [rerunning, setRerunning] = useState(false);
+  // The clock only decides whether live telemetry has rolled out; it starts
+  // at 0 to hydrate, then runs.
+  const now = useNow(0);
+  const rerunBlocked = rerunBlocker(incident, now);
+  useRegisterCommands(
+    "incident-rerun",
+    rerunBlocked || archived
+      ? []
+      : [{ id: "rerun", group: THIS_INCIDENT, label: "Re-run with other models", icon: RefreshCwIcon, keywords: "again compare model", run: () => setRerunning(true) }],
+  );
+  // Archiving a closed incident, also from the header's menu only; no
+  // confirmation, since the toast offers Undo. Once archived, Restore.
+  const archiving = useArchiveActions();
+  const archiveBlocked = archived ? undefined : archiveBlocker(incident);
+  const archive = () => void archiving.archive([incident.id]);
+  const restore = () => void archiving.restore([incident.id]);
+  useRegisterCommands(
+    "incident-archive",
+    archived
+      ? [{ id: "restore", group: THIS_INCIDENT, label: "Restore incident", icon: ArchiveRestoreIcon, keywords: "unarchive", run: restore }]
+      : archiveBlocked
+        ? []
+        : [{ id: "archive", group: THIS_INCIDENT, label: "Archive incident", icon: ArchiveIcon, keywords: "hide close", run: archive }],
+  );
+  // The header's menu has everything; the sticky bar's leaves out export,
+  // which is for checking the record, re-run and archive.
+  const menuFor = (full: boolean) =>
+    (hasOptions || full) && (
       <ResolutionMenu
         options={options}
-        exports={withExports ? exports : []}
-        pending={resolution.pending !== undefined}
+        exports={full ? exports : []}
+        rerun={full && !archived ? { blocked: rerunBlocked, onSelect: () => setRerunning(true) } : undefined}
+        archive={full ? { blocked: archiveBlocked, archived, onSelect: archived ? restore : archive } : undefined}
+        pending={resolution.pending !== undefined || archiving.pending}
         onResolve={() => void resolution.act("resolve")}
         onReopen={() => setReopeningOpen(true)}
         onVerify={() => void resolution.act("verify")}
       />
     );
-  // Export stays out of the sticky bar's menu: it's for checking the
-  // record, not an action to keep in reach.
   const menu = menuFor(false);
-  const approvalActions = fix && decision && (
+  // Archived, a decision already made still shows; one still pending doesn't.
+  const approvalActions = fix && decision && !(archived && decision === "pending") && (
     <ApprovalActions
       incidentId={incident.id}
       fix={fix}
       approval={approval}
       decision={decision}
+      archived={archived}
+      quietOnceMerged={dependency}
       onApprove={() => setConfirming(true)}
       onDeny={() => setDenying(true)}
       error={error}
@@ -149,23 +197,10 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
     </div>
   );
   const headerMenu = menuFor(true);
-  // Investigating again with other models: in the header only, not the
-  // sticky bar, since it's not a decision the incident waits on.
-  const [rerunning, setRerunning] = useState(false);
-  // The clock only decides whether live telemetry has rolled out; it starts
-  // at 0 to hydrate, then runs.
-  const now = useNow(0);
-  const rerunBlocked = rerunBlocker(incident, now);
-  useRegisterCommands(
-    "incident-rerun",
-    rerunBlocked
-      ? []
-      : [{ id: "rerun", group: THIS_INCIDENT, label: "Re-run with other models", icon: RefreshCwIcon, keywords: "again compare model", run: () => setRerunning(true) }],
-  );
   const headerActions = (
     <div className="flex items-center gap-2">
       {approvalActions}
-      <RerunButton blocked={rerunBlocked} onClick={() => setRerunning(true)} />
+      {(incident.reruns?.length ?? 0) > 0 && <RunPicker incident={incident} shown={shown} />}
       {headerMenu}
     </div>
   );
@@ -196,8 +231,12 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
                 then where and when, as text. */}
             <IncidentStatusBadge status={incident.status} />
             <SeverityBadge severity={incident.severity} />
-            <ProgressBadge incident={incident} mitigated={mitigated} recovered={recovered} />
-            <MetricBadges metric={trigger.metric} observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
+            <ProgressNote incident={incident} mitigated={mitigated} recovered={recovered} />
+            {/* A dependency incident's Fix card says whether the advisory
+                is still found: no value against a limit here. */}
+            {!dependency && (
+              <MetricBadges metric={trigger.metric} observed={observed} threshold={trigger.threshold} unit={trigger.unit} />
+            )}
             {/* The dots only separate items on one line; on phones the line
                 wraps and they'd dangle at line ends, so spacing does it. */}
             <span className="sm:ml-1">{incident.service}</span>
@@ -213,7 +252,7 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
           </div>
         </div>
       </StickyHeader>
-      {!rerunBlocked && <RerunDialog incident={incident} view={view} open={rerunning} onOpenChange={setRerunning} />}
+      {!rerunBlocked && !archived && <RerunDialog incident={incident} view={view} open={rerunning} onOpenChange={setRerunning} />}
       <ReopenDialog
         open={reopeningOpen}
         onOpenChange={setReopeningOpen}
@@ -247,30 +286,11 @@ export function IncidentHeader({ incident, view = incident }: { incident: Incide
   );
 }
 
-// Opens the re-run dialog; when the incident can't be investigated again,
-// it looks disabled and says why in a popover instead.
-function RerunButton({ blocked, onClick }: { blocked?: string; onClick: () => void }) {
-  const button = (
-    <Button variant="outline" size="sm" aria-disabled={Boolean(blocked)} className={cn(blocked && "text-muted-foreground")} onClick={blocked ? undefined : onClick}>
-      <RefreshCwIcon />
-      Re-run
-    </Button>
-  );
-  if (!blocked) return button;
-  return (
-    <Popover>
-      <PopoverTrigger asChild>{button}</PopoverTrigger>
-      <PopoverContent align="end" className="w-72 text-sm">
-        <p className="font-medium">Can&apos;t re-run this incident</p>
-        <p className="mt-1 text-muted-foreground">{blocked}</p>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-// How far the incident got after the diagnosis, beside its status: reopened,
-// resolved, being verified, recovered or mitigated, the first that holds.
-function ProgressBadge({
+// How far the incident got after the diagnosis, as a few words after its
+// status (the one pill in the row): reopened, being verified, recovered or
+// mitigated, the first that holds. Resolved needs nothing more: the status
+// says it.
+function ProgressNote({
   incident,
   mitigated,
   recovered,
@@ -279,56 +299,52 @@ function ProgressBadge({
   mitigated: boolean;
   recovered: boolean;
 }) {
-  const { verification, resolvedAt } = incident;
+  const { verification } = incident;
+  const note = "inline-flex items-center gap-1 text-xs";
   if (reopening(incident)) {
     return (
-      <Badge variant="warning" className="gap-1">
-        <RotateCcwIcon />
+      <span className={cn(note, "text-warning")}>
+        <RotateCcwIcon className="size-3.5" aria-hidden />
         Reopened
-      </Badge>
+      </span>
     );
   }
-  if (incident.status === "resolved" && resolvedAt) {
-    return (
-      <Timestamp date={resolvedAt} className="hover:no-underline">
-        <Badge variant="success" className="gap-1">
-          <CheckIcon />
-          Resolved
-        </Badge>
-      </Timestamp>
-    );
-  }
+  if (incident.status === "resolved") return null;
   if (verification?.status === "verifying") {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex cursor-default">
-            <Badge variant="secondary" className="gap-1">
-              <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
-              Verifying
-            </Badge>
+          <span className={cn(note, "cursor-default")}>
+            <LoaderCircleIcon className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
+            Verifying
           </span>
         </TooltipTrigger>
         <TooltipContent>
-          {quietMinutes(verification)} of {verification.windowMinutes} min under the limit
+          {verification.after === "dependencies"
+            ? "Waiting for an audit that no longer finds the advisory"
+            : `${quietMinutes(verification)} of ${verification.windowMinutes} min under the limit`}
         </TooltipContent>
       </Tooltip>
     );
   }
   if (!mitigated) return null;
   return (
-    <Badge variant="secondary" className="gap-1">
-      {recovered ? <CheckIcon /> : <ShieldIcon />}
+    <span className={cn(note, recovered && "text-success")}>
+      {recovered ? <CheckIcon className="size-3.5" aria-hidden /> : <ShieldIcon className="size-3.5" aria-hidden />}
       {recovered ? "Recovered" : "Mitigated"}
-    </Badge>
+    </span>
   );
 }
 
-// The incident's other actions, behind one button: resolve it by hand,
-// reopen it, or check the fix again. Only what the server would take.
+// The incident's other actions, behind one button: re-run it with other
+// models, resolve it by hand, reopen it, check the fix again, or archive or
+// restore it. Only what the server would take; a re-run or archive that
+// can't happen yet shows greyed out, with why under it.
 function ResolutionMenu({
   options,
   exports,
+  rerun,
+  archive,
   pending,
   onResolve,
   onReopen,
@@ -336,19 +352,27 @@ function ResolutionMenu({
 }: {
   options: ReturnType<typeof resolutionOptions>;
   exports: ExportSource[];
+  rerun?: { blocked?: string; onSelect: () => void };
+  // `archived` makes the item Restore.
+  archive?: { blocked?: string; archived: boolean; onSelect: () => void };
   pending: boolean;
   onResolve: () => void;
   onReopen: () => void;
   onVerify: () => void;
 }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="More actions" disabled={pending}>
-          {pending ? <LoaderCircleIcon className="animate-spin" /> : <EllipsisIcon />}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-44">
+  // The menu's groups, with a rule between each two that show.
+  const groups: [string, ReactNode][] = [
+    ["rerun", rerun && (
+      <DropdownMenuItem onSelect={rerun.onSelect} disabled={Boolean(rerun.blocked)} className="items-start">
+        <RefreshCwIcon className="mt-0.5" />
+        <span className="flex flex-col gap-0.5">
+          Re-run with other models
+          {rerun.blocked && <span className="text-muted-foreground text-xs">{rerun.blocked}</span>}
+        </span>
+      </DropdownMenuItem>
+    )],
+    ["resolution", (options.resolve || options.reopen || options.verify) && (
+      <>
         {options.resolve && (
           <DropdownMenuItem onSelect={onResolve}>
             <CheckCheckIcon />
@@ -367,8 +391,40 @@ function ResolutionMenu({
             {options.verifyLabel}
           </DropdownMenuItem>
         )}
-        {exports.length > 0 && (options.resolve || options.reopen || options.verify) && <DropdownMenuSeparator />}
-        <ExportSubmenu exports={exports} />
+      </>
+    )],
+    ["archive", archive &&
+      (archive.archived ? (
+        <DropdownMenuItem onSelect={archive.onSelect}>
+          <ArchiveRestoreIcon />
+          Restore
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuItem onSelect={archive.onSelect} disabled={Boolean(archive.blocked)} className="items-start">
+          <ArchiveIcon className="mt-0.5" />
+          <span className="flex flex-col gap-0.5">
+            Archive
+            {archive.blocked && <span className="text-muted-foreground text-xs">{archive.blocked}</span>}
+          </span>
+        </DropdownMenuItem>
+      ))],
+    ["export", exports.length > 0 && <ExportSubmenu exports={exports} />],
+  ];
+  const shown = groups.filter(([, items]) => Boolean(items));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions" disabled={pending}>
+          {pending ? <LoaderCircleIcon className="animate-spin" /> : <EllipsisIcon />}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className={rerun?.blocked || archive?.blocked ? "w-64" : "w-52"}>
+        {shown.map(([key, items], i) => (
+          <Fragment key={key}>
+            {i > 0 && <DropdownMenuSeparator />}
+            {items}
+          </Fragment>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );

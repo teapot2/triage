@@ -97,6 +97,14 @@ describe("incidentToReopen", () => {
     assert.equal(incidentToReopen([watching], trip, now)?.id, "inc_watching");
   });
 
+  it("leaves an archived one, even inside the window", () => {
+    const archived = { ...inside, archivedAt: minutesAgo(5) };
+    assert.equal(incidentToReopen([archived], trip, now), undefined);
+    // Skipping it, the match before it is the one reopened.
+    const older = incident("inc_older_inside", 60, { status: "resolved", resolvedAt: minutesAgo(15) });
+    assert.equal(incidentToReopen([archived, older], trip, now)?.id, "inc_older_inside");
+  });
+
   it("matches the route in the title on incidents from before it was recorded", () => {
     const older = incident("inc_older", 50, { status: "resolved", resolvedAt: minutesAgo(10) });
     delete older.trigger.route;

@@ -16,6 +16,7 @@ import { recordedEffort } from "../../models/stages";
 import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { notify } from "../../notifications/notify";
 import { runAgentLoop } from "../agent-loop";
+import { runDependencyFix } from "../dependencies/fix";
 import type { Stage } from "../fanout/run";
 import type { InvestigationRecorder } from "../recorder";
 import type { Fix, FixRun, Incident, SandboxRun } from "../schema";
@@ -23,7 +24,9 @@ import type { TelemetrySource } from "../source";
 import { detectDataChange, isNewMigrationPath } from "./data-change";
 import { type DeniedFix, feedbackBlock, repeatsDenied } from "./feedback";
 import { applyEdits, proveFix } from "./prove";
+import { hasCommit, readFileAt, sourceFilesAt } from "./release-tree";
 import { countSearches, type Part, recordPages, usedPages, WEB_SEARCH, WEB_SEARCH_RULES } from "../web-search";
+import { normalize } from "../live/live-source";
 import { unifiedDiff } from "./sandbox";
 
 // Stage 3: after a root-cause verdict, the model writes a fix and a
@@ -68,13 +71,19 @@ The regression test:
 
 Finish by calling submit_fix, or decline_fix.`;
 
-function prompt(incident: Incident, sourceFiles: string[], feedback: DeniedFix[]): string {
+// `release`: the fix is for a rolled-back release, so the code read_source
+// shows is that commit's, not the running store's after the rollback.
+function prompt(incident: Incident, sourceFiles: string[], feedback: DeniedFix[], release?: string): string {
   const report = incident.report!;
   const verdict = report.verdict;
   const leading = verdict.kind === "root_cause" ? report.hypotheses.find((h) => h.id === verdict.hypothesisId) : undefined;
   const chain = leading?.causalChain;
   const ruledOut = report.hypotheses.filter((h) => h.status === "rejected").map((h) => `- ${h.title}`);
   const denied = feedbackBlock(feedback);
+  const branch = incident.mitigation?.branch;
+  const releaseNote = release
+    ? `\nThe code you read and fix is release ${release}'s${branch ? ` (branch ${branch})` : ""}, the deploy that caused the incident; it has been or is being rolled back, and the fix goes on that release.`
+    : "";
   return `Incident: ${incident.title}
 Diagnosis: ${report.summary ?? ""}
 Root cause: ${leading?.title ?? "unknown"}
@@ -83,7 +92,7 @@ Root cause: ${leading?.title ?? "unknown"}
 - Root cause: ${chain?.rootCause.text ?? ""}
 Ruled out by the investigation (not to be fixed):
 ${ruledOut.join("\n") || "- none"}
-Files the investigation read: ${sourceFiles.join(", ") || "none"}
+Files the investigation read: ${sourceFiles.join(", ") || "none"}${releaseNote}
 ${denied ? `\n${denied}\n` : ""}
 Write the fix for this root cause and its regression test, then call submit_fix. If it isn't a code defect, call decline_fix.`;
 }
@@ -154,8 +163,15 @@ export async function runFixStage(
     // in the sandbox, and no message when its fix is proven.
     baseDir?: string;
     notify?: boolean;
+    // A rolled-back release's commit (release-tree.ts releaseShaOf): the
+    // fix is read from and proven against that commit's tree, not the live
+    // checkout the rollback changes under it.
+    releaseSha?: string;
   } = {},
 ) {
+  // A dependency advisory's fix is a version bump, written and proven by
+  // installing it (dependencies/fix.ts), not a code patch from the model.
+  if (recorder.incident.dependency) return runDependencyFix(recorder, appDir, { notify: opts.notify });
   const feedback = opts.feedback ?? [];
   const startedAt = new Date().toISOString();
   const stage = opts.stage ?? (await stageModel("fix"));
@@ -177,6 +193,17 @@ export async function runFixStage(
     setFixRun({ status: "failed", finishedAt: new Date().toISOString(), error: problem });
     return;
   }
+  // A rolled-back release's fix is read from and proven against the
+  // release's commit, which has to be in the app's repository.
+  const releaseSha = opts.releaseSha;
+  if (releaseSha && !(await hasCommit(appDir, releaseSha))) {
+    setFixRun({
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      error: `release commit ${releaseSha} is not in the app's repository, so there is no code to write the fix against`,
+    });
+    return;
+  }
 
   let accepted: Accepted | undefined;
   // Why the model chose not to change code, if it did.
@@ -190,7 +217,17 @@ export async function runFixStage(
     return { accepted: false, problems };
   };
   let lastRuns: SandboxRun[] = [];
-  const allowed = new Set(await source.listSourceFiles());
+  // What read_source may open and what it shows: the release commit's files
+  // when the fix is for a rolled-back release, else the source's (the live
+  // checkout, or a re-run's snapshot of it). Both keep the harness out.
+  const allowed = new Set(releaseSha ? await sourceFilesAt(appDir, releaseSha) : await source.listSourceFiles());
+  const readSource = async (file: string) => {
+    if (!releaseSha) return source.readSource(file);
+    const rel = normalize(file);
+    if (!allowed.has(rel)) return undefined;
+    const content = await readFileAt(appDir, releaseSha, rel);
+    return content === undefined ? undefined : { path: rel, content };
+  };
 
   // The denied attempt a submission repeats, if any: the same patch as the
   // sandbox would produce, from the files as they stand. An edit that
@@ -198,7 +235,7 @@ export async function runFixStage(
   const repeatedAttempt = async (input: z.infer<typeof submitSchema>): Promise<number> => {
     const before = new Map<string, string>();
     for (const file of new Set(input.edits.map((e) => e.file))) {
-      const text = (await source.readSource(file))?.content;
+      const text = (await readSource(file))?.content;
       if (text !== undefined) before.set(file, text);
     }
     const applied = applyEdits(before, input.edits);
@@ -215,7 +252,7 @@ export async function runFixStage(
       description: "Read an application source file, whole. Paths are relative to the app root.",
       inputSchema: z.object({ path: z.string().describe("e.g. src/db/client.ts") }),
       execute: async ({ path }) => {
-        const file = await source.readSource(path);
+        const file = await readSource(path);
         if (!file) throw new Error(`File not found: ${path}. Known files: ${[...allowed].join(", ")}`);
         return { path: file.path, content: file.content };
       },
@@ -252,7 +289,14 @@ export async function runFixStage(
         if (outside.length) {
           return reject([`edits may only touch application files you can read; not: ${[...new Set(outside)].join(", ")}`]);
         }
-        const proof = await proveFix({ appDir, baseDir: opts.baseDir, name: recorder.incident.id, edits: input.edits, test: input.test });
+        const proof = await proveFix({
+          appDir,
+          baseDir: opts.baseDir,
+          releaseSha,
+          name: recorder.incident.id,
+          edits: input.edits,
+          test: input.test,
+        });
         lastRuns = proof.runs;
         if (!proof.ok && proof.setup) {
           halted = true;
@@ -339,7 +383,7 @@ export async function runFixStage(
     const sourceFiles = [
       ...new Set(recorder.incident.evidence.flatMap((e) => (e.kind === "source" ? [e.file] : []))),
     ];
-    const messages: ModelMessage[] = [{ role: "user", content: prompt(recorder.incident, sourceFiles, feedback) }];
+    const messages: ModelMessage[] = [{ role: "user", content: prompt(recorder.incident, sourceFiles, feedback, releaseSha) }];
     if (feedback.length) {
       console.log(`[triage] fix stage rerun for ${recorder.incident.id} with the reviewer's feedback:\n${feedbackBlock(feedback)}`);
     }

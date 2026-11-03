@@ -2,6 +2,7 @@
 
 import { ChevronRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { InfoTip } from "@/components/info-tip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -83,8 +84,9 @@ export function FormAdvanced({
 // A labelled field, with a hint under it, or the error in its place. The
 // hint or error has the id `${htmlFor}-message`, for the control's
 // aria-describedby. `optional` says so beside the label, `count` shows the
-// text's length against its limit at the right, and `wide` spans both
-// columns. Without `htmlFor` the label names nothing, for a field whose
+// text's length against its limit at the right, `info` puts an InfoTip
+// beside the label (what the field means, for the reader who needs it once,
+// in place of a hint shown every time), and `wide` spans both columns. Without `htmlFor` the label names nothing, for a field whose
 // control is a summary in place of an input.
 export function FormField({
   label,
@@ -93,6 +95,7 @@ export function FormField({
   error,
   optional,
   count,
+  info,
   wide,
   children,
 }: {
@@ -102,6 +105,7 @@ export function FormField({
   error?: string;
   optional?: boolean;
   count?: { length: number; max: number };
+  info?: ReactNode;
   wide?: boolean;
   children: ReactNode;
 }) {
@@ -109,10 +113,13 @@ export function FormField({
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5", wide && "sm:col-span-2")}>
       <div className="flex items-baseline justify-between gap-2">
-        <label htmlFor={htmlFor} className="font-medium text-xs">
-          {label}
-          {optional && <span className="font-normal text-muted-foreground"> (optional)</span>}
-        </label>
+        <span className="flex items-center gap-1.5">
+          <label htmlFor={htmlFor} className="font-medium text-xs">
+            {label}
+            {optional && <span className="font-normal text-muted-foreground"> (optional)</span>}
+          </label>
+          {info && <InfoTip label={`About ${label.toLowerCase()}`}>{info}</InfoTip>}
+        </span>
         {count && (
           <span className="text-muted-foreground text-xs tabular-nums" aria-hidden>
             {count.length}/{count.max}

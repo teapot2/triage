@@ -1,6 +1,7 @@
 import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder } from "../citations";
 import { gradeLabels } from "../confidence-grade";
+import type { IncidentSummary } from "../list-summary";
 import { rollupLabels, verdictOutcome } from "../outcome";
 import type { Claim, Evidence, Incident, PostmortemActionItem } from "../schema";
 import { sectionKey } from "./draft";
@@ -17,8 +18,9 @@ import { breaches, durations, firstBreach, postmortemTimeline, withUnit } from "
 //
 // Blameless: no commit author, no approver, only what happened and why.
 
-// Where the incident stands, in words: the most specific that holds.
-export function statusInWords(incident: Incident): string {
+// Where the incident stands, in words: the most specific that holds. A
+// summary (list-summary.ts) has all it reads.
+export function statusInWords(incident: Pick<IncidentSummary, "status" | "approval" | "mitigation">): string {
   const { status, approval, mitigation } = incident;
   if (status === "resolved") return "resolved";
   if (status === "healthy") return "no issue found";

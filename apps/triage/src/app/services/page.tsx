@@ -3,11 +3,13 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import type { ServiceRow } from "@/components/services/service-filters";
 import { ServiceList, ServiceListSkeleton } from "@/components/services/service-list";
-import type { Incident } from "@/lib/investigation/schema";
+import type { IncidentSummary } from "@/lib/investigation/list-summary";
+import { dependencyState } from "@/lib/investigation/dependencies";
+import { severities } from "@/lib/investigation/dependencies/model";
 import { readTelemetry } from "@/lib/investigation/live/otlp-files";
 import { liveService } from "@/lib/live/types";
-import { listIncidents } from "@/lib/investigation/store";
-import { incidentHeadline, openStatuses } from "@/lib/investigation/summary";
+import { listIncidentSummaries } from "@/lib/investigation/store";
+import { openStatuses } from "@/lib/investigation/summary";
 
 export const metadata: Metadata = { title: "Services · Triage" };
 
@@ -28,10 +30,10 @@ export default function ServicesPage() {
 async function Services() {
   // Incidents change at runtime; read them per request.
   await connection();
-  const [incidents, telemetry] = await Promise.all([listIncidents(), readTelemetry()]);
+  const [incidents, telemetry] = await Promise.all([listIncidentSummaries(), readTelemetry()]);
 
   // Newest first already, so each service's first incident is its latest.
-  const byService = new Map<string, Incident[]>();
+  const byService = new Map<string, IncidentSummary[]>();
   for (const i of incidents) byService.set(i.service, [...(byService.get(i.service) ?? []), i]);
   // Services with a live page: those sending telemetry, and the live one
   // even while it's stopped. Ones known only from recorded incidents (the
@@ -48,6 +50,13 @@ async function Services() {
     );
   }
 
+  // The dependency audit's open runtime advisories, on the service it
+  // audits (Shopfront unless Watch's settings name another checkout).
+  const deps = dependencyState();
+  const worst = severities.toReversed().find((s) => deps.runtime[s] > 0);
+  const advisories = worst && { total: severities.reduce((n, s) => n + deps.runtime[s], 0), worst };
+  if (advisories && !byService.has(deps.service)) byService.set(deps.service, []);
+
   const services: ServiceRow[] = [...byService].map(([name, list]) => {
     const latest = list.at(0);
     return {
@@ -55,10 +64,11 @@ async function Services() {
       live: live.has(name),
       open: list.filter((i) => openStatuses.includes(i.status)).length,
       total: list.length,
+      advisories: name === deps.service ? advisories : undefined,
       latest: latest && {
         id: latest.id,
         status: latest.status,
-        headline: incidentHeadline(latest) ?? latest.title,
+        headline: latest.headline ?? latest.title,
         detectedAt: latest.detectedAt,
         ranAt: latest.run?.startedAt ?? latest.detectedAt,
       },

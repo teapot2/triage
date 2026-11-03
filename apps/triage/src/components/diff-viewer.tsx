@@ -4,7 +4,6 @@ import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { BundledLanguage, ThemedToken } from "shiki";
 import { highlightCode, WrapLinesButton } from "@/components/ai-elements/code-block";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -145,9 +144,7 @@ function FileCard({ file, view, wrap }: { file: FileDiff; view: View; wrap: bool
           {file.path.slice(slash + 1)}
         </span>
         {statusBadge[file.status] && (
-          <Badge variant="outline" className="font-normal text-muted-foreground">
-            {statusBadge[file.status]}
-          </Badge>
+          <span className="text-muted-foreground text-xs">· {statusBadge[file.status]}</span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-2 font-mono tabular-nums">
           <span className="text-success">+{file.additions}</span>

@@ -1,3 +1,4 @@
+import { slowQueriesNote } from "../source";
 import { minutesBefore, minuteSeries, type Scenario } from "./scenario-source";
 import { commonCommits, commonFiles, services, stockLeaky } from "./shopfront-base";
 
@@ -248,11 +249,12 @@ export const poolLeak: Scenario = {
       query:
         "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
       rows: [
-        { query: 'select "id", "name", "price_cents", "created_at" from "products" w', calls: 9204, mean_ms: 0.38, max_ms: 4.1 },
-        { query: "SELECT on_hand FROM stock_levels WHERE product_id = $1", calls: 9120, mean_ms: 0.41, max_ms: 3.7 },
-        { query: 'select "id", "name", "price_cents", "created_at" from "products" l', calls: 610, mean_ms: 0.9, max_ms: 6.2 },
-        { query: "SELECT 1", calls: 1810, mean_ms: 0.02, max_ms: 0.3 },
+        { query: "SELECT on_hand FROM stock_levels WHERE product_id = $1", calls: 9120, mean_ms: 0.41, max_ms: 3.7, window_calls: 1200, window_ms: 492 },
+        { query: 'select "id", "name", "price_cents", "created_at" from "products" w', calls: 9204, mean_ms: 0.38, max_ms: 4.1, window_calls: 1200, window_ms: 456 },
+        { query: 'select "id", "name", "price_cents", "created_at" from "products" l', calls: 610, mean_ms: 0.9, max_ms: 6.2, window_calls: 80, window_ms: 72 },
+        { query: "SELECT 1", calls: 1810, mean_ms: 0.02, max_ms: 0.3, window_calls: 240, window_ms: 4.8 },
       ],
+      note: slowQueriesNote(now, 15),
     },
   },
   files: { ...commonFiles, "src/lib/stock.ts": stockLeaky },

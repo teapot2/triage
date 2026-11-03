@@ -7,14 +7,17 @@ import {
   CircleXIcon,
   DatabaseIcon,
   FileCodeIcon,
+  FolderTreeIcon,
   GitCommitHorizontalIcon,
   GlobeIcon,
   LoaderCircleIcon,
   type LucideIcon,
+  PackageIcon,
   RocketIcon,
   ScrollTextIcon,
   SearchIcon,
   SearchXIcon,
+  TextSearchIcon,
   WaypointsIcon,
 } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -50,6 +53,9 @@ const toolIcons: Record<ToolName, LucideIcon> = {
   git_log: GitCommitHorizontalIcon,
   read_source: FileCodeIcon,
   web_search: GlobeIcon,
+  dependency_audit: PackageIcon,
+  list_files: FolderTreeIcon,
+  grep_source: TextSearchIcon,
 };
 
 const statusIcons = {
@@ -68,7 +74,8 @@ const highlightFlash = "animate-highlight-flash motion-reduce:animate-none";
 // hover, and kept on hover so pointing at it doesn't fade it.
 const highlightBg = "bg-foreground/10 hover:bg-foreground/10";
 
-// The phases an investigation moves through, by the tool used.
+// The phases an investigation moves through, by the tool used. A tool
+// this build doesn't know (a record from a newer one) counts as code.
 type Phase = "metrics" | "logs" | "database" | "changes" | "code" | "web";
 
 const phaseOf: Record<ToolName, Phase> = {
@@ -80,6 +87,9 @@ const phaseOf: Record<ToolName, Phase> = {
   git_log: "changes",
   read_source: "code",
   web_search: "web",
+  dependency_audit: "changes",
+  list_files: "code",
+  grep_source: "code",
 };
 
 const phaseLabels: Record<Phase, string> = {
@@ -102,7 +112,7 @@ type TimelineView = "phases" | "steps";
 function groupByPhase(steps: InvestigationStep[]): PhaseGroup[] {
   const groups = new Map<Phase, InvestigationStep[]>();
   for (const step of steps) {
-    const phase = phaseOf[step.tool];
+    const phase = phaseOf[step.tool] ?? "code";
     groups.set(phase, [...(groups.get(phase) ?? []), step]);
   }
   return [...groups].map(([phase, groupSteps]) => ({ phase, steps: groupSteps }));
@@ -190,7 +200,7 @@ export function InvestigationTimeline({
     setLastFocused(focused);
     const step = focused ? steps.find((s) => s.evidenceIds.includes(focused)) : undefined;
     if (focused && step && !citedSet.has(focused)) {
-      const phase = phaseOf[step.tool];
+      const phase = phaseOf[step.tool] ?? "code";
       if (!expanded.has(phase)) setExpanded(new Set(expanded).add(phase));
     }
   }
@@ -699,7 +709,7 @@ function PillToggle<T extends string>({
 function StepStatusIcon({ status, tool }: { status: InvestigationStep["status"]; tool: ToolName }) {
   const justFinished = useChangedSinceMount(status);
   const { Icon, className } =
-    status === "completed" ? { Icon: toolIcons[tool], className: "text-muted-foreground" } : statusIcons[status];
+    status === "completed" ? { Icon: toolIcons[tool] ?? FileCodeIcon, className: "text-muted-foreground" } : statusIcons[status];
   return (
     <Icon
       className={cn(

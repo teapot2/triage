@@ -3,16 +3,16 @@
 import Link from "next/link";
 import { useState } from "react";
 import { listHref, parseListParams } from "@/app/list-params";
-import { StatusIcon, statusLabel } from "@/components/incident/status-badges";
+import { advisoryLevel, SeverityBars, StatusIcon, statusLabel } from "@/components/incident/status-badges";
 import { activeFacetCount, FilterChips, FilterMenu, type FilterValues } from "@/components/list-controls/filter-menu";
 import { SearchInput } from "@/components/list-controls/search-input";
 import { SortMenu } from "@/components/list-controls/sort-menu";
 import { Timestamp } from "@/components/timestamp";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useUrlParams } from "@/hooks/use-url-params";
+import { type AdvisorySeverity, severityLabel } from "@/lib/investigation/dependencies/model";
 import { cn } from "@/lib/utils";
 import {
   defaultServiceSort,
@@ -121,7 +121,7 @@ function ServiceRows({ services }: { services: ServiceRow[] }) {
     // From sm up the rows share one grid, so the columns line up and a long
     // headline truncates instead of wrapping its row.
     <ul className="divide-y rounded-lg border sm:grid sm:grid-cols-[auto_auto_minmax(0,1fr)]">
-      {services.map(({ name, live, open, total, latest }) => (
+      {services.map(({ name, live, open, total, latest, advisories }) => (
         <li
           key={name}
           className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 sm:col-span-3 sm:grid sm:grid-cols-subgrid sm:gap-x-6"
@@ -137,13 +137,12 @@ function ServiceRows({ services }: { services: ServiceRow[] }) {
             {!live && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Badge variant="outline" className="font-normal text-muted-foreground">
-                    Recorded
-                  </Badge>
+                  <span className="cursor-default text-muted-foreground text-xs">· recorded</span>
                 </TooltipTrigger>
                 <TooltipContent>Known from recorded telemetry only. Nothing live is coming in.</TooltipContent>
               </Tooltip>
             )}
+            {advisories && <AdvisoriesBadge {...advisories} />}
           </span>
           <span className="text-muted-foreground text-xs tabular-nums">
             {/* The dot already says whether any are open; the words only
@@ -165,5 +164,25 @@ function ServiceRows({ services }: { services: ServiceRow[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+// The dependency audit's open advisories on the service's runtime
+// dependencies, as the worst one's severity bars and a count, linking to the
+// audit on Watch.
+function AdvisoriesBadge({ total, worst }: { total: number; worst: AdvisorySeverity }) {
+  const label = `${total} ${total === 1 ? "advisory" : "advisories"}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link href="/watch#dependencies" className="inline-flex items-center gap-1.5 text-muted-foreground text-xs hover:text-foreground">
+          <SeverityBars level={advisoryLevel(worst)} />
+          {label}
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent>
+        {label} on runtime dependencies, the worst {severityLabel(worst).toLowerCase()}. Open the audit on Watch.
+      </TooltipContent>
+    </Tooltip>
   );
 }

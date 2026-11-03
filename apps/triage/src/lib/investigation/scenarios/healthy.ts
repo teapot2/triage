@@ -1,3 +1,4 @@
+import { slowQueriesNote } from "../source";
 import { minutesBefore, minuteSeries, type Scenario } from "./scenario-source";
 import { commonCommits, commonFiles, services, stockFixed } from "./shopfront-base";
 
@@ -153,9 +154,10 @@ export const healthy: Scenario = {
       query:
         "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
       rows: [
-        { query: 'select "id", "name", "price_cents", "created_at" from "products" w', calls: 10512, mean_ms: 0.37, max_ms: 3.9 },
-        { query: "SELECT on_hand FROM stock_levels WHERE product_id = $1", calls: 10480, mean_ms: 0.4, max_ms: 3.2 },
+        { query: "SELECT on_hand FROM stock_levels WHERE product_id = $1", calls: 10480, mean_ms: 0.4, max_ms: 3.2, window_calls: 1300, window_ms: 520 },
+        { query: 'select "id", "name", "price_cents", "created_at" from "products" w', calls: 10512, mean_ms: 0.37, max_ms: 3.9, window_calls: 1300, window_ms: 481 },
       ],
+      note: slowQueriesNote(now, 15),
     },
   },
   files: { ...commonFiles, "src/lib/stock.ts": stockFixed },

@@ -39,8 +39,9 @@ const MINUTE = 60_000;
 let clock = Date.parse("2026-10-30T12:00:00.000Z");
 let outcome: UptimeSample["outcome"] = "ok";
 const sent: { kind: MessageKind; incidentId: string }[] = [];
-// Each investigation's recorder, finished by hand: it saves the whole
-// incident, as a real run does, over whatever the loop patched meanwhile.
+// Each investigation's recorder, finished by hand: it saves its fields of
+// the incident, as a real run does, beside whatever the loop patched
+// meanwhile.
 const recorders: InstanceType<typeof InvestigationRecorder>[] = [];
 
 const report: NonNullable<Incident["report"]> = {
@@ -60,7 +61,7 @@ function restart() {
     }),
     notify: (kind, incident) => void sent.push({ kind, incidentId: incident.id }),
     investigationProblem: async () => undefined,
-    investigate: async (incident) => void recorders.push(new InvestigationRecorder(incident, store.saveIncident)),
+    investigate: async (incident) => void recorders.push(new InvestigationRecorder(incident)),
   });
 }
 
@@ -272,5 +273,44 @@ describe("uptime loop", () => {
     assert.equal(state.status, "healthy");
     assert.equal(state.healthyStreak, 1);
     assert.equal(state.incidentId, undefined);
+  });
+
+  it("opens a new incident rather than reopen an archived one", async () => {
+    const { archiveIncident } = await import("./archive-store");
+    for (const i of await uptimeIncidents()) await store.patchIncident(i.id, (x) => ({ ...x, status: "resolved", resolvedAt: new Date(clock - 2 * 60 * MINUTE).toISOString() }));
+    restart();
+    await check("ok");
+    await check("slow", 3);
+    const [first] = (await uptimeIncidents()).filter((i) => i.status !== "resolved");
+    const recorder = recorders.at(-1)!;
+    recorder.update({ status: "diagnosed", report });
+    await recorder.flush();
+    await check("ok", 3);
+    assert.equal((await store.getIncident(first.id))?.status, "resolved");
+    assert.ok((await archiveIncident(first.id)).ok);
+    const archived = await store.getIncident(first.id);
+
+    // Back well inside the reopen window.
+    await check("slow", 3);
+    const [second] = (await uptimeIncidents()).filter((i) => i.status !== "resolved");
+    assert.notEqual(second.id, first.id);
+    assert.equal(sent.at(-1)?.kind, "incident_opened");
+    assert.deepEqual(await store.getIncident(first.id), archived);
+  });
+
+  it("ends the episode of an incident archived while it's open, and leaves it alone", async () => {
+    const { archiveIncident } = await import("./archive-store");
+    const [open] = (await uptimeIncidents()).filter((i) => i.status !== "resolved");
+    // Nothing wrong found: closed, so it can be archived mid-episode.
+    const recorder = recorders.at(-1)!;
+    recorder.update({ status: "healthy", report });
+    await recorder.flush();
+    assert.ok((await archiveIncident(open.id)).ok);
+    const archived = await store.getIncident(open.id);
+
+    await check("slow", 3);
+    await check("ok", 3);
+    assert.deepEqual(await store.getIncident(open.id), archived);
+    assert.notEqual(loop.uptimeState()[0].incidentId, open.id);
   });
 });

@@ -1,11 +1,16 @@
-import { notify } from "../notifications/notify";
+import { notify, refreshSlackCard } from "../notifications/notify";
+import { archivedRefusal, isArchived } from "./archive";
 import { dataChangeOf } from "./fix/data-change";
 import { openPullRequest } from "./fix/pull-request";
 import type { Approval, Incident } from "./schema";
-import { getIncident, saveIncident, withIncidentLock } from "./store";
+import { getIncident, patchIncident } from "./store";
 import { errorMessage } from "../errors";
 
 export type Decision = Extract<Approval["state"], "approved" | "denied">;
+
+// A person who decided with a button in Slack: the name Slack gave and
+// their member ID.
+export type SlackDecider = { name: string; slackUser: string };
 
 export type DecideResult =
   // rerun: the denied fix was archived and the fix stage starts again with
@@ -58,6 +63,19 @@ export function approvalBlocked(incident: Incident, decision: Decision, dataRevi
   return dataChangeOf(incident.fix).detected ? DATA_NOT_REVIEWED : undefined;
 }
 
+// Why a decision was turned down, thrown from inside a patch so nothing is
+// saved, and answered as a 409.
+class Refused extends Error {}
+
+async function refusing(fn: () => Promise<DecideResult>): Promise<DecideResult> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof Refused) return { ok: false, status: 409, error: err.message };
+    throw err;
+  }
+}
+
 // Records a human's decision on the proposed fix. Only a pending approval can
 // be decided, so a second click or a stale tab can't overwrite the first
 // decision. Either way the incident stops awaiting approval and is
@@ -67,59 +85,62 @@ export function approvalBlocked(incident: Incident, decision: Decision, dataRevi
 // A deny saves the reviewer's feedback as the reason; with feedback on a fix
 // that can be written again, the attempt is archived and a rerun starts.
 // Approving a fix that changes stored data needs dataReviewed (409 without).
-export function decideApproval(
+// by: who decided from a Slack button, recorded on the approval.
+export async function decideApproval(
   id: string,
   decision: Decision,
   feedback?: string,
   dataReviewed = false,
+  by?: SlackDecider,
 ): Promise<DecideResult> {
-  // Under the incident's lock, like every route write: the fix stage or a
-  // question may be saving at the same time.
-  return withIncidentLock(id, async () => {
-    const incident = await getIncident(id);
-    if (!incident) return { ok: false, status: 404, error: `unknown incident: ${id}` };
-    if (!incident.fix || !incident.approval) {
-      return { ok: false, status: 409, error: "this incident has no fix awaiting approval" };
-    }
-    if (incident.approval.state !== "pending") {
-      return { ok: false, status: 409, error: `the fix was already ${incident.approval.state}` };
-    }
-    const blocked = approvalBlocked(incident, decision, dataReviewed);
-    if (blocked) return { ok: false, status: 409, error: blocked };
+  if (!(await getIncident(id))) return { ok: false, status: 404, error: `unknown incident: ${id}` };
+  let rerun = false;
+  // Read, checked and changed in one patch: the fix stage or a question may
+  // be saving at the same time.
+  return refusing(async () => {
+    const decided = await patchIncident(id, (incident): Incident => {
+      if (isArchived(incident)) throw new Refused(archivedRefusal);
+      if (!incident.fix || !incident.approval) throw new Refused("this incident has no fix awaiting approval");
+      if (incident.approval.state !== "pending") throw new Refused(`the fix was already ${incident.approval.state}`);
+      const blocked = approvalBlocked(incident, decision, dataReviewed);
+      if (blocked) throw new Refused(blocked);
 
-    const now = new Date().toISOString();
-    const opening = decision === "approved" && canOpenPr(incident);
-    const reason = decision === "denied" ? feedback?.trim() || undefined : undefined;
-    const approval: Approval = {
-      ...incident.approval,
-      state: decision,
-      decidedAt: now,
-      ...(reason ? { reason } : {}),
-      ...(decision === "approved" && dataReviewed && dataChangeOf(incident.fix).detected ? { dataReviewed: true } : {}),
-      ...(opening ? { prState: "opening" as const } : {}),
-    };
-    const rerun = decision === "denied" && reason !== undefined && canRerunFix(incident);
-    const decided: Incident = rerun
-      ? archiveDeniedFix(incident, approval, now)
-      : { ...incident, status: afterDecision(incident), approval };
-    await saveIncident(decided);
+      const now = new Date().toISOString();
+      const opening = decision === "approved" && canOpenPr(incident);
+      const reason = decision === "denied" ? feedback?.trim() || undefined : undefined;
+      const approval: Approval = {
+        ...incident.approval,
+        state: decision,
+        decidedAt: now,
+        ...(by && { decidedBy: by.name, decidedInSlack: by.slackUser }),
+        ...(reason ? { reason } : {}),
+        ...(decision === "approved" && dataReviewed && dataChangeOf(incident.fix).detected ? { dataReviewed: true } : {}),
+        ...(opening ? { prState: "opening" as const } : {}),
+      };
+      rerun = decision === "denied" && reason !== undefined && canRerunFix(incident);
+      return rerun ? archiveDeniedFix(incident, approval, now) : { ...incident, status: afterDecision(incident), approval };
+    });
+    void refreshSlackCard(id);
     return { ok: true, incident: decided, rerun };
   });
 }
 
 // Retrying a PR that failed to open (no repository yet, a push error).
 export async function retryPr(id: string): Promise<DecideResult> {
-  const incident = await getIncident(id);
-  if (!incident) return { ok: false, status: 404, error: `unknown incident: ${id}` };
-  if (incident.approval?.state !== "approved" || !canOpenPr(incident)) {
-    return { ok: false, status: 409, error: "only an approved, proven fix gets a PR" };
-  }
-  if (incident.approval.prState !== "failed") {
-    return { ok: false, status: 409, error: `the PR is already ${incident.approval.prState ?? "not requested"}` };
-  }
-  const retrying: Incident = { ...incident, approval: { ...incident.approval, prState: "opening", prError: undefined } };
-  await saveIncident(retrying);
-  return { ok: true, incident: retrying };
+  if (!(await getIncident(id))) return { ok: false, status: 404, error: `unknown incident: ${id}` };
+  return refusing(async () => {
+    const retrying = await patchIncident(id, (incident): Incident => {
+      if (isArchived(incident)) throw new Refused(archivedRefusal);
+      if (incident.approval?.state !== "approved" || !canOpenPr(incident)) {
+        throw new Refused("only an approved, proven fix gets a PR");
+      }
+      if (incident.approval.prState !== "failed") {
+        throw new Refused(`the PR is already ${incident.approval.prState ?? "not requested"}`);
+      }
+      return { ...incident, approval: { ...incident.approval, prState: "opening", prError: undefined } };
+    });
+    return { ok: true, incident: retrying };
+  });
 }
 
 // Stage 5: opens the PR for an incident marked opening, and saves its URL or
@@ -135,9 +156,8 @@ export async function openPr(id: string, appDir: string): Promise<void> {
     console.error("[triage] opening the PR failed", id, err);
     result = { prState: "failed", prError: errorMessage(err) };
   }
-  // Re-read so nothing saved meanwhile is lost.
-  const latest = (await getIncident(id)) ?? incident;
-  const saved: Incident = { ...latest, approval: { ...latest.approval!, ...result } };
-  await saveIncident(saved);
+  // Onto the incident as it is now, so nothing saved meanwhile is lost.
+  const saved = await patchIncident(id, (latest) => ({ ...latest, approval: { ...latest.approval!, ...result } }));
   if (result.prState === "opened") notify("pr_opened", saved);
+  else void refreshSlackCard(id);
 }

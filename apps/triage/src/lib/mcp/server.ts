@@ -4,14 +4,19 @@ import { z } from "zod";
 import { answerQuestion } from "../investigation/ask/agent";
 import { MAX_QUESTION_CHARS } from "../investigation/ask/rules";
 import { startQuestion } from "../investigation/ask/start";
+import { readDependencySettings } from "../models/settings";
+import { auditTarget } from "../investigation/dependencies";
+import { latestAudit, listFindings } from "../investigation/dependencies/store";
 import { postmortemMarkdown } from "../investigation/postmortem/render";
 import type { Evidence, Incident } from "../investigation/schema";
-import { getIncident, isExample, listIncidents } from "../investigation/store";
+import { toSummary } from "../investigation/list-summary";
+import { getIncident, isExample, listIncidentSummaries } from "../investigation/store";
 import { openStatuses } from "../investigation/summary";
 import {
   allEvidence,
   answerMarkdown,
   citedEvidence,
+  dependencyFindingsMarkdown,
   evidenceMarkdown,
   fixMarkdown,
   incidentListMarkdown,
@@ -30,6 +35,7 @@ const INSTRUCTIONS = `Triage is the team's SRE agent. It watches the services, o
 - Start with list_incidents, or get_incident with "latest". get_incident returns the report and one line per cited evidence item; get_evidence returns items in full.
 - Keep Triage's [ev_…] citations when you quote it, and never invent one.
 - get_fix returns the proven patch as a unified diff and its regression test.
+- list_dependency_findings lists what the dependency audit finds vulnerable in the watched service. An advisory over the severity floor opens an incident whose report says whether the service's code reaches the package (its exposure) and whose fix is the version bump.
 - ask_incident asks Triage a follow-up question; it investigates again if it needs to (up to about two minutes) and saves the question on the incident.
 - These tools change nothing in production. To approve a fix or mitigation, open the incident's page.`;
 
@@ -49,12 +55,12 @@ const failure = (body: string): CallToolResult => ({ content: [{ type: "text", t
 // there is no such incident, so the agent can pick one.
 async function resolveIncident(id: string): Promise<Incident | CallToolResult> {
   if (id === "latest") {
-    const latest = (await listIncidents())[0];
-    return latest ?? failure("There are no incidents yet.");
+    const latest = (await listIncidentSummaries())[0];
+    return (latest && (await getIncident(latest.id))) ?? failure("There are no incidents yet.");
   }
   const incident = /^inc_[a-z0-9_]+$/.test(id) ? await getIncident(id) : undefined;
   if (incident) return incident;
-  const recent = (await listIncidents()).slice(0, 8).map((i) => `\`${i.id}\` (${i.title})`);
+  const recent = (await listIncidentSummaries()).slice(0, 8).map((i) => `\`${i.id}\` (${i.title})`);
   return failure(`Unknown incident: ${id}. Recent incidents: ${recent.join(", ") || "none"}.`);
 }
 
@@ -68,19 +74,22 @@ export function createTriageMcpServer({ baseUrl }: { baseUrl: string }): McpServ
     {
       title: "List incidents",
       description:
-        "Triage's incidents, newest first (runs, then the bundled examples): ID, title, service, severity, where it stands and a one-line headline (the root cause when Triage found one).",
+        "Triage's incidents, newest first (runs, then the bundled examples): ID, title, service, severity, where it stands and a one-line headline (the root cause when Triage found one). Archived incidents are left out unless include_archived is true.",
       inputSchema: {
         status: z.enum(["open", "resolved", "all"]).default("all").describe("open: still being worked on; resolved: resolved or no issue found"),
         service: z.string().max(100).optional().describe('Only this service, e.g. "shopfront"'),
         limit: z.number().int().min(1).max(50).default(10),
+        include_archived: z.boolean().default(false).describe("Also list archived incidents (closed ones put away; read-only)"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ status, service, limit }) => {
-      const incidents = (await listIncidents()).filter(
-        (i) =>
-          (!service || i.service === service) &&
-          (status === "all" || (status === "open" ? openStatuses.includes(i.status) : !openStatuses.includes(i.status))),
+    async ({ status, service, limit, include_archived }) => {
+      const listed = await listIncidentSummaries({
+        archived: include_archived ? "include" : "exclude",
+        service: service || undefined,
+      });
+      const incidents = listed.filter(
+        (i) => status === "all" || (status === "open" ? openStatuses.includes(i.status) : !openStatuses.includes(i.status)),
       );
       const rows = incidents.slice(0, limit).map((i) => incidentRow(i, baseUrl, isExample(i.id)));
       return text(incidentListMarkdown(rows, incidents.length), { incidents: rows, total: incidents.length });
@@ -100,7 +109,7 @@ export function createTriageMcpServer({ baseUrl }: { baseUrl: string }): McpServ
       const incident = await resolveIncident(id);
       if (isResult(incident)) return incident;
       return text(incidentMarkdown(incident, baseUrl), {
-        ...incidentRow(incident, baseUrl, isExample(incident.id)),
+        ...incidentRow(toSummary(incident), baseUrl, isExample(incident.id)),
         verdict: incident.report?.verdict.kind ?? null,
         cited_evidence_ids: citedEvidence(incident).map((e) => e.id),
       });
@@ -179,6 +188,27 @@ export function createTriageMcpServer({ baseUrl }: { baseUrl: string }): McpServ
         return text(`The postmortem for \`${incident.id}\` ${state}. Write it from the incident's page.`);
       }
       return text(postmortemMarkdown(incident));
+    },
+  );
+
+  server.registerTool(
+    "list_dependency_findings",
+    {
+      title: "List vulnerable dependencies",
+      description:
+        "What the latest dependency audit of the watched service finds vulnerable: each advisory with its package, the versions found, severity, runtime or dev, the vulnerable and patched ranges, the chains from the service's own dependencies, and the incident it opened. Most severe first.",
+      inputSchema: {
+        include_gone: z.boolean().default(false).describe("Also list advisories a later audit no longer found"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ include_gone }) => {
+      // The settings as saved, not the loop's copy, which a fresh process
+      // hasn't read yet.
+      const { service } = auditTarget(await readDependencySettings());
+      const findings = listFindings(service, { gone: include_gone });
+      const audit = latestAudit(service);
+      return text(dependencyFindingsMarkdown(service, findings, audit), { service, findings, last_audit: audit ?? null });
     },
   );
 

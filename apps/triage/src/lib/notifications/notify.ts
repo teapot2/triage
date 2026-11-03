@@ -1,91 +1,29 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { z } from "zod";
 import type { Incident } from "../investigation/schema";
-import { readNotificationSettings } from "../models/settings";
-import { slackMessage } from "./slack";
-import { type Delivery, eventOf, type MessageKind, messageKinds, type PublicNotificationSettings } from "./types";
+import { getIncident, patchIncident } from "../investigation/store";
+import { readNotificationSettings, readSlackBot, type SlackBot } from "../models/settings";
+import { claim, record, recentDeliveries } from "./log";
+import { incidentCard, type SlackMessage, slackMessage } from "./slack";
+import { lookupNames, postMessage, type SlackNames, updateMessage } from "./slack-api";
+import { slackSocketStatus } from "./socket";
+import { type Delivery, eventOf, type MessageKind, type PublicNotificationSettings } from "./types";
 import { errorMessage } from "../errors";
 
 // Sends a Slack message when something happens to an incident, once per
 // event, and keeps a log of the attempts for Settings. A failed send is
 // logged and goes no further: nothing that called notify() waits for it or
-// sees an error from it. The webhook URL is a secret: it is read here, posted
-// to, and never logged or returned.
+// sees an error from it. The webhook URL and the bot's token are secrets:
+// read here, used, and never logged or returned.
+//
+// Two ways to send. With the Slack bot set up (a bot token and a channel),
+// an incident's first event posts its card, every later one replies in the
+// card's thread, and the card is updated to where the incident stands. With
+// only a webhook, each event is a message of its own. A bot that fails
+// falls back to the webhook when one is saved.
 
-const file = path.join(process.cwd(), ".data", "notifications.json");
+// The log of attempts and of the events already sent is in log.ts.
 
-const MAX_DELIVERIES = 50;
-// Enough keys to cover every event still likely to be notified twice.
-const MAX_SENT = 500;
 const RETRY_AFTER_MS = 1000;
 const TIMEOUT_MS = 5000;
-
-const logSchema = z.object({
-  // Newest first.
-  deliveries: z
-    .array(
-      z.object({
-        at: z.string(),
-        kind: z.enum([...messageKinds, "test"]),
-        incidentId: z.string().optional(),
-        ok: z.boolean(),
-        error: z.string().optional(),
-      }),
-    )
-    .default([]),
-  // Keys of the events already sent (or tried), oldest first.
-  sent: z.array(z.string()).default([]),
-});
-type Log = z.infer<typeof logSchema>;
-
-// A log that can't be read starts over: losing old attempts beats every
-// later message failing on it.
-async function readLog(): Promise<Log> {
-  try {
-    return logSchema.parse(JSON.parse(await readFile(file, "utf8")));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") console.error("[triage] notification log unreadable, starting over", err);
-    return { deliveries: [], sent: [] };
-  }
-}
-
-async function writeLog(log: Log) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(log, null, 2));
-  await rename(tmp, file);
-}
-
-// Changes to the log, chained so a read and its write never interleave with
-// another's: two events at once both land, and only one can claim a key. On
-// globalThis: one chain across dev hot reloads.
-const g = globalThis as unknown as { triageNotificationWrites?: Promise<unknown> };
-
-function changeLog<T>(fn: (log: Log) => T): Promise<T> {
-  const run = (g.triageNotificationWrites ?? Promise.resolve()).then(async () => {
-    const log = await readLog();
-    const result = fn(log);
-    await writeLog(log);
-    return result;
-  });
-  g.triageNotificationWrites = run.catch(() => {});
-  return run;
-}
-
-// Claims an event's key before anything is sent, so a second call for the
-// same event finds it taken. False when it was already claimed.
-const claim = (key: string) =>
-  changeLog((log) => {
-    if (log.sent.includes(key)) return false;
-    log.sent = [...log.sent, key].slice(-MAX_SENT);
-    return true;
-  });
-
-const record = (delivery: Delivery) =>
-  changeLog((log) => {
-    log.deliveries = [delivery, ...log.deliveries].slice(0, MAX_DELIVERIES);
-  });
 
 // What identifies one event on an incident, taken from its state: the same
 // state gives the same key however many times notify() is called. Undefined
@@ -98,6 +36,8 @@ function keyOf(kind: MessageKind, i: Incident): string | undefined {
       const last = i.reopenings?.at(-1);
       return last && `${i.id}:reopened:${last.at}`;
     }
+    case "mitigation_proposed":
+      return i.mitigation && `${i.id}:mitigation:${i.mitigation.proposedAt}`;
     case "fix_ready":
       return i.approval && `${i.id}:fix_ready:${i.approval.requestedAt}`;
     case "pr_opened":
@@ -131,7 +71,7 @@ async function post(url: string, body: string): Promise<Attempt> {
 
 // Posts the message, once more after a second if the first try may have
 // been a hiccup. Returns why it failed, or undefined.
-async function send(url: string, message: { text: string; blocks: unknown[] }): Promise<string | undefined> {
+async function send(url: string, message: SlackMessage): Promise<string | undefined> {
   const body = JSON.stringify(message);
   let attempt = await post(url, body);
   if (attempt.error && attempt.retry) {
@@ -141,45 +81,170 @@ async function send(url: string, message: { text: string; blocks: unknown[] }): 
   return attempt.error;
 }
 
+// Changes to one incident's card, chained so two events at once can't both
+// find no card and post two. On globalThis: one chain per incident across
+// dev hot reloads.
+const cards = globalThis as unknown as { triageSlackCards?: Map<string, Promise<unknown>> };
+
+function onCard<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const chains = (cards.triageSlackCards ??= new Map());
+  const run = (chains.get(id) ?? Promise.resolve()).then(fn);
+  const settled = run.catch(() => {});
+  chains.set(id, settled);
+  void settled.then(() => chains.get(id) === settled && chains.delete(id));
+  return run;
+}
+
+type ReadyBot = SlackBot & { botToken: string; channel: string };
+const botReady = (bot: SlackBot): bot is ReadyBot => !!(bot.botToken && bot.channel);
+
+// Buttons only when a click can reach Triage and someone may click.
+const interactive = (bot: SlackBot) => !!bot.appToken && bot.approvers.length > 0;
+
+// Posts the event through the bot: the card first if the incident has none,
+// then the event's message in its thread (an opened incident's card is its
+// message), and the card brought up to date. Returns why it failed.
+function viaBot(bot: ReadyBot, kind: MessageKind, id: string) {
+  return onCard(id, async (): Promise<string | undefined> => {
+    const incident = await getIncident(id);
+    if (!incident) return `unknown incident: ${id}`;
+    const card = incidentCard(incident, baseUrl(), { interactive: interactive(bot) });
+    let thread = incident.slack;
+    if (!thread) {
+      const posted = await postMessage(bot.botToken, bot.channel, card);
+      if (!posted.ok) return posted.error;
+      const saved = { channel: posted.channel ?? bot.channel, ts: posted.ts! };
+      await patchIncident(id, (i) => ({ ...i, slack: saved }));
+      if (kind === "incident_opened") return undefined;
+      thread = saved;
+    } else {
+      const updated = await updateMessage(bot.botToken, thread.channel, thread.ts, card);
+      if (!updated.ok) console.error("[triage] slack card update failed", id, updated.error);
+    }
+    // A reopened or resolved incident shows in the channel too, not only in
+    // its thread.
+    const reply = await postMessage(bot.botToken, thread.channel, slackMessage(kind, incident, baseUrl()), {
+      threadTs: thread.ts,
+      broadcast: kind === "incident_reopened" || kind === "resolved",
+    });
+    return reply.ok ? undefined : reply.error;
+  });
+}
+
 async function deliver(kind: MessageKind, incident: Incident) {
   const key = keyOf(kind, incident);
   if (!key) return;
   const { slackWebhookUrl, events } = await readNotificationSettings();
-  if (!slackWebhookUrl || !events[eventOf[kind]]) return;
-  if (!(await claim(key))) return;
-  const error = await send(slackWebhookUrl, slackMessage(kind, incident, baseUrl()));
+  const bot = await readSlackBot();
+  if ((!slackWebhookUrl && !botReady(bot)) || !events[eventOf[kind]]) return;
+  if (!claim(key)) return;
+  let error: string | undefined;
+  if (botReady(bot)) {
+    error = await viaBot(bot, kind, incident.id);
+    if (error && slackWebhookUrl) {
+      console.error("[triage] slack bot failed, sending through the webhook", kind, incident.id, error);
+      const fallback = await send(slackWebhookUrl, slackMessage(kind, incident, baseUrl()));
+      error = fallback && `${error}; webhook: ${fallback}`;
+    }
+  } else {
+    error = await send(slackWebhookUrl!, slackMessage(kind, incident, baseUrl()));
+  }
   if (error) console.error("[triage] slack notification failed", kind, incident.id, error);
-  await record({ at: new Date().toISOString(), kind, incidentId: incident.id, ok: !error, ...(error ? { error } : {}) });
+  record({ at: new Date().toISOString(), kind, incidentId: incident.id, ok: !error, ...(error ? { error } : {}) });
 }
 
-// Tells Slack about an event on the incident, if a webhook is saved and the
-// event is on. Call it after the incident is saved; not awaiting it is the
+// Brings the incident's Slack card up to where it stands, after a change no
+// message is sent for (a decision, a mitigation applied). Nothing to do
+// without the bot or a card. Never throws.
+export async function refreshSlackCard(id: string): Promise<void> {
+  try {
+    const bot = await readSlackBot();
+    if (!botReady(bot)) return;
+    await onCard(id, async () => {
+      const incident = await getIncident(id);
+      if (!incident?.slack) return;
+      const card = incidentCard(incident, baseUrl(), { interactive: interactive(bot) });
+      const updated = await updateMessage(bot.botToken, incident.slack.channel, incident.slack.ts, card);
+      if (!updated.ok) console.error("[triage] slack card update failed", id, updated.error);
+    });
+  } catch (err) {
+    console.error("[triage] slack card update failed", id, err);
+  }
+}
+
+// Tells Slack about an event on the incident, if the bot or a webhook is
+// set up and the event is on. Call it after the incident is saved; not awaiting it is the
 // point. Never throws, and an event already sent is not sent again, so it is
 // safe to call wherever the state might be reached twice.
 export function notify(kind: MessageKind, incident: Incident): void {
   void deliver(kind, incident).catch((err) => console.error("[triage] notification failed", kind, incident.id, err));
 }
 
+const testButton = {
+  type: "actions",
+  block_id: "triage_actions",
+  elements: [{ type: "button", text: { type: "plain_text", text: "Try a button" }, action_id: "test_button", value: "test" }],
+};
+
 // The Settings page's test message: sent now, whatever the preferences, and
-// logged like the rest.
+// logged like the rest. Through the bot when it is set up, with a button to
+// try when clicks can come back; else through the webhook.
 export async function sendTest(): Promise<Delivery> {
   const { slackWebhookUrl } = await readNotificationSettings();
-  if (!slackWebhookUrl) return { at: new Date().toISOString(), kind: "test", ok: false, error: "No Slack webhook is saved." };
-  const error = await send(slackWebhookUrl, slackMessage("test", undefined, baseUrl()));
+  const bot = await readSlackBot();
+  if (!slackWebhookUrl && !botReady(bot)) {
+    return { at: new Date().toISOString(), kind: "test", ok: false, error: "No Slack bot or webhook is saved." };
+  }
+  const message = slackMessage("test", undefined, baseUrl());
+  let error: string | undefined;
+  if (botReady(bot)) {
+    if (bot.appToken) message.attachments[0].blocks.splice(-1, 0, testButton);
+    const posted = await postMessage(bot.botToken, bot.channel, message);
+    error = posted.ok ? undefined : posted.error;
+  } else {
+    error = await send(slackWebhookUrl!, message);
+  }
   if (error) console.error("[triage] slack notification failed", "test", error);
   const delivery: Delivery = { at: new Date().toISOString(), kind: "test", ok: !error, ...(error ? { error } : {}) };
-  await record(delivery);
+  record(delivery);
   return delivery;
 }
 
-// What the browser sees: whether a webhook is saved and its last characters,
-// the events that are on, and the latest attempts.
+// The bot's names, for Settings: asked of Slack at most once a minute for
+// the same token, channel and approvers. On globalThis, across dev hot
+// reloads.
+const NAMES_TTL_MS = 60_000;
+const namesCache = globalThis as unknown as { triageSlackNames?: { key: string; at: number; names: Promise<SlackNames> } };
+
+function slackNames(bot: SlackBot): Promise<SlackNames> | undefined {
+  if (!bot.botToken) return undefined;
+  const key = [bot.botToken, bot.channel ?? "", ...bot.approvers].join("|");
+  const cached = namesCache.triageSlackNames;
+  if (cached?.key === key && Date.now() - cached.at < NAMES_TTL_MS) return cached.names;
+  const names = lookupNames(bot.botToken, bot.channel, bot.approvers);
+  namesCache.triageSlackNames = { key, at: Date.now(), names };
+  return names;
+}
+
+// What the browser sees: whether a webhook and the bot's tokens are saved
+// and their last characters, the bot's channel and approvers, the events
+// that are on, and the latest attempts.
 export async function publicNotificationSettings(): Promise<PublicNotificationSettings> {
   const { slackWebhookUrl, events } = await readNotificationSettings();
-  const { deliveries } = await readLog();
+  const bot = await readSlackBot();
+  const hint = (secret?: string) => secret && `…${secret.slice(-4)}`;
   return {
-    slack: slackWebhookUrl ? { configured: true, hint: `…${slackWebhookUrl.slice(-4)}` } : { configured: false },
+    slack: slackWebhookUrl ? { configured: true, hint: hint(slackWebhookUrl) } : { configured: false },
+    bot: {
+      configured: !!(bot.botToken && bot.channel),
+      botHint: hint(bot.botToken),
+      appHint: hint(bot.appToken),
+      channel: bot.channel,
+      approvers: bot.approvers,
+      socket: slackSocketStatus(),
+      names: await slackNames(bot),
+    },
     events,
-    deliveries: deliveries.slice(0, 20),
+    deliveries: recentDeliveries(20),
   };
 }

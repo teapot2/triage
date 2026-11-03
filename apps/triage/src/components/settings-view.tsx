@@ -1,17 +1,18 @@
 "use client";
 
-import { BellIcon, CpuIcon, FileTextIcon, SlidersHorizontalIcon } from "lucide-react";
+import { ArchiveIcon, BellIcon, CpuIcon, FileTextIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { type MenuSection, SectionMenu, selectSection } from "@/components/section-menu";
 
-export type SettingsSectionId = "general" | "models" | "notifications" | "postmortems";
+export type SettingsSectionId = "general" | "models" | "notifications" | "postmortems" | "archived";
 
 const sections: MenuSection<SettingsSectionId>[] = [
   { id: "general", label: "General", icon: <SlidersHorizontalIcon /> },
   { id: "models", label: "Models", icon: <CpuIcon /> },
   { id: "notifications", label: "Notifications", icon: <BellIcon /> },
   { id: "postmortems", label: "Postmortems", icon: <FileTextIcon /> },
+  { id: "archived", label: "Archived incidents", icon: <ArchiveIcon /> },
 ];
 
 // Settings' sections in the incident report's menu, one at a time, the open

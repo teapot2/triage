@@ -200,3 +200,24 @@ describe("labels and tones", () => {
     assert.equal(Object.keys(gradeLabels).length, Object.keys(gradeTone).length);
   });
 });
+
+describe("gradeHypothesis on a dependency incident", () => {
+  // The exposure stage's shape: the advisory as web evidence from the
+  // dependency audit, the importing line as source evidence.
+  it("counts the dependency audit as a runtime signal beside the source", () => {
+    const i = unproven(poolLeak());
+    i.evidence.push(
+      { id: "ev_web_9", tool: "dependency_audit", kind: "web", summary: "GHSA-c2qf-rxjj-qqgw", url: "https://github.com/advisories/GHSA-c2qf-rxjj-qqgw" },
+      { id: "ev_source_9", tool: "grep_source", kind: "source", summary: "runtime.ts:1", file: "src/lib/runtime.ts", startLine: 1, code: 'import semver from "semver";' },
+    );
+    const h = withHypothesis(i, [["ev_web_9"], ["ev_source_9"], ["ev_web_9"]]);
+    assert.deepEqual(gradeHypothesis(h, i), { grade: "supported", reason: "Cited by the dependency audit and the source." });
+  });
+
+  it("leaves a web page someone searched as no runtime signal", () => {
+    const i = unproven(poolLeak());
+    i.evidence.push({ id: "ev_web_9", tool: "web_search", kind: "web", summary: "a blog", url: "https://example.com/" });
+    const h = withHypothesis(i, [["ev_web_9"], ["ev_web_9"], ["ev_web_9"]]);
+    assert.equal(gradeHypothesis(h, i).grade, "speculation");
+  });
+});

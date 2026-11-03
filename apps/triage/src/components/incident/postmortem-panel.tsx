@@ -28,6 +28,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { postmortemActions } from "@/lib/export/datasets/postmortem";
+import { isArchived } from "@/lib/investigation/archive";
 import { downloadText } from "@/lib/export/download";
 import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
 import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
@@ -56,8 +57,9 @@ export function hasPostmortem(incident: Incident): boolean {
 // The server's words ("the fix is still being written: …") as a sentence.
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// The server's rule, for the button's tooltip.
+// The server's rule, for the button's tooltip. Archived, there's no button.
 export function writeRefusal(incident: Incident): string | undefined {
+  if (isArchived(incident)) return "Restore the incident to write its postmortem";
   const refusal = postmortemRefusal(incident);
   return refusal && sentence(refusal);
 }
@@ -172,6 +174,8 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
   const pm = incident.postmortem;
   const { write, sending, accepted } = useWritePostmortem(incident);
   const refusal = writeRefusal(incident);
+  // Archived, the postmortem as it stands, with no way to write it again.
+  const archived = isArchived(incident);
   const markdown = useMemo(() => (pm?.status === "ready" ? postmortemMarkdown(incident) : ""), [pm?.status, incident]);
   const draft = usePostmortemDraft(incident);
   const template = templateOf(incident);
@@ -219,6 +223,10 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
     );
   }
 
+  if (!pm && archived) {
+    return <p className="text-muted-foreground text-sm">No postmortem was written for this incident.</p>;
+  }
+
   if (!pm) {
     return (
       <div className="flex flex-col items-start gap-3 rounded-lg border p-4">
@@ -247,11 +255,13 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
         <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
           <AlertTitle>{partial ? "The postmortem stopped part-way" : "The postmortem wasn’t written"}</AlertTitle>
           {pm.error && <AlertDescription className="line-clamp-3 break-words">{pm.error}</AlertDescription>}
-          <AlertAction>
-            <WriteButton refusal={refusal} sending={sending} onClick={write} size="xs" variant="outline">
-              Try again
-            </WriteButton>
-          </AlertAction>
+          {!archived && (
+            <AlertAction>
+              <WriteButton refusal={refusal} sending={sending} onClick={write} size="xs" variant="outline">
+                Try again
+              </WriteButton>
+            </AlertAction>
+          )}
         </Alert>
         {partial && (
           <div className="opacity-70">
@@ -280,9 +290,11 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
         <div className="flex flex-wrap items-center gap-2">
           {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}
           {/* Quiet, icon-only: their names show on hover. */}
-          <WriteButton refusal={refusal} sending={sending} onClick={write} size="icon-sm" variant="ghost">
-            Write again
-          </WriteButton>
+          {!archived && (
+            <WriteButton refusal={refusal} sending={sending} onClick={write} size="icon-sm" variant="ghost">
+              Write again
+            </WriteButton>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Copy Markdown" onClick={() => copyPostmortem(incident)}>

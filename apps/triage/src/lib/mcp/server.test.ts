@@ -25,7 +25,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<CallTo
 }
 
 describe("Triage MCP server", () => {
-  it("lists its six tools, all read-only but ask_incident", async () => {
+  it("lists its seven tools, all read-only but ask_incident", async () => {
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((t) => t.name).sort(), [
       "ask_incident",
@@ -33,6 +33,7 @@ describe("Triage MCP server", () => {
       "get_fix",
       "get_incident",
       "get_postmortem",
+      "list_dependency_findings",
       "list_incidents",
     ]);
     for (const t of tools) assert.equal(t.annotations?.readOnlyHint, t.name !== "ask_incident", t.name);
@@ -79,6 +80,14 @@ describe("Triage MCP server", () => {
   it("says when there's no postmortem", async () => {
     const result = await call("get_postmortem", { incident_id: "inc_control" });
     assert.match(result.body, /hasn't been written/);
+  });
+
+  // Whatever the local audits hold: the latest audit's line, or none yet.
+  it("lists the watched service's vulnerable dependencies", async () => {
+    const result = await call("list_dependency_findings", {});
+    assert.ok(!result.isError, result.body);
+    assert.match(result.body, /^(Latest audit of|The latest audit of|`[^`]+`'s dependencies haven't been audited)/);
+    assert.ok(Array.isArray((result.structuredContent as { findings: unknown[] }).findings));
   });
 
   it("refuses a question on an unknown incident", async () => {

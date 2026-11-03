@@ -1,5 +1,5 @@
 import type { MetricPoint } from "../schema";
-import type { MetricSeries } from "../source";
+import { slowQueriesNote, type MetricSeries } from "../source";
 import { liveRatingsFiles } from "./live-ratings-files";
 import { minutesBefore, type Scenario } from "./scenario-source";
 import { services } from "./shopfront-base";
@@ -365,11 +365,16 @@ export const liveRatings: Scenario = {
       query:
         "SELECT left(query, 60) AS query, calls, round(mean_exec_time::numeric, 2) AS mean_ms, round(max_exec_time::numeric, 2) AS max_ms FROM pg_stat_statements ORDER BY total_exec_time DESC LIMIT 5",
       rows: [
-        { query: 'insert into "reviews" (product_id, rating, body, created_at)', calls: "1", mean_ms: "11616.27", max_ms: "11616.27" },
-        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4421.21", max_ms: "4421.21" },
-        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4410.70", max_ms: "4410.70" },
-        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "3600.62", max_ms: "3600.62" },
+        // The listings' per-product reviews query (every rating row of one
+        // product, averaged in the app), the only statement with time in
+        // the window: the seed and the copies ran before it.
+        { query: 'select "rating" from "reviews" where "reviews"."product_id" = $', calls: "2416", mean_ms: "7.05", max_ms: "38.40", window_calls: 2416, window_ms: 17032.8 },
+        { query: 'insert into "reviews" (product_id, rating, body, created_at)', calls: "1", mean_ms: "11616.27", max_ms: "11616.27", window_calls: 0, window_ms: 0 },
+        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4421.21", max_ms: "4421.21", window_calls: 0, window_ms: 0 },
+        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "4410.70", max_ms: "4410.70", window_calls: 0, window_ms: 0 },
+        { query: 'INSERT INTO "public"."reviews" ("id", "product_id", "rating"', calls: "1", mean_ms: "3600.62", max_ms: "3600.62", window_calls: 0, window_ms: 0 },
       ],
+      note: slowQueriesNote(now, 15),
     },
   },
   files: liveRatingsFiles,
@@ -484,8 +489,11 @@ export const liveRatings: Scenario = {
       ["per product", "each product", "every product", "one query per", "n+1", "n + 1", "in a loop", "loop", "per listing", "per item", "sequential"],
       // What it reads.
       ["reviews", "review rows", "review table"],
-      // That it pulls every row and averages in the app instead of in SQL.
-      ["average", "aggregat", "in memory", "in application", "in javascript", "in node", "all reviews", "every review", "all the rows", "fetches every"],
+      // That the rating is worked out from the reviews on each listing: the
+      // rows pulled and averaged in the app, or the rating looked up per
+      // product. Runs name the loop and the reviews and rarely spell out
+      // the in-app averaging, so the rating itself counts.
+      ["average", "aggregat", "in memory", "in application", "in javascript", "in node", "all reviews", "every review", "all the rows", "fetches every", "rating", "sum", "reduce", "rows per product"],
     ],
     mitigation: { kind: "flag_off", target: "FF_LIVE_RATINGS" },
   },

@@ -8,12 +8,14 @@ import {
   evidenceDb,
   evidenceLogs,
   evidenceMetrics,
+  evidenceSource,
   evidenceSpans,
   incidentRecord,
   incidentSubject,
   investigationTrace,
   logRows,
   metricRows,
+  sourceRows,
   spanRows,
   traceRows,
 } from "@/lib/export/datasets/incident";
@@ -46,6 +48,8 @@ export function incidentExports(incident: Incident): ExportSource[] {
     [evidenceSpans, spanRows(incident).length > 0],
     [evidenceMetrics, metricRows(incident).length > 0],
     [evidenceDb, dbRows(incident).length > 0],
+    // The code read; on a dependency incident, the files the exposure cites.
+    [evidenceSource, sourceRows(incident).length > 0],
     [investigationTrace, traceRows(incident).length > 0],
     // The Ask thread, once something in it is answered.
     [askAnswers, incident.questions?.some((q) => q.status === "answered") ?? false],

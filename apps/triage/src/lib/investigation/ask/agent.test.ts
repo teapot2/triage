@@ -7,6 +7,7 @@ import type { Stage } from "../fanout/run";
 import { poolLeak } from "../postmortem/test-incidents";
 import type { Question } from "../schema";
 import { type Call, inOrder, lastUserText, scriptedModel, type Turn, turnOf } from "../scripted-model";
+import { closeDb } from "../../db";
 
 // Ask's loop with a scripted model, streamed, on a temp working directory
 // so .data is ours. The store resolves its folder when it loads, so it and
@@ -26,6 +27,7 @@ before(async () => {
 after(async () => {
   process.chdir(cwd);
   // Windows may still hold a just-renamed file for a moment.
+  closeDb();
   await rm(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 

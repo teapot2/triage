@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { isArchived } from "@/lib/investigation/archive";
 import { reopenedBy } from "@/lib/investigation/postmortem/timeline";
 import type { Incident, Reopening, Verification } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
@@ -50,13 +51,16 @@ const formatValue = (value: number, unit: string) => (unit === "ratio" ? formatP
 const hhmm = (iso: string) => formatTime(iso).slice(0, 5);
 
 // What the menu offers now; each matches what the route would take.
-// Healthy incidents had nothing to fix, so nothing to check or resolve.
+// Healthy incidents had nothing to fix, so nothing to check or resolve; an
+// archived one takes nothing until it's restored.
 export function resolutionOptions(incident: Incident) {
-  const finished = incident.report !== undefined && incident.status !== "investigating" && incident.status !== "healthy";
+  const open = !isArchived(incident);
+  const finished =
+    open && incident.report !== undefined && incident.status !== "investigating" && incident.status !== "healthy";
   const v = incident.verification?.status;
   return {
     resolve: finished && incident.status !== "resolved",
-    reopen: incident.status === "resolved",
+    reopen: open && incident.status === "resolved",
     verify: finished && (v === undefined || v === "breached" || v === "stopped"),
     // "again" only once there's been a verification.
     verifyLabel: v === undefined ? "Verify" : "Verify again",
@@ -167,13 +171,28 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
   const { act, pending } = useResolution(incident);
   const label = metricLabel(v.metric);
   const quiet = quietMinutes(v);
-  const again = (
+  const again = !isArchived(incident) && (
     <Button variant="outline" size="xs" disabled={pending !== undefined} onClick={() => void act("verify")}>
       {pending === "verify" ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
       Verify again
     </Button>
   );
 
+  // A merged dependency fix is verified by the audit: resolved once one no
+  // longer finds the advisory. Until then each audit's note says it's
+  // still there, and what to do.
+  if (v.after === "dependencies" && v.status === "verifying") {
+    const advisory = incident.dependency?.advisoryId ?? "the advisory";
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="flex items-center gap-2 text-muted-foreground text-sm">
+          <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
+          Waiting for an audit that no longer finds {advisory}
+        </p>
+        {v.note && <p className="pl-6 text-muted-foreground text-xs">{v.note}</p>}
+      </div>
+    );
+  }
   if (v.status === "verifying") {
     return (
       <p className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -197,7 +216,12 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
           )}
           <span className="text-muted-foreground">
             {" "}
-            · {v.after === "uptime" ? `${v.series.length} checks in a row answered in time` : `${quiet} min under the limit`}
+            ·{" "}
+            {v.after === "uptime"
+              ? `${v.series.length} checks in a row answered in time`
+              : v.after === "dependencies"
+                ? (v.note ?? "the audit no longer finds the advisory")
+                : `${quiet} min under the limit`}
           </span>
         </span>
       </p>
@@ -233,6 +257,7 @@ const verifiedAfter: Record<Verification["after"], string> = {
   fix: "after the merged fix",
   manual: "asked for by a person",
   uptime: "by the endpoint's own checks",
+  dependencies: "by the dependency audit",
 };
 
 // The verification on its own, where the mitigation card would be: after a
@@ -250,8 +275,12 @@ export function VerificationCard({
     <div className={cn("flex flex-col gap-2 rounded-lg border p-4", className)}>
       <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
         <ShieldCheckIcon className="size-3.5" />
-        Verification · {verifiedAfter[verification.after]} ·{" "}
-        {verification.after === "uptime" ? `${verification.series.length} healthy checks` : `${verification.windowMinutes} min quiet window`}
+        Verification · {verifiedAfter[verification.after]}
+        {verification.after === "uptime"
+          ? ` · ${verification.series.length} healthy checks`
+          : verification.after === "dependencies"
+            ? ""
+            : ` · ${verification.windowMinutes} min quiet window`}
       </span>
       <VerificationLine incident={incident} verification={verification} />
     </div>

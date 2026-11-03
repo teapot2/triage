@@ -1,17 +1,30 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { z } from "zod";
+import { storedDocument } from "../documents";
 import { isOpenWeights, isSparkOpen, providerIdSchema, providerIds, providers, type ProviderId } from "./providers";
-import { type NotificationEvent, notificationEvents, slackWebhookPattern } from "../notifications/types";
+import {
+  type NotificationEvent,
+  notificationEvents,
+  slackAppTokenPattern,
+  slackBotTokenPattern,
+  slackChannelPattern,
+  slackUserPattern,
+  slackWebhookPattern,
+} from "../notifications/types";
 import { defaultTemplate, type Template, templateProblems, templateSchema } from "../investigation/postmortem/template";
+import {
+  defaultDependencySettings,
+  type DependencySettings,
+  dependencySettingsSchema,
+} from "../investigation/dependencies/model";
 import { defaultEffort, leadDefault, reasoningEffortSchema, type StageId, stageFallback, stageIdSchema, stageIds } from "./stages";
 
 export { type StageId, stageIdSchema, stageIds } from "./stages";
 
 // Which model each stage uses, and the endpoints of the configurable
-// providers. Saved server-side, in .data/settings.json (gitignored), since
-// the stages run on the server, the watch included. The file can hold keys,
-// so only publicModelSettings ever leaves the server. It is the one file for
+// providers. Saved server-side, as the "settings" document in .data/triage.db
+// (documents.ts; it used to be .data/settings.json), since the stages run on
+// the server, the watch included. It can hold keys, so only
+// publicModelSettings ever leaves the server. It is the one document for
 // the app's settings, so it also holds the non-model keys: the postmortem
 // template, and the notifications (a Slack webhook URL, a secret like the
 // keys, and which events send a message).
@@ -47,32 +60,42 @@ const settingsSchema = z.object({
     .object({
       slackWebhookUrl: z.string().regex(slackWebhookPattern).optional(),
       events: z.partialRecord(z.enum(notificationEvents), z.boolean()).optional(),
+      slackBot: z
+        .object({
+          botToken: z.string().regex(slackBotTokenPattern).optional(),
+          appToken: z.string().regex(slackAppTokenPattern).optional(),
+          channel: z.string().regex(slackChannelPattern).optional(),
+          approvers: z.array(z.string().regex(slackUserPattern)).default([]),
+        })
+        .optional(),
     })
     .optional(),
 });
 type Settings = z.infer<typeof settingsSchema>;
 
-const file = path.join(process.cwd(), ".data", "settings.json");
+// A settings.json that doesn't parse throws rather than reading as empty:
+// the next save would drop the keys it held.
+const settingsDocument = storedDocument("settings", "settings.json", (v) => settingsSchema.parse(v));
 
 // Before anything is saved, every stage uses the env's model on Meta's API,
 // except the Lead, which starts on Wonder.
 const defaultStage = (stage: StageId): StageModel =>
   stage === "lead" ? { ...leadDefault } : { provider: "meta", model: process.env.MODEL_ID ?? "muse-spark-1.3" };
 
+const empty = (): Settings => ({ stages: {}, endpoints: {} });
+
 async function read(): Promise<Settings> {
-  try {
-    return settingsSchema.parse(JSON.parse(await readFile(file, "utf8")));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { stages: {}, endpoints: {} };
-    throw err;
-  }
+  return settingsDocument.read() ?? empty();
 }
 
-async function write(settings: Settings) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(settings, null, 2));
-  await rename(tmp, file);
+// Reads, changes and saves the settings in one transaction, so two changes
+// at once both land. fn changes the settings in place.
+function change(fn: (settings: Settings) => void): void {
+  settingsDocument.change((saved) => {
+    const settings = saved ?? empty();
+    fn(settings);
+    return settings;
+  });
 }
 
 export type Endpoint = { baseUrl: string; apiKey?: string };
@@ -219,18 +242,18 @@ export const updateSchema = z.object({
 });
 
 export async function updateModelSettings(update: z.infer<typeof updateSchema>) {
-  const settings = await read();
-  for (const [id, s] of Object.entries(update.stages ?? {}) as [StageId, StageModel][]) settings.stages[id] = s;
-  if (update.fanout !== undefined) settings.fanout = update.fanout;
-  if (update.webSearch !== undefined) settings.webSearch = update.webSearch;
-  for (const [id, e] of Object.entries(update.endpoints ?? {}) as [ProviderId, { baseUrl?: string; apiKey?: string }][]) {
-    if (!providers[id].configurable) continue;
-    const next = { ...settings.endpoints[id] };
-    if (e.baseUrl !== undefined) next.baseUrl = e.baseUrl || undefined;
-    if (e.apiKey !== undefined) next.apiKey = e.apiKey || undefined;
-    settings.endpoints[id] = next;
-  }
-  await write(settings);
+  change((settings) => {
+    for (const [id, s] of Object.entries(update.stages ?? {}) as [StageId, StageModel][]) settings.stages[id] = s;
+    if (update.fanout !== undefined) settings.fanout = update.fanout;
+    if (update.webSearch !== undefined) settings.webSearch = update.webSearch;
+    for (const [id, e] of Object.entries(update.endpoints ?? {}) as [ProviderId, { baseUrl?: string; apiKey?: string }][]) {
+      if (!providers[id].configurable) continue;
+      const next = { ...settings.endpoints[id] };
+      if (e.baseUrl !== undefined) next.baseUrl = e.baseUrl || undefined;
+      if (e.apiKey !== undefined) next.apiKey = e.apiKey || undefined;
+      settings.endpoints[id] = next;
+    }
+  });
   return publicModelSettings();
 }
 
@@ -252,17 +275,17 @@ export async function writeTemplate(template: Template): Promise<Template> {
   if (!parsed.success) throw new TemplateError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`));
   const problems = templateProblems(parsed.data);
   if (problems.length) throw new TemplateError(problems);
-  const settings = await read();
-  settings.postmortemTemplate = parsed.data;
-  await write(settings);
+  change((settings) => {
+    settings.postmortemTemplate = parsed.data;
+  });
   return parsed.data;
 }
 
 // Back to the built-in sections.
 export async function clearTemplate(): Promise<void> {
-  const settings = await read();
-  delete settings.postmortemTemplate;
-  await write(settings);
+  change((settings) => {
+    delete settings.postmortemTemplate;
+  });
 }
 
 // The notification settings as saved, for the server only: they include the
@@ -285,10 +308,56 @@ export async function writeNotificationSettings(update: {
   slackWebhookUrl?: string;
   events?: Partial<Record<NotificationEvent, boolean>>;
 }): Promise<void> {
-  const settings = await read();
-  const next = { ...settings.notifications };
-  if (update.slackWebhookUrl !== undefined) next.slackWebhookUrl = update.slackWebhookUrl || undefined;
-  if (update.events) next.events = { ...next.events, ...update.events };
-  settings.notifications = next;
-  await write(settings);
+  change((settings) => {
+    const next = { ...settings.notifications };
+    if (update.slackWebhookUrl !== undefined) next.slackWebhookUrl = update.slackWebhookUrl || undefined;
+    if (update.events) next.events = { ...next.events, ...update.events };
+    settings.notifications = next;
+  });
+}
+
+export type SlackBot = { botToken?: string; appToken?: string; channel?: string; approvers: string[] };
+
+// The Slack bot's settings as saved, for the server only: they include the
+// tokens. Posting needs botToken and channel; the buttons need appToken too.
+export async function readSlackBot(): Promise<SlackBot> {
+  const saved = (await read()).notifications?.slackBot;
+  return { ...saved, approvers: saved?.approvers ?? [] };
+}
+
+// Each field: a new value, "" to remove it, or absent to keep the saved one.
+// approvers replaces the list when given.
+export async function writeSlackBot(update: {
+  botToken?: string;
+  appToken?: string;
+  channel?: string;
+  approvers?: string[];
+}): Promise<void> {
+  change((settings) => {
+    const next = { approvers: [], ...settings.notifications?.slackBot };
+    for (const key of ["botToken", "appToken", "channel"] as const) {
+      if (update[key] !== undefined) next[key] = update[key] || undefined;
+    }
+    if (update.approvers) next.approvers = update.approvers;
+    settings.notifications = { ...settings.notifications, slackBot: next };
+  });
+}
+
+// The dependency audit's settings (investigation/dependencies), a document
+// of their own: "dependency-audit". Nothing saved reads as the defaults:
+// on, every 6 h, incidents from high.
+const dependencyDocument = storedDocument("dependency-audit", "dependency-audit.json", (v) => dependencySettingsSchema.parse(v));
+
+export async function readDependencySettings(): Promise<DependencySettings> {
+  return dependencyDocument.read() ?? defaultDependencySettings();
+}
+
+// Fields left out keep their saved value; serviceDir "" goes back to
+// Shopfront's checkout.
+export async function writeDependencySettings(update: Partial<DependencySettings>): Promise<DependencySettings> {
+  return dependencyDocument.change((saved) => {
+    const next = { ...(saved ?? defaultDependencySettings()), ...update };
+    if (!next.serviceDir) delete next.serviceDir;
+    return dependencySettingsSchema.parse(next);
+  });
 }

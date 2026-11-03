@@ -9,12 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isDemo } from "@/lib/investigation/demo";
 import { facetCounts, filterIncidents } from "@/lib/investigation/filter";
+import type { IncidentSummary } from "@/lib/investigation/list-summary";
 import { investigationOptions } from "@/lib/investigation/options";
-import { otherRuns, runModelsLabel } from "@/lib/investigation/reruns";
-import type { Incident } from "@/lib/investigation/schema";
 import { sortIncidents, startedAt } from "@/lib/investigation/sort";
-import { isExample, listIncidents } from "@/lib/investigation/store";
-import { incidentHeadline } from "@/lib/investigation/summary";
+import { isExample, listIncidentSummaries } from "@/lib/investigation/store";
+import { IncidentSelection, SelectIncident } from "./incident-selection";
 import { IncidentToolbar } from "./incident-toolbar";
 import { clampPage, listHref, PAGE_SIZE_COOKIE, pageSizes, parseListParams } from "./list-params";
 import { Pagination } from "./pagination";
@@ -41,7 +40,7 @@ export default function Home({ searchParams }: Props) {
 async function IncidentList({ searchParams }: Props) {
   // Incidents change at runtime; read them per request.
   await connection();
-  const found = await listIncidents();
+  const found = await listIncidentSummaries();
   const savedSize = (await cookies()).get(PAGE_SIZE_COOKIE)?.value;
   const asked = parseListParams(await searchParams, savedSize);
   const matching = sortIncidents(filterIncidents(found, asked), asked.sort);
@@ -86,8 +85,8 @@ async function IncidentList({ searchParams }: Props) {
 
 // The incident's other runs (re-runs with other models, or the first run
 // once a re-run was promoted), each a branch under the incident's row.
-function RunRows({ incident }: { incident: Incident }) {
-  const runs = otherRuns(incident);
+function RunRows({ incident }: { incident: IncidentSummary }) {
+  const runs = incident.otherRuns;
   if (runs.length === 0) return null;
   return (
     <ul className="-mt-1.5 pb-2">
@@ -95,13 +94,13 @@ function RunRows({ incident }: { incident: Incident }) {
         <li key={r.number}>
           <Link
             href={`/incidents/${incident.id}?run=${r.number}`}
-            className="flex items-center gap-2 py-1 pr-4 pl-7 text-muted-foreground text-xs transition-colors hover:bg-muted/40 hover:text-foreground"
+            className="flex items-center gap-2 py-1 pr-4 pl-14 text-muted-foreground text-xs transition-colors hover:bg-muted/40 hover:text-foreground"
           >
             {/* The branch: a corner from the incident's row to this one. */}
             <span aria-hidden className="-mt-3 h-4 w-3 shrink-0 self-start rounded-bl-md border-muted-foreground/50 border-b border-l" />
             <StatusIcon status={r.status} className="size-3 shrink-0" />
             <span className="shrink-0 text-foreground">Run {r.number}</span>
-            <span className="truncate font-mono">{runModelsLabel(r)}</span>
+            <span className="truncate font-mono">{r.models}</span>
             <span className="hidden shrink-0 sm:inline">· {statusLabel[r.status]}</span>
           </Link>
         </li>
@@ -111,53 +110,60 @@ function RunRows({ incident }: { incident: Incident }) {
 }
 
 // Replacing the skeleton, rows fade up one after another; the stagger caps
-// at ten rows so a long list doesn't keep the bottom waiting.
-function IncidentRows({ incidents }: { incidents: Incident[] }) {
+// at ten rows so a long list doesn't keep the bottom waiting. Each closed
+// incident can be picked, beside its link, to archive several at once.
+function IncidentRows({ incidents }: { incidents: IncidentSummary[] }) {
+  const selectable = incidents.filter((i) => i.archiveBlocker === undefined).map((i) => i.id);
   return (
-    <ul className="divide-y rounded-lg border">
-      {incidents.map((incident, i) => (
-        <li
-          key={incident.id}
-          style={{ animationDelay: `${Math.min(i, 10) * 25}ms` }}
-          className="animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-backwards duration-200 ease-out motion-reduce:animate-none"
-        >
-          <Link
-            href={`/incidents/${incident.id}`}
-            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
+    <IncidentSelection ids={selectable}>
+      <ul className="divide-y rounded-lg border">
+        {incidents.map((incident, i) => (
+          <li
+            key={incident.id}
+            style={{ animationDelay: `${Math.min(i, 10) * 25}ms` }}
+            className="animate-in fade-in-0 slide-in-from-bottom-1 fill-mode-backwards duration-200 ease-out motion-reduce:animate-none"
           >
-            <SeverityMeter severity={incident.severity} />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate font-medium text-sm">{incident.title}</span>
-              <span className="truncate text-muted-foreground text-xs">
-                {/* On phones the status badge would leave the title a dozen
-                    characters, so the status moves into this line. */}
-                <span className="mr-1.5 inline-flex items-center gap-1 align-middle sm:hidden">
-                  <StatusIcon status={incident.status} className="size-3" />
-                  <span className="text-foreground">{statusLabel[incident.status]}</span>
-                  <span>·</span>
+            <div className="group/row flex transition-colors hover:bg-muted/40">
+              <SelectIncident id={incident.id} title={incident.title} blocker={incident.archiveBlocker} />
+              <Link
+                href={`/incidents/${incident.id}`}
+                className="flex min-w-0 flex-1 items-center gap-3 py-3 pr-4 pl-3"
+              >
+                <SeverityMeter severity={incident.severity} />
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-medium text-sm">{incident.title}</span>
+                  <span className="truncate text-muted-foreground text-xs">
+                    {/* On phones the status badge would leave the title a dozen
+                        characters, so the status moves into this line. */}
+                    <span className="mr-1.5 inline-flex items-center gap-1 align-middle sm:hidden">
+                      <StatusIcon status={incident.status} className="size-3" />
+                      <span className="text-foreground">{statusLabel[incident.status]}</span>
+                      <span>·</span>
+                    </span>
+                    {[
+                      incident.service,
+                      incident.headline,
+                      isExample(incident.id) && "example",
+                      isDemo(incident.id) && "demo",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </div>
+                <span className="hidden sm:inline-flex">
+                  <IncidentStatusBadge status={incident.status} />
                 </span>
-                {[
-                  incident.service,
-                  incidentHeadline(incident),
-                  isExample(incident.id) && "example",
-                  isDemo(incident.id) && "demo",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
+                {/* When the run started: what the list sorts by. Replays share
+                    their alert time, so it's the time that tells them apart. */}
+                <span className="hidden w-32 shrink-0 text-right font-mono text-muted-foreground text-xs sm:block">
+                  <Timestamp date={startedAt(incident)} />
+                </span>
+              </Link>
             </div>
-            <span className="hidden sm:inline-flex">
-              <IncidentStatusBadge status={incident.status} />
-            </span>
-            {/* When the run started: what the list sorts by. Replays share
-                their alert time, so it's the time that tells them apart. */}
-            <span className="hidden w-32 shrink-0 text-right font-mono text-muted-foreground text-xs sm:block">
-              <Timestamp date={startedAt(incident)} />
-            </span>
-          </Link>
-          <RunRows incident={incident} />
-        </li>
-      ))}
-    </ul>
+            <RunRows incident={incident} />
+          </li>
+        ))}
+      </ul>
+    </IncidentSelection>
   );
 }

@@ -164,6 +164,7 @@ export async function createUptimeSource(
       listSourceFiles: () => live.listSourceFiles(),
       gitLog: (q) => live.gitLog(q),
       deployHistory: (q) => live.deployHistory(q),
+
       async queryMetric(q) {
         return uptime.queryMetric(q) ?? live.queryMetric(q);
       },

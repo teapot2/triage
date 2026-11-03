@@ -7,6 +7,7 @@ import { type PaletteCommand, useRegisterCommands } from "@/components/command-r
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -123,11 +124,15 @@ export function ExportMenu({
   exports,
   iconOnly = false,
   size = "sm",
+  option,
 }: {
   exports: ExportSource[];
   // For tight spots: the icon alone, its label for screen readers.
   iconOnly?: boolean;
   size?: "sm" | "xs" | "default";
+  // A choice about what goes in the file, above the formats ("Include
+  // archived"); the menu stays open as it's ticked.
+  option?: { label: string; checked: boolean; onCheckedChange: (checked: boolean) => void };
 }) {
   useExportCommands(exports);
   if (exports.length === 0) return null;
@@ -140,6 +145,18 @@ export function ExportMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
+        {option && (
+          <>
+            <DropdownMenuCheckboxItem
+              checked={option.checked}
+              onCheckedChange={option.onCheckedChange}
+              onSelect={(e) => e.preventDefault()}
+            >
+              {option.label}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <ExportMenuItems exports={exports} />
       </DropdownMenuContent>
     </DropdownMenu>

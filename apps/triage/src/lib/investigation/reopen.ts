@@ -1,3 +1,4 @@
+import { isArchived } from "./archive";
 import type { Incident } from "./schema";
 
 // A breach shortly after a resolution is the same outage coming back, not a
@@ -28,12 +29,14 @@ const opened = (i: Incident) => Date.parse(i.detectedAt);
 // The incident a trip of `ruleId` on `route` at `now` should reopen: the
 // latest on that rule and route that ended within the window, unless a newer
 // incident on the rule is still open (the outage already has a home).
+// Never an archived one: it's read-only, so the outage gets a new incident.
+// The callers' lists leave them out already; this holds if one doesn't.
 export function incidentToReopen(
   incidents: Incident[],
   { ruleId, route }: { ruleId: string; route: string },
   now: number,
 ): Incident | undefined {
-  const onRule = incidents.filter((i) => i.trigger.rule?.id === ruleId);
+  const onRule = incidents.filter((i) => i.trigger.rule?.id === ruleId && !isArchived(i));
   const recent = onRule
     .filter((i) => {
       const ended = endedAt(i);

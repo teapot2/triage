@@ -137,6 +137,33 @@ export function dbRows(incident: Pick<Incident, "evidence" | "questions">): DbRo
   return ofKind(incident, "db").flatMap((s) => (s.evidence.rows.length ? s.evidence.rows.map((row, index) => ({ ...s, index, row })) : [s]));
 }
 
+// The source code the tools read, one row per excerpt. On a dependency
+// incident, exposure says whether the exposure verdict cites it: the files
+// that import the vulnerable package, or that would.
+export type SourceRow = Sourced<"source"> & { exposure: boolean };
+
+export const evidenceSource = defineDataset<SourceRow>({
+  id: "evidence-source",
+  name: "Source code",
+  columns: [
+    ...sourceColumns,
+    { key: "observed_at", value: (r) => r.evidence.observedAt },
+    { key: "tool", value: (r) => r.evidence.tool },
+    { key: "file", value: (r) => r.evidence.file },
+    { key: "start_line", value: (r) => r.evidence.startLine },
+    { key: "code", value: (r) => r.evidence.code },
+    { key: "summary", value: (r) => r.evidence.summary },
+    { key: "cited_by_exposure", value: (r) => r.exposure },
+  ],
+  formats: ["csv", "json"],
+});
+
+// The exposure verdict cites the investigation's evidence, never a question's.
+export function sourceRows(incident: Pick<Incident, "evidence" | "questions" | "report">): SourceRow[] {
+  const cited = new Set(incident.report?.exposure?.rationale.evidenceIds ?? []);
+  return ofKind(incident, "source").map((s) => ({ ...s, exposure: s.source === INVESTIGATION && cited.has(s.evidence.id) }));
+}
+
 // The investigation as it ran: how it ran (provider, model, tokens) first,
 // then the model's thoughts and its tool calls in time order, as the
 // timeline's step-by-step view lays them out.

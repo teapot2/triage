@@ -32,7 +32,7 @@ import {
   CodeBlockTitle,
   CodeBlockWrapButton,
 } from "@/components/ai-elements/code-block";
-import { Badge } from "@/components/ui/badge";
+import { ResultChip } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -316,10 +316,12 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
     case "log":
       return (
         <>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs">
             <LogLevelBadge level={evidence.level} />
-            <Badge variant="outline">{evidence.service}</Badge>
-            {evidence.count && <Badge variant="outline">{evidence.count} occurrences</Badge>}
+            <span>
+              {evidence.service}
+              {evidence.count && ` · ${evidence.count} occurrences`}
+            </span>
           </div>
           <pre className="whitespace-pre-wrap rounded-md border bg-muted/40 p-3 font-mono text-xs">
             {evidence.message}
@@ -334,10 +336,11 @@ function EvidenceBody({ evidence }: { evidence: Evidence }) {
     case "span":
       return (
         <>
-          <div className="flex gap-2">
-            <Badge variant={evidence.status === "error" ? "destructive" : "secondary"}>{evidence.status}</Badge>
-            <Badge variant="outline">{evidence.service}</Badge>
-            <Badge variant="outline">{formatDuration(evidence.durationMs)}</Badge>
+          <div className="flex items-center gap-2 text-muted-foreground text-xs">
+            <ResultChip tone={evidence.status === "error" ? "destructive" : "muted"}>{evidence.status}</ResultChip>
+            <span>
+              {evidence.service} · {formatDuration(evidence.durationMs)}
+            </span>
           </div>
           <Field label="Span">
             <span className="font-mono">{evidence.name}</span>

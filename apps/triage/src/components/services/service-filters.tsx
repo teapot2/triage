@@ -1,6 +1,7 @@
 import { CircleDotIcon, RadioTowerIcon } from "lucide-react";
 import type { FilterFacet, FilterValues } from "@/components/list-controls/filter-menu";
 import { StatusBadgeDot, type StatusTone } from "@/components/ui/badge";
+import type { AdvisorySeverity } from "@/lib/investigation/dependencies/model";
 import type { IncidentStatus } from "@/lib/investigation/schema";
 
 // Search, filters and sort for the Services page, on the app's shared list
@@ -16,6 +17,9 @@ export type ServiceRow = {
   // The most recently run incident. A replay keeps its recording's
   // detectedAt, so "latest" goes by when the investigation ran.
   latest?: { id: string; status: IncidentStatus; headline: string; detectedAt: string; ranAt: string };
+  // Advisories the dependency audit finds now on the service's runtime
+  // dependencies, by severity, for the one service it audits.
+  advisories?: { total: number; worst: AdvisorySeverity };
 };
 
 export const serviceSorts = [

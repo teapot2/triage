@@ -49,6 +49,12 @@ describe("recovered", () => {
     assert.equal(next?.resolvedAt, undefined);
   });
 
+  it("leaves a merged dependency fix's verification running: the audits judge it", () => {
+    const deps: Verification = { ...verification, after: "dependencies", windowMinutes: 1, threshold: 1, series: [] };
+    const next = recovered(incident({ ...recovery, status: "recovered" }, deps), now);
+    assert.equal((next ?? incident({ ...recovery, status: "recovered" }, deps)).verification?.status, "verifying");
+  });
+
   it("gives up a recovery watch still running", () => {
     const next = recovered(incident(recovery), now);
     assert.deepEqual(next?.mitigation?.recovery, {

@@ -1,13 +1,16 @@
-import type { Incident, MetricPoint } from "../schema";
-import type {
-  CommitRecord,
-  DbCheck,
-  DbResult,
-  DeployRecord,
-  LogGroup,
-  MetricSeries,
-  SpanRecord,
-  TelemetrySource,
+import type { DependencyAdvisory, Exposure, Incident, MetricPoint } from "../schema";
+import {
+  type CommitRecord,
+  type DbCheck,
+  type DbResult,
+  type DeployRecord,
+  deriveFlagStates,
+  type FlagEvent,
+  flagEventFromMessage,
+  type LogGroup,
+  type MetricSeries,
+  type SpanRecord,
+  type TelemetrySource,
 } from "../source";
 
 // A recorded incident: telemetry as it looked when the alert fired. The
@@ -35,20 +38,31 @@ export interface Scenario {
   deploys: DeployRecord[];
   // The alert's metric after the mitigation, for the simulated apply.
   recovery?: MetricPoint[];
+  // The advisory a dependency scenario's incident carries: it routes the
+  // run to the exposure stage (dependencies/exposure.ts).
+  dependency?: DependencyAdvisory;
   // Ground truth for grading a run (grade.ts). Never reaches the model:
   // createScenarioSource doesn't read it.
   expected?: Expected;
 }
 
 export interface Expected {
-  verdict: "root_cause" | "no_root_cause";
-  // Shopfront paths; the diagnosis must name or cite one of them.
+  // root_cause: a defect to find. no_root_cause: nothing is wrong (a
+  // control). no_defect: the alert is real but nothing is broken, a traffic
+  // rush say, so any verdict hits as long as its words make every point and
+  // no change in the window gets blamed with a mitigation.
+  verdict: "root_cause" | "no_root_cause" | "no_defect";
+  // Shopfront paths; the diagnosis must name or cite one of them. Empty
+  // when no file is to blame.
   rootCauseFiles: string[];
   // Each inner list is one point the diagnosis must make, in any of these
   // words (case-insensitive).
   mustMention: string[][];
-  // The flag to turn off, or the sha to roll back.
-  mitigation?: { kind: "flag_off" | "rollback"; target: string };
+  // The flag to turn off, or the sha to roll back; "none" when proposing
+  // any mitigation is the mistake.
+  mitigation?: { kind: "flag_off" | "rollback"; target: string } | "none";
+  // A dependency scenario's exposure verdict.
+  exposure?: Exposure["verdict"];
 }
 
 const levelRank = { debug: 0, info: 1, warn: 2, error: 3 } as const;
@@ -63,6 +77,7 @@ export function createScenarioSource(s: Scenario): TelemetrySource {
       now: s.now,
       services: s.services,
       metrics: s.metrics.map(({ name, service, unit, description }) => ({ name, service, unit, description })),
+      flags: deriveFlagStates(scenarioFlagEvents(s).filter((e) => e.at <= now)),
     }),
 
     async queryLogs({ service, minLevel, contains, windowMinutes }) {
@@ -118,6 +133,25 @@ export function createScenarioSource(s: Scenario): TelemetrySource {
         .sort((a, b) => Date.parse(b.deployedAt) - Date.parse(a.deployedAt));
     },
   };
+}
+
+const flipWords = /turned (on|off)\b/;
+
+// The flag events a scenario records, from both places it keeps them: its
+// log groups, each standing for its last occurrence, and its config deploy
+// records (`config:FF_X`, "... turned on|off"). A flip recorded in both is
+// applied twice, which changes nothing.
+export function scenarioFlagEvents(s: Scenario): FlagEvent[] {
+  const fromLogs = s.logs.flatMap((l) => {
+    const e = flagEventFromMessage(l.message, l.lastSeen);
+    return e ? [e] : [];
+  });
+  const fromDeploys = s.deploys.flatMap((d): FlagEvent[] => {
+    const m = d.sha.startsWith("config:") ? flipWords.exec(d.message ?? "") : null;
+    if (!m) return [];
+    return [{ at: Date.parse(d.deployedAt), kind: "flip", flag: d.sha.slice("config:".length), enabled: m[1] === "on" }];
+  });
+  return [...fromLogs, ...fromDeploys];
 }
 
 // Deterministic per-minute series ending at `now`, so scenarios stay stable

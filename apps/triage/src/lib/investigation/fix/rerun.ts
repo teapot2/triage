@@ -1,8 +1,9 @@
 import { InvestigationRecorder } from "../recorder";
 import type { FixRun } from "../schema";
 import { sourceFor } from "../source-for";
-import { getIncident, patchIncident, saveIncident } from "../store";
+import { getIncident, patchIncident } from "../store";
 import { runFixStage } from "./agent";
+import { releaseShaOf } from "./release-tree";
 import { errorMessage } from "../../errors";
 import { runStageModel } from "../../models/settings";
 
@@ -29,10 +30,10 @@ export async function rerunFix(id: string, appDir: string): Promise<void> {
       return;
     }
     const feedback = (incident.fixAttempts ?? []).map((a) => ({ reason: a.approval.reason ?? "", patch: a.fix.patch }));
-    const recorder = new InvestigationRecorder(incident, saveIncident);
+    const recorder = new InvestigationRecorder(incident);
     // A promoted re-run's own fix model, else Settings'.
     const stage = await runStageModel("fix", incident.models?.fix);
-    await runFixStage(recorder, source, appDir, { feedback, stage });
+    await runFixStage(recorder, source, appDir, { feedback, stage, releaseSha: releaseShaOf(incident) });
     await recorder.flush();
   } catch (err) {
     console.error("[triage] fix rerun failed", id, err);
