@@ -23,6 +23,8 @@ const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // One commit message per release, in the team's voice: it shows in git log.
 const messages: Record<string, string> = {
   "formatted-price": "feat(shopfront): return a formatted price from the product API",
+  "journal-copy": "chore(shopfront): reword the journal page intro",
+  "vulnerable-dep": "feat(shopfront): report the Node runtime and its engines check on /api/health",
 };
 
 async function git(args: string[], env?: Record<string, string>) {
@@ -59,7 +61,10 @@ async function main() {
   const env = { GIT_INDEX_FILE: path.join(dir, "index") };
   try {
     await git(["read-tree", base], env);
-    await git(["apply", "--cached", patch], env);
+    // From the repo root: run in the app, git apply would skip the paths
+    // outside it, the workspace lockfile among them.
+    const root = await git(["rev-parse", "--show-toplevel"]);
+    await git(["-C", root, "apply", "--cached", patch], env);
     const tree = await git(["write-tree"], env);
 
     // Same parent and same tree: the branch is already this release.

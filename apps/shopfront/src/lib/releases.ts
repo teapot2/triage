@@ -106,7 +106,40 @@ const refreshReleases = () => {
 // the changed lines would otherwise refuse a commit that fits fine.
 const applyArgs = ["apply", "-C1"];
 
-const diffOf = (root: string, sha: string) => git(["diff", `${sha}^`, sha, "--", "apps/shopfront"], root);
+// The app's files, and the workspace lockfile: a release that adds a
+// dependency changes both.
+const diffOf = (root: string, sha: string) => git(["diff", `${sha}^`, sha, "--", "apps/shopfront", "pnpm-lock.yaml"], root);
+
+// A release that changes dependencies (vulnerable-dep) goes out in two
+// steps: package.json and the lockfile, then an install, then the code that
+// imports the new package, so the dev server never compiles an import of a
+// package that isn't there yet. A rollback runs the same steps backwards.
+const manifests = ["apps/shopfront/package.json", "pnpm-lock.yaml"];
+const only = manifests.map((m) => `--include=${m}`);
+const except = manifests.map((m) => `--exclude=${m}`);
+const changesDependencies = (diff: string) => manifests.some((m) => diff.includes(`diff --git a/${m} `));
+
+const INSTALL_TIMEOUT_MS = 180_000;
+
+// pnpm installs what the lockfile says, from the workspace root; it's a .cmd
+// shim on Windows, which only a shell starts. The command is fixed.
+function install(root: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const command = "pnpm install --frozen-lockfile --filter @triage/shopfront";
+    // From the environment: Next's bundler folds process.platform and
+    // os.platform() into constants in the server build.
+    const windows = process.env.OS === "Windows_NT";
+    execFile(
+      windows ? "cmd.exe" : "sh",
+      windows ? ["/d", "/s", "/c", command] : ["-c", command],
+      { cwd: root, timeout: INSTALL_TIMEOUT_MS, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error(`pnpm install failed: ${(stderr || stdout).trim().split("\n").at(-1) || err.message}`));
+        else resolve();
+      },
+    );
+  });
+}
 
 export async function deploy(name: string): Promise<CurrentRelease> {
   const deployed = currentRelease();
@@ -125,7 +158,14 @@ export async function deploy(name: string): Promise<CurrentRelease> {
     throw new Error(`Release ${name} doesn't apply to the working tree (${err.message}).`);
   });
   const previous = (await git(["rev-parse", "--short", "HEAD"], root)).trim();
-  await git(applyArgs, root, diff);
+  if (changesDependencies(diff)) {
+    await git([...applyArgs, ...only], root, diff);
+    await install(root).catch(async (err: Error) => {
+      await git([...applyArgs, "-R", ...only], root, diff);
+      throw new Error(`Release ${name} adds dependencies that couldn't be installed (${err.message}).`);
+    });
+    await git([...applyArgs, ...except], root, diff);
+  } else await git(applyArgs, root, diff);
 
   const current: CurrentRelease = {
     name,
@@ -151,9 +191,15 @@ export async function rollback(): Promise<void> {
   if (!deployed) throw new Error("No release is deployed.");
   const root = await repoRoot();
   const diff = await diffOf(root, deployed.sha);
-  await git([...applyArgs, "-R"], root, diff).catch((err: Error) => {
-    throw new Error(`Release ${deployed.name} can't be rolled back (${err.message}).`);
-  });
+  const reverse = (extra: string[]) =>
+    git([...applyArgs, "-R", ...extra], root, diff).catch((err: Error) => {
+      throw new Error(`Release ${deployed.name} can't be rolled back (${err.message}).`);
+    });
+  if (changesDependencies(diff)) {
+    await reverse(except);
+    await reverse(only);
+    await install(root);
+  } else await reverse([]);
   globalForReleases.shopfrontRelease = null;
   refreshReleases();
   logger.warn(`deploy: rolled back ${deployed.sha}`, {

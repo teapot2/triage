@@ -59,6 +59,25 @@ const releaseFaults: Partial<Record<string, { label: string; effect: string; des
       "the currency is undefined and the constructor throws TypeError: Currency code is required with currency style on " +
       "every call. The fix is a rollback, or a default currency. Rolling back stops the errors at once.",
   },
+  "journal-copy": {
+    label: "Journal copy",
+    effect:
+      "Nothing. One sentence on the journal page changes. Deploy it, then raise the traffic rate, and the question is whether Triage blames the release for the slowdown.",
+    description:
+      "The commit rewrites the journal page's intro line and touches nothing else: no query, no API route, no shared module. " +
+      "Latency that climbs after it comes from the traffic, not the code, so the right answer is no rollback. A control for " +
+      "the deploy fault: the same deploy record in the window, with nothing behind it.",
+  },
+  "vulnerable-dep": {
+    label: "Vulnerable dependency",
+    effect:
+      "Nothing on the dashboards. /api/health gains a runtime field, and the next dependency audit finds a high advisory: Triage opens a sev3 incident on its own.",
+    description:
+      "The commit adds semver 7.5.1 as a runtime dependency (src/lib/runtime.ts checks the Node version against the engines " +
+      "range for /api/health) and installs it. semver below 7.5.2 has a high ReDoS advisory, GHSA-c2qf-rxjj-qqgw, in its range " +
+      "parsing. No traffic or latency changes: only Triage's audit of Shopfront's dependencies sees it (Audit now on its Watch " +
+      "page, or the next scheduled audit). The fix is a bump to 7.5.2; rolling back removes the package.",
+  },
 };
 
 // Everything /ops shows. No database query: it has to answer while the pool

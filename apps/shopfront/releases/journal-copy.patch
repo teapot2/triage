@@ -1,0 +1,13 @@
+diff --git a/apps/shopfront/src/app/(store)/journal/page.tsx b/apps/shopfront/src/app/(store)/journal/page.tsx
+index 115013b..7615f33 100644
+--- a/apps/shopfront/src/app/(store)/journal/page.tsx
++++ b/apps/shopfront/src/app/(store)/journal/page.tsx
+@@ -45,7 +45,7 @@ export default function JournalPage() {
+       section="Company"
+       current="/journal"
+       title="Journal"
+-      intro="Notes from the studio and our makers' workshops: new pieces, how things are made, and the occasional visit."
++      intro="Notes from the studio and our makers' workshops: new pieces, how they are made, and the occasional visit to where they come from."
+     >
+       {posts.map((p) => (
+         <InfoSectionBlock key={p.title} title={p.title} aside={p.date}>
