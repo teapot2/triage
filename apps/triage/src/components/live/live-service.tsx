@@ -20,6 +20,8 @@ import { WatchHeader } from "@/components/watch/watch-header";
 import { useLivePoll } from "@/hooks/use-live-poll";
 import { useStartInvestigation } from "@/hooks/use-start-investigation";
 import { LIVE_ID } from "@/lib/investigation/options";
+import { budgetText } from "@/lib/slo/model";
+import { ErrorBudgets } from "./error-budgets";
 import { TraceSheet } from "./trace-sheet";
 import type { ChartPoint } from "@/lib/investigation/schema";
 import {
@@ -213,6 +215,9 @@ export function LiveService({ service }: { service: string }) {
               empty="No connection pool readings in this window"
             />
           </div>
+          {/* The SLOs' budgets reach back days, past the page's window, so
+              they sit apart from its charts, above the routes they cover. */}
+          {snapshot.slos.length > 0 && <ErrorBudgets slos={snapshot.slos} exportAs={exportAs} />}
           <Section title="Routes">
             <RouteTable routes={snapshot.routes} />
           </Section>
@@ -605,6 +610,8 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
     return <p className="text-muted-foreground text-sm">No requests in this window.</p>;
   }
   const sorted = [...routes].sort((a, b) => b[sort] - a[sort]);
+  // Only when an SLO covers a route here.
+  const budgets = routes.some((r) => r.budgetLeftPercent !== undefined);
   const header = (key: RouteSort, label: string) => (
     <TableHead className="text-right" aria-sort={sort === key ? "descending" : undefined}>
       <button
@@ -628,6 +635,7 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
             <TableHead className="text-right">Per second</TableHead>
             {header("p95Ms", "p95")}
             {header("errorPercent", "Errors")}
+            {budgets && <TableHead className="text-right">Budget</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -658,6 +666,16 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
               >
                 {r.errorPercent}%
               </TableCell>
+              {budgets && (
+                <TableCell
+                  className={cn(
+                    "text-right font-mono text-xs tabular-nums",
+                    r.budgetLeftPercent !== undefined && r.budgetLeftPercent < 0 && "text-destructive",
+                  )}
+                >
+                  {r.budgetLeftPercent === undefined ? "—" : budgetText(r.budgetLeftPercent)}
+                </TableCell>
+              )}
             </TableRow>
           ))}
         </TableBody>

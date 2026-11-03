@@ -36,6 +36,35 @@ export const SLOW_BURN_HOLD_MS = 5 * 60_000;
 // SLOW_BURN_SEVERITY, timed in `held` (keyed "rule|route|slow", kept by the
 // caller across checks). A fast burn anywhere wins the trip. The short
 // windows are the debounce, and clear an alert soon after the burn stops.
+// One route of an SLO rule at `now`: whether any alert judged it (had
+// minRequests in its long window), the alert firing on it, if any (both its
+// windows over its threshold, the fastest first), and what's left of its
+// budget. Shared with the service page's budgets (budget.ts).
+export function judgeRoute(
+  rule: WatchRule,
+  route: string,
+  counts: CountsFn,
+  now: number,
+): { judged: boolean; firing?: Firing; left: number } {
+  const c = rule.condition;
+  if (c.metric !== "slo") throw new Error(`${rule.id} isn't an SLO rule`);
+  const over = (ms: number) => counts(route, now - ms, now, c.latencyMs);
+  let judged = false;
+  let firing: Firing | undefined;
+  const left = budgetLeftPercent(over(c.windowDays * DAY), c.objectivePercent);
+  for (const alert of burnAlerts) {
+    const long = over(alert.longMs);
+    if (long.total < rule.minRequests) continue;
+    judged = true;
+    const threshold = burnThreshold(alert, c.windowDays);
+    const rate = burnRate(long, c.objectivePercent);
+    if (firing || rate <= threshold) continue;
+    if (burnRate(over(alert.shortMs), c.objectivePercent) <= threshold) continue;
+    firing = { alert, rate, threshold, longMs: alert.longMs, shortMs: alert.shortMs, budgetLeftPercent: left };
+  }
+  return { judged, firing, left };
+}
+
 export function evaluateSloRule(
   rule: WatchRule,
   routes: { route: string; method: string }[],
@@ -44,9 +73,7 @@ export function evaluateSloRule(
   held: Map<string, number> = new Map(),
 ): RuleResult {
   if (!rule.enabled) return { status: "paused" };
-  const c = rule.condition;
-  if (c.metric !== "slo") throw new Error(`${rule.id} isn't an SLO rule`);
-  const over = (route: string, ms: number) => counts(route, now - ms, now, c.latencyMs);
+  if (rule.condition.metric !== "slo") throw new Error(`${rule.id} isn't an SLO rule`);
 
   let anyOk = false;
   // The worst burn firing, and the worst that may open an incident.
@@ -55,19 +82,7 @@ export function evaluateSloRule(
   let lowest: { route: string; left: number } | undefined;
   for (const { route, method } of routes) {
     if (!matchesTarget(rule.target, route)) continue;
-    let judged = false;
-    let firing: Firing | undefined;
-    const left = budgetLeftPercent(over(route, c.windowDays * DAY), c.objectivePercent);
-    for (const alert of burnAlerts) {
-      const long = over(route, alert.longMs);
-      if (long.total < rule.minRequests) continue;
-      judged = true;
-      const threshold = burnThreshold(alert, c.windowDays);
-      const rate = burnRate(long, c.objectivePercent);
-      if (firing || rate <= threshold) continue;
-      if (burnRate(over(route, alert.shortMs), c.objectivePercent) <= threshold) continue;
-      firing = { alert, rate, threshold, longMs: alert.longMs, shortMs: alert.shortMs, budgetLeftPercent: left };
-    }
+    const { judged, firing, left } = judgeRoute(rule, route, counts, now);
     const key = `${rule.id}|${route}|slow`;
     if (firing?.alert.speed !== "slow") held.delete(key);
     else if (!held.has(key)) held.set(key, now);
