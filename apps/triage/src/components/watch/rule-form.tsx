@@ -29,6 +29,17 @@ import {
   type WatchRule,
   type WatchTarget,
 } from "@/lib/investigation/watch-rule-model";
+import {
+  alertText,
+  allowanceText,
+  burnAlerts,
+  LATENCY_BUCKETS,
+  type LatencyBucket,
+  SLO_OBJECTIVES,
+  SLO_WINDOW_DAYS,
+  SLOW_BURN_SEVERITY,
+  type SloWindowDays,
+} from "@/lib/slo/model";
 import { BacktestResult, ReadBack, sentence, updateRules, useBacktest, windowLabel } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
@@ -76,6 +87,11 @@ type Draft = {
   checksToOpen: string;
   minRequests: string;
   severity: WatchRule["severity"];
+  // An SLO's, as its Selects hold them; good is "any" for every request
+  // that succeeds, or the latency it must succeed within.
+  objective: string;
+  windowDays: string;
+  good: string;
 };
 
 function toDraft(r: WatchRule): Draft {
@@ -92,6 +108,9 @@ function toDraft(r: WatchRule): Draft {
     checksToOpen: String(r.checksToOpen),
     minRequests: String(r.minRequests),
     severity: r.severity,
+    objective: String(c.metric === "slo" ? c.objectivePercent : 99.9),
+    windowDays: String(c.metric === "slo" ? c.windowDays : 30),
+    good: c.metric !== "slo" ? "500" : c.latencyMs === undefined ? "any" : String(c.latencyMs),
   };
 }
 
@@ -114,7 +133,7 @@ function fromDraft(d: Draft, base: WatchRule): { rule?: WatchRule; errors: Parti
   const ms = parseNumber(d.ms, 1, 600_000, true);
   const count = parseNumber(d.count, 0, 100_000, true);
   const percent = parseNumber(d.percent, 0, 100, false);
-  if (d.metric !== "errorRate" && ms === undefined) errors.ms = "A whole number of milliseconds, from 1 to 600000.";
+  if (d.metric !== "errorRate" && d.metric !== "slo" && ms === undefined) errors.ms = "A whole number of milliseconds, from 1 to 600000.";
   if (d.metric === "slowCount" && count === undefined) errors.count = "A whole number of requests.";
   if ((d.metric === "slowShare" || d.metric === "errorRate") && percent === undefined) errors.percent = "A percentage from 0 to 100.";
   const checksToOpen = parseNumber(d.checksToOpen, 1, 10, true);
@@ -131,7 +150,14 @@ function fromDraft(d: Draft, base: WatchRule): { rule?: WatchRule; errors: Parti
         ? { metric: "slowCount", slowerThanMs: ms!, moreThan: count! }
         : d.metric === "slowShare"
           ? { metric: "slowShare", slowerThanMs: ms!, moreThanPercent: percent! }
-          : { metric: "errorRate", moreThanPercent: percent! };
+          : d.metric === "errorRate"
+            ? { metric: "errorRate", moreThanPercent: percent! }
+            : {
+                metric: "slo",
+                objectivePercent: Number(d.objective),
+                windowDays: Number(d.windowDays) as SloWindowDays,
+                ...(d.good === "any" ? {} : { latencyMs: Number(d.good) as LatencyBucket }),
+              };
   const parsed = ruleSchema.safeParse({
     ...base,
     name,
@@ -227,6 +253,11 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
   const windows = windowOptions.includes(draft.windowSeconds)
     ? windowOptions
     : [...windowOptions, draft.windowSeconds].sort((a, b) => a - b);
+  // A rule saved by hand can hold an objective the list doesn't.
+  const objectives: number[] = (SLO_OBJECTIVES as readonly number[]).includes(Number(draft.objective))
+    ? [...SLO_OBJECTIVES]
+    : [...SLO_OBJECTIVES, Number(draft.objective)].sort((a, b) => a - b);
+  const isSlo = draft.metric === "slo";
 
   return (
     <div className="flex flex-col gap-6">
@@ -345,6 +376,62 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
               />
             </FormField>
           )}
+          {isSlo && (
+            <FormField label="Good when" htmlFor={`${id}-good`}>
+              <Select value={draft.good} onValueChange={(v) => set("good", v)}>
+                <SelectTrigger id={`${id}-good`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">It succeeds</SelectItem>
+                  {LATENCY_BUCKETS.map((ms) => (
+                    <SelectItem key={ms} value={String(ms)}>
+                      It succeeds within {ms} ms
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          )}
+          {/* An objective and its window read as a pair: "99.9% over 30
+              days". What that leaves to spend is the hint, since it's the
+              number people weigh an objective by. */}
+          {isSlo && (
+            <FormField
+              label="Objective"
+              htmlFor={`${id}-objective`}
+              hint={`Leaves ${allowanceText(Number(draft.objective), Number(draft.windowDays))}.`}
+            >
+              <Select value={draft.objective} onValueChange={(v) => set("objective", v)}>
+                <SelectTrigger id={`${id}-objective`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {objectives.map((o) => (
+                    <SelectItem key={o} value={String(o)}>
+                      {o}% of requests good
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          )}
+          {isSlo && (
+            <FormField label="Over" htmlFor={`${id}-days`}>
+              <Select value={draft.windowDays} onValueChange={(v) => set("windowDays", v)}>
+                <SelectTrigger id={`${id}-days`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SLO_WINDOW_DAYS.map((days) => (
+                    <SelectItem key={days} value={String(days)}>
+                      The last {days} days
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          )}
           {draft.metric === "errorRate" && (
             <FormField label="Error rate above" htmlFor={`${id}-percent`} error={shown.percent}>
               <NumberInput
@@ -356,33 +443,57 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
               />
             </FormField>
           )}
-          <FormField label="Judged over" htmlFor={`${id}-window`}>
-            <Select value={String(draft.windowSeconds)} onValueChange={(v) => set("windowSeconds", Number(v))}>
-              <SelectTrigger id={`${id}-window`} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {windows.map((s) => (
-                  <SelectItem key={s} value={String(s)}>
-                    The last {windowLabel(s)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FormField>
+          {/* An SLO is judged over its alerts' windows, not one of these. */}
+          {!isSlo && (
+            <FormField label="Judged over" htmlFor={`${id}-window`}>
+              <Select value={String(draft.windowSeconds)} onValueChange={(v) => set("windowSeconds", Number(v))}>
+                <SelectTrigger id={`${id}-window`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {windows.map((s) => (
+                    <SelectItem key={s} value={String(s)}>
+                      The last {windowLabel(s)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+          )}
         </FormSection>
 
         <FormSection title="Opens an incident">
-          <FormField label="After" htmlFor={`${id}-checks`} error={shown.checksToOpen} hint="The watch checks every 10 seconds.">
-            <NumberInput
-              id={`${id}-checks`}
-              unit="checks in a row"
-              value={draft.checksToOpen}
-              onChange={(v) => set("checksToOpen", v)}
-              invalid={Boolean(shown.checksToOpen)}
-            />
-          </FormField>
-          <FormField label="Severity" htmlFor={`${id}-severity`}>
+          {/* An SLO's alerts are the SRE Workbook's, fixed: read back, not
+              edited. Each needs both its windows burning past the rate. */}
+          {isSlo ? (
+            <FormField label="When its budget burns" info="Over both windows, so an alert stops soon after the burn does. 1× spends exactly the budget over the objective's window.">
+              <p className="py-1.5 text-sm">
+                {burnAlerts
+                  .filter((a) => a.speed === "fast")
+                  .map((a) => alertText(a, Number(draft.windowDays)))
+                  .join(", or ")}
+              </p>
+            </FormField>
+          ) : (
+            <FormField label="After" htmlFor={`${id}-checks`} error={shown.checksToOpen} hint="The watch checks every 10 seconds.">
+              <NumberInput
+                id={`${id}-checks`}
+                unit="checks in a row"
+                value={draft.checksToOpen}
+                onChange={(v) => set("checksToOpen", v)}
+                invalid={Boolean(shown.checksToOpen)}
+              />
+            </FormField>
+          )}
+          <FormField
+            label="Severity"
+            htmlFor={`${id}-severity`}
+            hint={
+              isSlo
+                ? `A slow burn (${alertText(burnAlerts[2], Number(draft.windowDays))}) opens a ${SLOW_BURN_SEVERITY.toUpperCase()}.`
+                : undefined
+            }
+          >
             <Select value={draft.severity} onValueChange={(v) => set("severity", v as WatchRule["severity"])}>
               <SelectTrigger id={`${id}-severity`} className="w-full">
                 <SelectValue />
@@ -404,13 +515,13 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
           <FormAdvanced
             open={advanced}
             onOpenChange={setAdvanced}
-            summary={`Judges a route with at least ${draft.minRequests === "1" ? "1 request" : `${draft.minRequests} requests`} in the window`}
+            summary={`Judges a route with at least ${draft.minRequests === "1" ? "1 request" : `${draft.minRequests} requests`} in ${isSlo ? "an alert's long window" : "the window"}`}
           >
             <FormField
               label="Minimum requests"
               htmlFor={`${id}-min`}
               error={shown.minRequests}
-              hint="A route with fewer in the window isn't judged."
+              hint={isSlo ? "An alert doesn't judge a route with fewer in its long window." : "A route with fewer in the window isn't judged."}
             >
               <NumberInput
                 id={`${id}-min`}
@@ -423,7 +534,7 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
           </FormAdvanced>
         )}
 
-        {unnamed && <BacktestResult backtest={backtest} checksToOpen={unnamed.checksToOpen} />}
+        {unnamed && <BacktestResult backtest={backtest} rule={unnamed} />}
 
         {error && (
           <Alert key={error} variant="destructive" dismissible dismissLabel="Dismiss error" onDismiss={() => setError(undefined)}>

@@ -137,25 +137,45 @@ export type Backtest = {
 };
 
 // Replays the watch's checks for one rule over past requests, every CHECK_MS
-// from `from` to `to`, with the live watch's streaks and episodes: once it
-// fires it stays quiet until HEALTHY_TO_REARM healthy checks. It judges the
-// rule on its own, as if it were the only one. `samples` must be sorted by
-// start.
+// from `from` to `to`, with the live watch's streaks and episodes (replay).
+// It judges the rule on its own, as if it were the only one. `samples` must
+// be sorted by start.
 export function backtestRule(rule: WatchRule, samples: RequestSample[], from: number, to: number): Backtest {
   const live = { ...rule, enabled: true };
   const windowMs = rule.windowSeconds * 1000;
   const streaks = new Map<string, number>();
+  // The window slides forward with the checks: samples[lo, hi) are in it.
+  let lo = 0;
+  let hi = 0;
+  const result = replay(
+    from,
+    to,
+    (t) => {
+      while (hi < samples.length && samples[hi].start <= t) hi++;
+      while (lo < hi && samples[lo].start <= t - windowMs) lo++;
+      return evaluateRule(live, samples.slice(lo, hi), t, streaks);
+    },
+    () => streaks.clear(),
+  );
+  return { ...result, dataFrom: dataFrom(from, samples.find((s) => s.start > from)?.start) };
+}
+
+// The watch's checks replayed every CHECK_MS from `from` to `to` with its
+// episodes: once a check trips it stays quiet until HEALTHY_TO_REARM healthy
+// checks, then `rearm` runs. `check` judges the rule as of a time, and is
+// called with each in order. Shared with the SLO backtest (slo/backtest).
+export function replay(
+  from: number,
+  to: number,
+  check: (t: number) => RuleResult,
+  rearm?: () => void,
+): Omit<Backtest, "dataFrom"> {
   const fired: Backtest["fired"] = [];
   let [checks, judged, breaching] = [0, 0, 0];
   let alerting = false;
   let healthy = 0;
-  // The window slides forward with the checks: samples[lo, hi) are in it.
-  let lo = 0;
-  let hi = 0;
   for (let t = from + CHECK_MS; t <= to; t += CHECK_MS) {
-    while (hi < samples.length && samples[hi].start <= t) hi++;
-    while (lo < hi && samples[lo].start <= t - windowMs) lo++;
-    const r = evaluateRule(live, samples.slice(lo, hi), t, streaks);
+    const r = check(t);
     checks++;
     if (r.status !== "idle") judged++;
     if (r.status === "breaching") breaching++;
@@ -164,7 +184,7 @@ export function backtestRule(rule: WatchRule, samples: RequestSample[], from: nu
       if (healthy >= HEALTHY_TO_REARM) {
         alerting = false;
         healthy = 0;
-        streaks.clear();
+        rearm?.();
       }
     } else if (r.trip) {
       fired.push({ at: new Date(t).toISOString(), route: r.trip.route, summary: r.summary });
@@ -172,14 +192,10 @@ export function backtestRule(rule: WatchRule, samples: RequestSample[], from: nu
       healthy = 0;
     }
   }
-  const oldest = samples.find((s) => s.start > from)?.start;
-  return {
-    fired,
-    checks,
-    judged,
-    breaching,
-    from: new Date(from).toISOString(),
-    to: new Date(to).toISOString(),
-    dataFrom: oldest !== undefined && oldest - from > 5 * 60_000 ? new Date(oldest).toISOString() : undefined,
-  };
+  return { fired, checks, judged, breaching, from: new Date(from).toISOString(), to: new Date(to).toISOString() };
 }
+
+// The oldest data in range, when it's well after `from`: the history doesn't
+// reach back that far.
+export const dataFrom = (from: number, oldest: number | undefined) =>
+  oldest !== undefined && oldest - from > 5 * 60_000 ? new Date(oldest).toISOString() : undefined;

@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { IncidentStatus } from "@/lib/investigation/schema";
 import { conditionText, describeRule, targetText, type WatchRule } from "@/lib/investigation/watch-rule-model";
+import { alertText, allowanceText, burnAlerts, SLOW_BURN_SEVERITY } from "@/lib/slo/model";
 import { BacktestResult, liveBadge, plural, sentence, updateRules, useBacktest, useWatchState, windowLabel } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
@@ -27,6 +28,7 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
   const watch = useWatchState();
   const live = watch?.rules.find((r) => r.id === rule.id);
   const backtest = useBacktest(rule);
+  const slo = rule.condition.metric === "slo" ? rule.condition : undefined;
 
   async function toggle() {
     setToggling(true);
@@ -96,7 +98,7 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
             )}
           </Section>
 
-          <BacktestResult backtest={backtest} checksToOpen={rule.checksToOpen} />
+          <BacktestResult backtest={backtest} rule={rule} />
 
           <Section title="Incidents it opened">
             {incidents.length === 0 ? (
@@ -129,13 +131,36 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
               {rule.target.kind === "route" ? <span className="font-mono text-xs">{rule.target.route}</span> : sentence(targetText(rule.target))}
             </Fact>
             <Fact label="Condition">{sentence(conditionText(rule.condition))}</Fact>
-            <Fact label="Judged over">The last {windowLabel(rule.windowSeconds)}</Fact>
-            <Fact label="Opens an incident after">
-              {plural(rule.checksToOpen, "check", "checks")} in a row
-              <span className="text-muted-foreground"> ({rule.checksToOpen * 10} seconds)</span>
-            </Fact>
+            {slo ? (
+              <>
+                <Fact label="Error budget">{sentence(allowanceText(slo.objectivePercent, slo.windowDays))}</Fact>
+                <Fact label="Opens an incident when it burns">
+                  {sentence(
+                    burnAlerts
+                      .filter((a) => a.speed === "fast")
+                      .map((a) => alertText(a, slo.windowDays))
+                      .join(", or "),
+                  )}
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({SLOW_BURN_SEVERITY.toUpperCase()} at {alertText(burnAlerts[2], slo.windowDays)})
+                  </span>
+                </Fact>
+              </>
+            ) : (
+              <>
+                <Fact label="Judged over">The last {windowLabel(rule.windowSeconds)}</Fact>
+                <Fact label="Opens an incident after">
+                  {plural(rule.checksToOpen, "check", "checks")} in a row
+                  <span className="text-muted-foreground"> ({rule.checksToOpen * 10} seconds)</span>
+                </Fact>
+              </>
+            )}
             {rule.condition.metric !== "slowCount" && (
-              <Fact label="Minimum requests">{plural(rule.minRequests, "request", "requests")} per route</Fact>
+              <Fact label="Minimum requests">
+                {plural(rule.minRequests, "request", "requests")} per route
+                {slo ? ", in an alert's long window" : ""}
+              </Fact>
             )}
             <Fact label="Severity">
               <span className="flex items-center gap-1.5">

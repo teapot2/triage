@@ -100,7 +100,8 @@ export async function updateRules(
 
 export type BacktestState = { loading: boolean; data?: Backtest; error?: string };
 
-// Replays a rule over the last 3 hours of telemetry, half a second after it
+// Replays a rule over the last 3 hours of telemetry (24 hours of request
+// counts for an SLO), half a second after it
 // last changed, cancelling a replay still in flight. Keyed on what decides
 // when it fires, so renaming it doesn't replay. While a new replay runs, the
 // last result stays, to show dimmed.
@@ -143,12 +144,16 @@ function span(ms: number): string {
 // when, or why there's nothing to say. Laid out like the forms' sections, a
 // title over a plain bordered box, with the incidents it would have opened as
 // rows under the verdict, like a rule's list of the ones it did. When the
-// telemetry is younger than 3 hours, the title says how far it reaches.
-export function BacktestResult({ backtest, checksToOpen }: { backtest: BacktestState; checksToOpen: number }) {
+// telemetry is younger than the range, the title says how far it reaches.
+// An SLO rule replays the last 24 hours of request counts instead of the
+// last 3 of telemetry, and opens on its first check over.
+export function BacktestResult({ backtest, rule }: { backtest: BacktestState; rule: WatchRule }) {
   const { loading, data, error } = backtest;
+  const range = rule.condition.metric === "slo" ? "24 hours" : "3 hours";
+  const checksToOpen = rule.condition.metric === "slo" ? 1 : rule.checksToOpen;
   let summary: ReactNode;
   if (error) summary = <p className="text-muted-foreground">Couldn&apos;t replay it: {error}</p>;
-  else if (!data) summary = <p className="text-muted-foreground">Replaying the last 3 hours…</p>;
+  else if (!data) summary = <p className="text-muted-foreground">{`Replaying the last ${range}…`}</p>;
   else if (data.judged === 0) summary = <p>No traffic on the routes it covers, so nothing to judge it on.</p>;
   else {
     const traffic = `${plural(data.judged, "check", "checks")} with traffic`;
@@ -186,7 +191,7 @@ export function BacktestResult({ backtest, checksToOpen }: { backtest: BacktestS
       <h2 className="flex items-center gap-1.5 font-medium text-sm">
         Backtest
         <span className="font-normal text-muted-foreground">
-          {data?.dataFrom ? `· only ${span(Date.parse(data.to) - Date.parse(data.dataFrom))} of telemetry` : "· last 3 hours"}
+          {data?.dataFrom ? `· only ${span(Date.parse(data.to) - Date.parse(data.dataFrom))} of telemetry` : `· last ${range}`}
         </span>
         {loading && <LoaderCircleIcon className="size-3.5 animate-spin text-muted-foreground" aria-label="Replaying" />}
       </h2>

@@ -75,7 +75,8 @@ type Internal = Omit<WatchState, "rules" | "endpoints" | "dependencies"> & {
   timer?: ReturnType<typeof setInterval>;
   checking: boolean;
   healthy: number;
-  // Checks in a row over the limit, per rule and route ("api-latency|/api/x").
+  // Checks in a row over the limit, per rule and route ("api-latency|/api/x"),
+  // and when an SLO's slow burn started firing ("api-slo|/api/x|slow").
   streaks: Map<string, number>;
   // Rules that tripped during the open episode.
   tripped: Set<string>;
@@ -171,7 +172,7 @@ async function check() {
       (rule): { rule: WatchRule } & RuleResult => ({
         rule,
         ...(rule.condition.metric === "slo"
-          ? evaluateSloRule(rule, sloRoutes, counts, now)
+          ? evaluateSloRule(rule, sloRoutes, counts, now, state.streaks)
           : evaluateRule(rule, samples, now, state.streaks)),
       }),
     );

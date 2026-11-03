@@ -13,7 +13,7 @@ import {
   tripTitle,
   type WatchRule,
 } from "../investigation/watch-rule-model";
-import { evaluateSloRule } from "./judge";
+import { evaluateSloRule, SLOW_BURN_HOLD_MS } from "./judge";
 import { budgetLeftPercent, burnAlerts, burnRate, burnText, burnThreshold, durationText } from "./model";
 import type { CountsFn } from "./rollups";
 
@@ -132,15 +132,26 @@ describe("evaluateSloRule", () => {
     assert.equal(r.trip?.burn?.threshold, 6);
   });
 
-  it("leaves a big outage to the slow alert once the 30 minutes are clean, at sev4", () => {
-    const r = evaluateSloRule(
-      slo(),
-      [api("/api/a")],
-      counts({ "/api/a": { perMinute: 1000, bad: 500, badFrom: 45, badTo: 35 } }),
-      now,
-    );
+  it("leaves a big outage to the slow alert once the 30 minutes are clean, at sev4 once it has held", () => {
+    const traffic = counts({ "/api/a": { perMinute: 1000, bad: 500, badFrom: 45, badTo: 35 } });
+    const held = new Map<string, number>();
+    const first = evaluateSloRule(slo(), [api("/api/a")], traffic, now, held);
+    // Firing, not yet opening: a fast burn starting now would trip first.
+    assert.equal(first.status, "breaching");
+    assert.equal(first.trip, undefined);
+    assert.equal(first.checks, undefined);
+    assert.match(first.summary!, /^burning 1.2× over 3 days on \/api\/a/);
+    assert.deepEqual([...held], [["api-slo|/api/a|slow", now]]);
+
+    const r = evaluateSloRule(slo(), [api("/api/a")], traffic, now, new Map([["api-slo|/api/a|slow", now - SLOW_BURN_HOLD_MS]]));
     assert.equal(r.trip?.burn?.longMs, 3 * DAY);
     assert.equal(r.trip?.severity, "sev4");
+  });
+
+  it("forgets a slow burn's start once it stops firing", () => {
+    const held = new Map([["api-slo|/api/a|slow", now - HOUR]]);
+    evaluateSloRule(slo(), [api("/api/a")], counts({ "/api/a": { perMinute: 1000 } }), now, held);
+    assert.equal(held.size, 0);
   });
 
   it("stays quiet on a blip that spends little of the budget", () => {
@@ -155,6 +166,7 @@ describe("evaluateSloRule", () => {
       [api("/api/a")],
       counts({ "/api/a": { perMinute: 1, bad: 1, badFrom: 30 } }),
       now,
+      new Map([["api-slo|/api/a|slow", now - SLOW_BURN_HOLD_MS]]),
     );
     // Only the 3-day window has 4000 requests, so only the slow alert
     // judges it.

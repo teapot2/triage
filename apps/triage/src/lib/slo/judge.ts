@@ -15,24 +15,33 @@ import type { CountsFn } from "./rollups";
 
 // How the watch judges an SLO rule: on how fast each route's error budget
 // burns (model's burnAlerts), from the counted requests rather than the
-// last few minutes of them. Pure, so the watch and the backtest share it.
+// last few minutes of them. Pure but for the slow-burn timers its caller
+// keeps, so the watch and the backtest share it.
 
 const DAY = 86_400_000;
 
 type Firing = TripBurn & { alert: BurnAlert };
 
+// How long a slow burn fires before it opens anything. It's a ticket, not a
+// page, so waiting costs nothing, and it lets a fast burn that's starting
+// trip first: a slow burn from an outage days ago in the 3-day window would
+// otherwise fire on a new outage's first bad minute and open it at sev4.
+export const SLOW_BURN_HOLD_MS = 5 * 60_000;
+
 // Judges an SLO rule at `now` on each of `routes` it covers. An alert fires
 // on a route when its burn rate is over the alert's threshold in both its
 // windows, with at least minRequests in the long one; fewer, and that alert
-// doesn't judge the route. A fast alert trips at the rule's severity, the
-// slow one at SLOW_BURN_SEVERITY, and a fast burn anywhere wins the trip.
-// No streaks: the short window is the debounce, and it clears the alert
-// soon after the burn stops.
+// doesn't judge the route. A fast alert trips at once, at the rule's
+// severity; the slow one once it has fired for SLOW_BURN_HOLD_MS, at
+// SLOW_BURN_SEVERITY, timed in `held` (keyed "rule|route|slow", kept by the
+// caller across checks). A fast burn anywhere wins the trip. The short
+// windows are the debounce, and clear an alert soon after the burn stops.
 export function evaluateSloRule(
   rule: WatchRule,
   routes: { route: string; method: string }[],
   counts: CountsFn,
   now: number,
+  held: Map<string, number> = new Map(),
 ): RuleResult {
   if (!rule.enabled) return { status: "paused" };
   const c = rule.condition;
@@ -40,7 +49,9 @@ export function evaluateSloRule(
   const over = (route: string, ms: number) => counts(route, now - ms, now, c.latencyMs);
 
   let anyOk = false;
-  let trip: { route: string; method: string; burn: Firing } | undefined;
+  // The worst burn firing, and the worst that may open an incident.
+  let worst: { route: string; method: string; burn: Firing } | undefined;
+  let trip: typeof worst;
   let lowest: { route: string; left: number } | undefined;
   for (const { route, method } of routes) {
     if (!matchesTarget(rule.target, route)) continue;
@@ -57,19 +68,29 @@ export function evaluateSloRule(
       if (burnRate(over(route, alert.shortMs), c.objectivePercent) <= threshold) continue;
       firing = { alert, rate, threshold, longMs: alert.longMs, shortMs: alert.shortMs, budgetLeftPercent: left };
     }
+    const key = `${rule.id}|${route}|slow`;
+    if (firing?.alert.speed !== "slow") held.delete(key);
+    else if (!held.has(key)) held.set(key, now);
     if (!judged) continue;
     if (!lowest || left < lowest.left) lowest = { route, left };
-    if (!firing) anyOk = true;
-    else if (!trip || outranks(firing, trip.burn)) trip = { route, method, burn: firing };
+    if (!firing) {
+      anyOk = true;
+      continue;
+    }
+    const candidate = { route, method, burn: firing };
+    if (!worst || outranks(firing, worst.burn)) worst = candidate;
+    const opens = firing.alert.speed === "fast" || now - held.get(key)! >= SLOW_BURN_HOLD_MS;
+    if (opens && (!trip || outranks(firing, trip.burn))) trip = candidate;
   }
 
-  if (trip) {
-    const { alert, ...burn } = trip.burn;
+  if (worst) {
+    const shown = trip ?? worst;
+    const { alert, ...burn } = shown.burn;
     return {
       status: "breaching",
-      summary: `burning ${burnText(burn.rate)} over ${durationText(burn.longMs)} on ${trip.route} · ${budgetText(burn.budgetLeftPercent)} of budget left`,
-      checks: 1,
-      trip: {
+      summary: `burning ${burnText(burn.rate)} over ${durationText(burn.longMs)} on ${shown.route} · ${budgetText(burn.budgetLeftPercent)} of budget left`,
+      checks: trip ? 1 : undefined,
+      trip: trip && {
         route: trip.route,
         method: trip.method,
         burn,

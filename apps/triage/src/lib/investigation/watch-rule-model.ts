@@ -76,6 +76,7 @@ export const metricOptions: { value: WatchCondition["metric"]; label: string }[]
   { value: "slowCount", label: "Slow requests, counted" },
   { value: "slowShare", label: "Slow requests, as a share" },
   { value: "errorRate", label: "Error rate" },
+  { value: "slo", label: "Error budget (SLO)" },
 ];
 
 export const rulesSchema = z

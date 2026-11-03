@@ -10,6 +10,10 @@ export type LatencyBucket = (typeof LATENCY_BUCKETS)[number];
 export const SLO_WINDOW_DAYS = [7, 28, 30] as const;
 export type SloWindowDays = (typeof SLO_WINDOW_DAYS)[number];
 
+// The objectives the rule editor offers; a rule saved by hand can hold any
+// from 50 to 99.999.
+export const SLO_OBJECTIVES = [99, 99.5, 99.9, 99.95, 99.99] as const;
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -65,6 +69,20 @@ export function burnText(rate: number): string {
 
 // "71%", "-12%"
 export const budgetText = (percent: number) => `${Math.round(percent)}%`;
+
+// "0.1% of requests, about 43 min of full outage in 30 days": what an
+// objective leaves to spend.
+export function allowanceText(objectivePercent: number, windowDays: number): string {
+  const share = Number((100 - objectivePercent).toPrecision(3));
+  const minutes = ((100 - objectivePercent) / 100) * windowDays * 24 * 60;
+  const outage =
+    minutes < 10 ? `${Number(minutes.toFixed(1))} min` : minutes < 60 ? `${Math.round(minutes)} min` : `${Number((minutes / 60).toFixed(1))} h`;
+  return `${share}% of requests, about ${outage} of full outage in ${windowDays} days`;
+}
+
+// "14.4× over 1 h and 5 min": an alert, for an SLO over windowDays.
+export const alertText = (alert: BurnAlert, windowDays: number) =>
+  `${burnText(burnThreshold(alert, windowDays))} over ${durationText(alert.longMs)} and ${durationText(alert.shortMs)}`;
 
 // "99.9% of requests succeed within 500 ms over 30 days"
 export function sloText(c: { objectivePercent: number; windowDays: number; latencyMs?: number }): string {
