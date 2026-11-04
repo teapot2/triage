@@ -40,6 +40,14 @@ describe("costOf", () => {
     assert.equal(priceFor("openrouter", "meta/muse-spark-1.3"), undefined);
     assert.equal(costOf({ inputTokens: 100 }, "fireworks", "muse-glimmer-30b"), undefined);
   });
+
+  it("prices Muse Spark Open on Baseten at its listed rates, and nothing else there", () => {
+    assert.deepEqual(priceFor("baseten", "meta-models/muse-spark-open-1026"), { input: 1.25, cachedInput: 0.15, output: 4.25 });
+    // 1M fresh input, 1M cached, 1M output: 1.25 + 0.15 + 4.25.
+    const usd = costOf({ inputTokens: 2_000_000, cachedInputTokens: 1_000_000, outputTokens: 1_000_000 }, "baseten", "meta-models/muse-spark-open-1026");
+    assert.ok(usd !== undefined && Math.abs(usd - 5.65) < 1e-9);
+    assert.equal(priceFor("baseten", "some-other-model"), undefined);
+  });
 });
 
 describe("incidentUsage", () => {

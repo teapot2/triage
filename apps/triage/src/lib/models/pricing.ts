@@ -14,17 +14,24 @@ const metaPrices: [RegExp, Price][] = [
   [/^muse-spark-1\.[1-3](\D|$)/, { input: 1.25, cachedInput: 0.15, output: 4.25 }],
 ];
 
+// Baseten's Model APIs (baseten.co/pricing, as captured on 2026-10-23):
+// Muse Spark Open at Meta's Spark list price. The model id is the dated
+// one the hackathon grant answers for (meta-models/muse-spark-open-1026).
+const basetenPrices: [RegExp, Price][] = [[/muse-spark-open/, { input: 1.25, cachedInput: 0.15, output: 4.25 }]];
+
 // The providers that run on your own machine (providers.ts marks them
 // local; it reads the server's env, so isn't imported here).
 const localProviders = new Set(["lmstudio", "ollama", "llamacpp"]);
 
-// A model's price where Triage knows it: Meta's API, and nothing for a
-// model on your own machine. Undefined for the hosted open-weights
-// providers (their prices change and aren't published per model in one
-// place), Modal, which bills GPU time rather than tokens, and a custom
-// endpoint. A run with no provider is from before there were others: Meta.
+// A model's price where Triage knows it: Meta's API, Muse Spark Open on
+// Baseten, and nothing for a model on your own machine. Undefined for the
+// other hosted open-weights providers (their prices change and aren't
+// published per model in one place), Modal, which bills GPU time rather
+// than tokens, and a custom endpoint. A run with no provider is from
+// before there were others: Meta.
 export function priceFor(provider: string | undefined, model: string): Price | undefined {
   if (provider === "meta" || provider === undefined) return metaPrices.find(([re]) => re.test(model))?.[1];
+  if (provider === "baseten") return basetenPrices.find(([re]) => re.test(model))?.[1];
   if (localProviders.has(provider)) return { input: 0, cachedInput: 0, output: 0 };
   return undefined;
 }
