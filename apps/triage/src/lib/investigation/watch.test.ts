@@ -300,6 +300,33 @@ describe("rule watch episodes", () => {
     assert.equal(openedSince(from).length, 2);
   });
 
+  // Nov 4: Page latency incidents from Nov 2, never resolved, were the
+  // newest of that rule's, so a restart would have rebuilt an episode on one
+  // and a trip in the next minute would have joined it, two days late.
+  it("rebuilds no episode from an incident left open for days", async () => {
+    rules = [rule("lat-8", "sev3")];
+    restart();
+    const from = sent.length;
+    set({ "lat-8": trips("/products/[id]") });
+    await check();
+    const [old] = openedSince(from);
+
+    clock += 48 * HOUR;
+    restart();
+    set({ "lat-8": trips("/products/[id]") });
+    await check(2);
+    const news = openedSince(from);
+    assert.equal(news.length, 2, "the new trip opens its own incident");
+    assert.notEqual(episodeOf("lat-8"), old.incidentId);
+
+    // Within the window the episode is still rebuilt (the outage still going).
+    clock += 1 * HOUR;
+    restart();
+    set({ "lat-8": over });
+    await check();
+    assert.equal(episodeOf("lat-8"), news[1].incidentId);
+  });
+
   it("drops a rebuilt episode once its rule is healthy, and rebuilds none from a resolved incident", async () => {
     rules = [rule("err-7", "sev2"), rule("lat-7", "sev3")];
     restart();

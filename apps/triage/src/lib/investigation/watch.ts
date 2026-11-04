@@ -53,6 +53,9 @@ import { errorMessage } from "../errors";
 // The window the sidebar's request count covers.
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
+// How far back a restart looks for an outage still going: the SLO slow
+// alert's 6 h short window, the longest an episode stays open on its own.
+const REBUILD_WINDOW_MS = 6 * 60 * MINUTE;
 
 // How long after an incident opens another rule's trip can join it, while a
 // rule in it is still over its limit. The rules judge a minute or two of
@@ -501,15 +504,22 @@ async function lateJoinable(rule: WatchRule, tripped: Trip, now: number, left?: 
 // Per rule, the newest incident it opened or joined that nobody resolved,
 // as an episode waiting for the rule to trip (see Episode). Not only the
 // open statuses: a run cut off by a restart is failed, and its outage is
-// still this episode. Once per process, before the first check acts.
+// still this episode. Once per process, before the first check acts. Only
+// from an incident opened (or reopened) in the last REBUILD_WINDOW_MS: an
+// outage older than that is over, however its incident was left, and an
+// episode rebuilt from it would quietly take in the rule's next trip. On
+// Nov 4 Page latency incidents from Nov 2, still awaiting approval, would
+// have absorbed a trip in the minute after a restart.
 function rebuildEpisodes(ruleIds: string[]): Promise<void> {
   state.rebuilt ??= listIncidents().then(
     (incidents) => {
       const ids = new Set(ruleIds);
       const newest = new Map<string, Episode>();
+      const since = deps.now() - REBUILD_WINDOW_MS;
       for (const i of incidents) {
         if (i.openedBy !== "watch" || i.uptime || i.dependency || isExample(i.id) || i.status === "resolved" || isArchived(i)) continue;
         const openedAt = Math.max(Date.parse(i.detectedAt), ...(i.reopenings ?? []).map((r) => Date.parse(r.at)));
+        if (openedAt < since) continue;
         for (const id of [i.trigger.rule?.id, ...(i.joinedRules ?? []).map((j) => j.id)]) {
           if (!id || !ids.has(id) || (newest.get(id)?.openedAt ?? -1) >= openedAt) continue;
           newest.set(id, { incidentId: i.id, openedAt, healthy: 0, waiting: true, fastUnknown: true });
