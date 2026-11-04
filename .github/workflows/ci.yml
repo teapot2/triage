@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: check:blind reads Shopfront's git log as Triage's
+      # git_log tool does, and a shallow clone would show one commit.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Version comes from packageManager in package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      # Nothing Triage's tools can read in Shopfront gives the bug away.
+      - run: pnpm --filter @triage/web check:blind
