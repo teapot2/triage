@@ -1,8 +1,9 @@
 "use client";
 
-import { CheckIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, TriangleAlertIcon } from "lucide-react";
+import { CheckIcon, LinkIcon, LoaderCircleIcon, RotateCcwIcon, ShieldCheckIcon, TriangleAlertIcon } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
 import { FormField } from "@/components/form-fields";
 import { Timestamp } from "@/components/timestamp";
@@ -20,11 +21,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { isArchived } from "@/lib/investigation/archive";
-import { reopenedBy } from "@/lib/investigation/postmortem/timeline";
+import { reopenedBy, reopeningTitle, reopeningWhy } from "@/lib/investigation/postmortem/timeline";
 import type { Incident, Reopening, Verification } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { formatPercent, formatTime } from "./format";
-import { metricLabel } from "./metric-labels";
+import { limitSides, metricLabel, pastLimit } from "./metric-labels";
 import { errorMessage } from "@/lib/errors";
 import { burnText } from "@/lib/slo/model";
 
@@ -43,9 +44,22 @@ export function reopening(incident: Incident): Reopening | undefined {
   return undefined;
 }
 
-// Completed minutes under the limit so far, at most the window.
+// The reopening that undid what the verification resolved: the
+// verification still reads resolved, but a reopening came after it finished
+// and the incident hasn't been resolved again. reopened() leaves the
+// verification as it was, so the cards ask this rather than its status.
+export function reopenedSinceVerified(incident: Incident): Reopening | undefined {
+  const v = incident.verification;
+  const r = reopening(incident);
+  if (!r || v?.status !== "resolved" || incident.status === "resolved") return undefined;
+  return !v.finishedAt || Date.parse(r.at) >= Date.parse(v.finishedAt) ? r : undefined;
+}
+
+// Completed minutes on the healthy side of the limit so far, at most the
+// window.
 export function quietMinutes(v: Verification): number {
-  return Math.min(v.windowMinutes, v.series.filter((p) => p.value < v.threshold).length);
+  const past = pastLimit(v.metric, v.threshold);
+  return Math.min(v.windowMinutes, v.series.filter((p) => !past(p.value)).length);
 }
 
 const formatValue = (value: number, unit: string) =>
@@ -60,10 +74,12 @@ export function resolutionOptions(incident: Incident) {
   const finished =
     open && incident.report !== undefined && incident.status !== "investigating" && incident.status !== "healthy";
   const v = incident.verification?.status;
+  // A resolved verification undone by a reopening can be run again.
+  const undone = reopenedSinceVerified(incident) !== undefined;
   return {
     resolve: finished && incident.status !== "resolved",
     reopen: open && incident.status === "resolved",
-    verify: finished && (v === undefined || v === "breached" || v === "stopped"),
+    verify: finished && (v === undefined || v === "breached" || v === "stopped" || undone),
     // "again" only once there's been a verification.
     verifyLabel: v === undefined ? "Verify" : "Verify again",
   };
@@ -95,7 +111,7 @@ export function useResolution(incident: Incident) {
       else if (action === "reopen") toast("Incident reopened", { description: reason });
       else {
         toast("Verifying the fix", {
-          description: `Watching ${metricLabel(incident.trigger.metric)} for a quiet window under the limit.`,
+          description: `Watching ${metricLabel(incident.trigger.metric)} for a quiet window ${limitSides(incident.trigger.metric).healthy} the limit.`,
         });
       }
     } catch (err) {
@@ -167,18 +183,32 @@ export function ReopenDialog({
   );
 }
 
+// Asks for a verification from now, inline beside what it would check
+// again. The caller decides whether one may be asked for.
+export function VerifyButton({ incident, children }: { incident: Incident; children: ReactNode }) {
+  const { act, pending } = useResolution(incident);
+  return (
+    <Button variant="outline" size="xs" disabled={pending !== undefined} onClick={() => void act("verify")}>
+      {pending === "verify" ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
+      {children}
+    </Button>
+  );
+}
+
+// "by a person, was resolved 02:31": who undid the verification's
+// resolution, and which one.
+export function reopenedWords(r: Reopening, v: Verification): string {
+  const was = r.resolvedAt ?? v.finishedAt;
+  return `by ${reopenedBy[r.by]}${was ? `, was resolved ${hhmm(was)}` : ""}`;
+}
+
 // The verification's progress or outcome as one line, under the recovery
 // on the mitigation card, or in its own card when there's no mitigation.
 export function VerificationLine({ incident, verification: v }: { incident: Incident; verification: Verification }) {
-  const { act, pending } = useResolution(incident);
   const label = metricLabel(v.metric);
   const quiet = quietMinutes(v);
-  const again = !isArchived(incident) && (
-    <Button variant="outline" size="xs" disabled={pending !== undefined} onClick={() => void act("verify")}>
-      {pending === "verify" ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
-      Verify again
-    </Button>
-  );
+  const sides = limitSides(v.metric);
+  const again = !isArchived(incident) && <VerifyButton incident={incident}>Verify again</VerifyButton>;
 
   // A merged dependency fix is verified by the audit: resolved once one no
   // longer finds the advisory. Until then each audit's note says it's
@@ -199,8 +229,24 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
     return (
       <p className="flex items-center gap-2 text-muted-foreground text-sm">
         <LoaderCircleIcon className="size-4 shrink-0 animate-spin" />
-        Verifying: {quiet} of {v.windowMinutes} min under the limit
+        Verifying: {quiet} of {v.windowMinutes} min {sides.healthy} the limit
       </p>
+    );
+  }
+  // Resolved, then reopened: the reopening stands, not the resolution.
+  const undone = reopenedSinceVerified(incident);
+  if (undone) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <p className="flex items-start gap-1.5 text-sm text-warning">
+          <RotateCcwIcon className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Reopened <Timestamp date={undone.at}>{hhmm(undone.at)}</Timestamp>
+            <span className="text-muted-foreground"> · {reopenedWords(undone, v)}</span>
+          </span>
+        </p>
+        {again}
+      </div>
     );
   }
   if (v.status === "resolved") {
@@ -223,7 +269,7 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
               ? `${v.series.length} checks in a row answered in time`
               : v.after === "dependencies"
                 ? (v.note ?? "the audit no longer finds the advisory")
-                : `${quiet} min under the limit`}
+                : `${quiet} min ${sides.healthy} the limit`}
           </span>
         </span>
       </p>
@@ -236,7 +282,7 @@ export function VerificationLine({ incident, verification: v }: { incident: Inci
         <p className="flex items-start gap-1.5 text-sm text-warning">
           <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
           <span>
-            Back over the limit{v.breachedAt && ` at ${hhmm(v.breachedAt)}`}
+            Back {sides.breach} the limit{v.breachedAt && ` at ${hhmm(v.breachedAt)}`}
             {value && ` (${label} ${value})`}: reopened
           </span>
         </p>
@@ -293,16 +339,36 @@ export function VerificationCard({
 // and why, and what still waits on someone.
 export function ReopenedNotice({ incident, reopening: r }: { incident: Incident; reopening: Reopening }) {
   const value = r.value === undefined ? undefined : formatValue(r.value, incident.trigger.unit);
-  const waiting = incident.approval?.state === "pending" ? " The fix still waits for approval." : "";
+  const waiting = incident.approval?.state === "pending" ? "The fix still waits for approval." : "";
+  // No why, or one that only repeats the title (older records): the title
+  // says it all, so the description is only what's left.
+  const why = reopeningWhy(r)?.replace(/[.!]$/, "");
+  const what = why ? `${why}${value ? ` (${value})` : ""}.` : value ? `At ${value}.` : "";
+  const description = [what, waiting].filter(Boolean).join(" ");
   return (
     <Alert variant="warning" icon={<RotateCcwIcon />}>
       <AlertTitle>
-        Reopened by {reopenedBy[r.by]} <Timestamp date={r.at} />
+        {reopeningTitle(r)} <Timestamp date={r.at} />
       </AlertTitle>
-      <AlertDescription>
-        {r.why.trim().replace(/[.!]$/, "")}
-        {value && ` (${value})`}.{waiting}
-      </AlertDescription>
+      {description && <AlertDescription>{description}</AlertDescription>}
     </Alert>
+  );
+}
+
+// The earlier incident this one would have reopened (relatedTo): a line, not
+// an alert, since nothing waits on it. The watch opened this one instead
+// because that one's mitigation still held its cause off.
+export function RelatedLine({ related }: { related: NonNullable<Incident["relatedTo"]> }) {
+  return (
+    <p className="flex items-start gap-1.5 text-muted-foreground text-sm">
+      <LinkIcon className="mt-0.5 size-3.5 shrink-0" />
+      <span>
+        Related to{" "}
+        <Link href={`/incidents/${related.id}`} className="text-foreground underline underline-offset-2 hover:no-underline">
+          {related.title}
+        </Link>
+        . {related.why}
+      </span>
+    </p>
   );
 }

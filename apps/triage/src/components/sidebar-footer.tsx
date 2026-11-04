@@ -3,6 +3,7 @@
 import { PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { modKey, useIsMac } from "@/hooks/use-is-mac";
 import { SidebarSettingsItem } from "./sidebar-settings";
 
 // Settings and the collapse/expand control: side by side when expanded,
@@ -24,12 +25,15 @@ export function SidebarFooterControls() {
 
 function SidebarToggle() {
   const { state, isMobile, toggleSidebar } = useSidebar();
+  // ⌘B on a Mac, Ctrl B elsewhere, written as the search row writes ⌘K.
+  const isMac = useIsMac();
+  const shortcut = `${modKey(isMac)}B`;
   // Tooltip text can follow state: it only renders on hover, after hydration.
   const label = isMobile
     ? "Close sidebar"
     : state === "collapsed"
-      ? "Expand sidebar (⌘B)"
-      : "Collapse sidebar (⌘B)";
+      ? `Expand sidebar (${shortcut})`
+      : `Collapse sidebar (${shortcut})`;
 
   return (
     // max(0px, …): at icon width the menu is 31px (the sidebar's 1px border),

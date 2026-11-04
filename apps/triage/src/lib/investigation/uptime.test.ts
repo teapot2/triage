@@ -5,6 +5,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { closeDb } from "../db";
 import type { MessageKind } from "../notifications/types";
+import { lastOpened } from "./last-opened";
 import type { Incident } from "./schema";
 import type { UptimeSample } from "./uptime/model";
 
@@ -95,6 +96,9 @@ describe("uptime loop", () => {
     assert.deepEqual(kinds(), ["incident_opened"]);
     assert.equal(loop.uptimeState()[0].status, "alerting");
     assert.equal(loop.uptimeState()[0].incidentId, first.id);
+    // For the sidebar's announcement.
+    const last = lastOpened();
+    assert.deepEqual([last?.incidentId, last?.rule, last?.by, last?.reopened], [first.id, "Shopfront is slow", "uptime", undefined]);
 
     await check("slow", 10);
     // The investigation ends after them; its save keeps the count.
@@ -143,6 +147,7 @@ describe("uptime loop", () => {
     assert.equal(reopened.reopenings?.[0].by, "watch");
     assert.equal(reopened.uptime?.failedChecks, 16);
     assert.deepEqual(kinds(), ["incident_opened", "resolved", "incident_reopened"]);
+    assert.deepEqual([lastOpened()?.incidentId, lastOpened()?.reopened], [first.id, true]);
 
     // And recovery is confirmed again before the next resolution message.
     await check("ok", 3);

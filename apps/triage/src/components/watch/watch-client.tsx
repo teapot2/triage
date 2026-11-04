@@ -69,9 +69,12 @@ export function liveBadge(rule: WatchRule, live: RuleState | undefined, watchOn:
     );
   }
   const { label, tone } = ruleStatuses.find((s) => s.id === status) ?? ruleStatuses[0];
+  // Over its limit with no check counted: an SLO's slow burn, held before
+  // it opens anything.
+  const progress = live?.checks ? `${live.checks} of ${live.needed}` : rule.condition.metric === "slo" ? "slow burn" : undefined;
   return (
     <StatusBadge tone={tone} pulse={status === "breaching"}>
-      {status === "breaching" && live ? `${label} · ${live.checks} of ${live.needed}` : label}
+      {status === "breaching" && progress ? `${label} · ${progress}` : label}
     </StatusBadge>
   );
 }

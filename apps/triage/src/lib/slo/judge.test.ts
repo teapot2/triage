@@ -13,8 +13,17 @@ import {
   tripTitle,
   type WatchRule,
 } from "../investigation/watch-rule-model";
-import { evaluateSloRule, SLOW_BURN_HOLD_MS } from "./judge";
-import { budgetLeftPercent, burnAlerts, burnRate, burnText, burnThreshold, durationText } from "./model";
+import { evaluateSloRule, judgeRoute, SLOW_BURN_HOLD_MS } from "./judge";
+import {
+  budgetLeftPercent,
+  burnAlerts,
+  burnRate,
+  burnText,
+  burnThreshold,
+  durationText,
+  shortMinimumsText,
+  shortWindowMinimum,
+} from "./model";
 import type { CountsFn } from "./rollups";
 
 const MINUTE = 60_000;
@@ -164,12 +173,12 @@ describe("evaluateSloRule", () => {
     const r = evaluateSloRule(
       slo({ minRequests: 4000 }),
       [api("/api/a")],
-      counts({ "/api/a": { perMinute: 1, bad: 1, badFrom: 30 } }),
+      counts({ "/api/a": { perMinute: 3, bad: 1, badFrom: 30 } }),
       now,
       new Map([["api-slo|/api/a|slow", now - SLOW_BURN_HOLD_MS]]),
     );
-    // Only the 3-day window has 4000 requests, so only the slow alert
-    // judges it.
+    // Only the 3-day window has 4000 requests (and its 6 h short window the
+    // 1000 it needs), so only the slow alert judges it.
     assert.equal(r.status, "breaching");
     assert.equal(r.trip?.burn?.longMs, 3 * DAY);
     const idle = evaluateSloRule(slo({ minRequests: 10_000 }), [api("/api/a")], counts({ "/api/a": { perMinute: 1 } }), now);
@@ -182,10 +191,108 @@ describe("evaluateSloRule", () => {
       "/api/fast": { perMinute: 1000, bad: 500, badFrom: 10 },
       "/journal": { perMinute: 1000, bad: 1000, badFrom: 60 },
     });
-    const r = evaluateSloRule(slo(), [api("/api/slow"), api("/api/fast", "POST"), api("/journal")], traffic, now);
-    assert.deepEqual([r.trip?.route, r.trip?.method, r.trip?.severity], ["/api/fast", "POST", undefined]);
+    // The slow burn has held long enough to open: the fast one still wins,
+    // and says it's fast, so the watch can tell a new outage in a tail.
+    const held = new Map([["api-slo|/api/slow|slow", now - SLOW_BURN_HOLD_MS]]);
+    const r = evaluateSloRule(slo(), [api("/api/slow"), api("/api/fast", "POST"), api("/journal")], traffic, now, held);
+    assert.deepEqual([r.trip?.route, r.trip?.method, r.trip?.severity, r.trip?.speed], ["/api/fast", "POST", undefined, "fast"]);
+    assert.equal(r.trip?.burn?.longMs, HOUR);
+    const slowOnly = evaluateSloRule(slo(), [api("/api/slow")], traffic, now, held);
+    assert.deepEqual([slowOnly.trip?.severity, slowOnly.trip?.speed], ["sev4", "slow"]);
     // The lowest budget of the two it judged.
     assert.equal(Math.round(r.budgetLeftPercent!), 13);
+  });
+
+  it("needs enough requests in an alert's short window that one bad request can't fire it", () => {
+    const c = { objectivePercent: 99.9, windowDays: 30 };
+    // The default rule: 1/(14.4 × 0.1%), 1/(6 × 0.1%), 1/(1 × 0.1%).
+    assert.deepEqual(
+      burnAlerts.map((a) => shortWindowMinimum(a, 100, c)),
+      [70, 167, 1000],
+    );
+    assert.equal(shortMinimumsText(100, c), "70 over 5 min, 167 over 30 min and 1000 over 6 h");
+    // A loose objective: never fewer than the long window's minimum at the
+    // same rate (100 × 5 min / 1 h, rounded up).
+    assert.deepEqual(
+      burnAlerts.map((a) => shortWindowMinimum(a, 100, { objectivePercent: 95, windowDays: 30 })),
+      [9, 9, 20],
+    );
+    // Exactly at the minimum, one bad request burns at the threshold, not over it.
+    for (const a of burnAlerts) {
+      const n = shortWindowMinimum(a, 100, c);
+      assert.ok(burnRate({ total: n, good: n - 1 }, 99.9) <= burnThreshold(a, 30), a.id);
+      assert.ok(burnRate({ total: n - 1, good: n - 2 }, 99.9) > burnThreshold(a, 30), a.id);
+    }
+  });
+
+  // Nov 3, live: an outage on GET /api/products/[id] ended at 23:29 (12 bad
+  // of 341 over 19 minutes); the dev servers came back at 01:00 and the
+  // first minute's 5 requests held one slow first visit. The 6 h window
+  // still burned 37.9×, and the 30 min one, 5 requests, 200×: it paged.
+  describe("after a cold start, with an old outage still in the long windows", () => {
+    const rule = defaultRules.find((r) => r.id === "api-slo")!;
+    const route = "/api/products/[id]";
+    // Minutes counted back from `at`: the outage 92 to 111 minutes before
+    // the restart, nothing between, then `after` minutes of traffic at 18 a
+    // minute, the first of 5 requests with one slow.
+    const restart = now;
+    const traffic = (after: number): CountsFn => {
+      const minutes: { t: number; total: number; good: number }[] = [];
+      for (let m = 0; m < 19; m++) minutes.push({ t: restart - (111 - m) * MINUTE, total: 18, good: m < 12 ? 17 : 18 });
+      for (let m = 0; m < after; m++) minutes.push({ t: restart + m * MINUTE, total: m === 0 ? 5 : 18, good: m === 0 ? 4 : 18 });
+      return (r, from, to) => {
+        let [total, good] = [0, 0];
+        for (const b of minutes) if (r === route && b.t >= from && b.t < to) [total, good] = [total + b.total, good + b.good];
+        return { total, good };
+      };
+    };
+
+    it("doesn't page on the first slow visit, then or as traffic builds", () => {
+      // What paged: the 6 h window still over 6× when the first minute ended.
+      const at = restart + MINUTE;
+      const long = traffic(1)(route, at - 6 * HOUR, at);
+      assert.ok(burnRate(long, 99.9) > 30);
+      for (let after = 1; after <= 40; after++) {
+        const t = restart + after * MINUTE;
+        const r = evaluateSloRule(rule, [api(route)], traffic(after), t, new Map());
+        assert.equal(r.trip, undefined, `${after} min after the restart`);
+        // Once its 6 h window has its 1000 requests (38 min in), the slow
+        // alert fires on the outage still in it: the tail README describes,
+        // a sev4 ticket after its hold, not a page.
+        const { firing } = judgeRoute(rule, route, traffic(after), t);
+        assert.notEqual(firing?.alert.speed, "fast", `${after} min after the restart`);
+      }
+    });
+
+    it("is too thin to judge at first, and judges once the short windows fill", () => {
+      const first = evaluateSloRule(rule, [api(route)], traffic(1), restart + MINUTE);
+      assert.equal(first.status, "idle");
+      const later = evaluateSloRule(rule, [api(route)], traffic(15), restart + 15 * MINUTE);
+      assert.equal(later.status, "ok");
+    });
+  });
+
+  it("pages a full outage on the default rule within a minute at 2 requests a second", () => {
+    const rule = defaultRules.find((r) => r.id === "api-slo")!;
+    const start = now - 4 * DAY;
+    const down = now;
+    // Two requests a second for 4 days, every one failing from `down` on.
+    const traffic: CountsFn = (_route, from, to) => {
+      const sec = (t: number) => Math.max(start, Math.min(t, now + HOUR));
+      const total = (2 * (sec(to) - sec(from))) / 1000;
+      const bad = (2 * Math.max(0, sec(to) - Math.max(sec(from), down))) / 1000;
+      return { total, good: total - bad };
+    };
+    let pagedAfter: number | undefined;
+    for (let s = 10; s <= 120 && pagedAfter === undefined; s += 10) {
+      const r = evaluateSloRule(rule, [api("/api/products")], traffic, down + s * 1000);
+      if (r.trip) {
+        pagedAfter = s;
+        assert.equal(r.trip.burn?.longMs, HOUR);
+        assert.equal(r.trip.severity, undefined);
+      }
+    }
+    assert.ok(pagedAfter !== undefined && pagedAfter <= 60, `paged after ${pagedAfter} s`);
   });
 
   it("is paused while disabled", () => {

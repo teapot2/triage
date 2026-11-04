@@ -4,7 +4,9 @@ import { recordedEffort } from "@/lib/models/stages";
 
 // Each stage's provider, model and effort (Meta only), and whether it can
 // run, without calling any model. `fanout`: whether investigations check
-// hypotheses in parallel, so whether the Lead stage runs at all.
+// hypotheses in parallel, so whether the Lead stage runs at all. `ok`:
+// whether Triage can investigate, false when the Investigate stage has a
+// problem (no key, say); the other stages' problems show per stage only.
 export async function GET() {
   await connection();
   const stages = Object.fromEntries(
@@ -25,5 +27,5 @@ export async function GET() {
     ),
   );
   const { fanout } = await publicModelSettings();
-  return Response.json({ ok: true, fanout, stages });
+  return Response.json({ ok: stages.investigate.problem === null, fanout, stages });
 }

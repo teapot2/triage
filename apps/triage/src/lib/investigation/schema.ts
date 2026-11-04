@@ -482,6 +482,9 @@ export const runSchema = z.object({
   outputTokens: z.number().int().optional(),
   reasoningTokens: z.number().int().optional(),
   rejectedReports: z.number().int().optional(),
+  // Why each rejected report went back to the model, its problems joined
+  // with "; ". Missing on runs from before they were kept.
+  reportRejections: z.array(z.string()).optional(),
   // As on the fix run: model calls retried.
   modelRetries: z.number().int().optional(),
   // The fullest call of the stage's model: the single agent's, or across a
@@ -817,6 +820,13 @@ const incidentBaseSchema = z.object({
         longMs: z.number(),
         shortMs: z.number(),
         budgetLeftPercent: z.number(),
+        // The minutes the fast alert fired on (watch.ts burningMinutes): the
+        // newest run of whole minutes each over the threshold on its own (a
+        // clean minute or two between them allowed), back to where it began
+        // within the long window. Missing on a
+        // slow burn, when no minute burned on its own, and on incidents from
+        // before it was recorded.
+        burning: z.object({ from: timestamp, to: timestamp }).optional(),
       })
       .optional(),
     // The time range (and route) a person selected on the live page to
@@ -848,6 +858,16 @@ const incidentBaseSchema = z.object({
   resolvedAt: timestamp.optional(),
   // Every reopening, oldest first.
   reopenings: z.array(reopeningSchema).optional(),
+  // Other watch rules that tripped on the same outage and joined this
+  // incident rather than opening their own (watch.ts), each with when it
+  // last did; a restart rebuilds their episodes from it. Missing when none.
+  joinedRules: z.array(z.object({ id: z.string(), name: z.string(), at: timestamp })).optional(),
+  // An earlier incident this one would have reopened, opened as its own
+  // instead (watch.ts): the same rule and route resolved shortly before,
+  // with its mitigation still in effect, so the old cause is held off and
+  // this breach most likely has a new one. `why` says so in a sentence, for
+  // the page and the MCP text. Missing on every other incident.
+  relatedTo: z.object({ id: z.string(), title: z.string(), why: z.string() }).optional(),
   // The uptime check that opened it. Missing on every other incident.
   uptime: uptimeEpisodeSchema.optional(),
   // The advisory the dependency audit opened it for. Missing on every other

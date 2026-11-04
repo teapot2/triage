@@ -34,7 +34,11 @@ export function recovered(incident: Incident, now: string, example = false): Inc
   const edit = (patch: Partial<Incident>) => (next = { ...(next ?? incident), ...patch });
 
   const m = incident.mitigation;
-  if (m?.recovery?.status === "watching") {
+  // Approved but not yet applied: its after() never ran, or died during the
+  // ops call. Failed, the card offers Retry (approving a failed one again).
+  if (m?.state === "approved" || m?.state === "running") {
+    edit({ mitigation: { ...m, state: "failed", error: `${RESTARTED} before the mitigation was applied` } });
+  } else if (m?.recovery?.status === "watching") {
     edit({
       mitigation: { ...m, recovery: { ...m.recovery, status: "not_recovered", note: `${RESTARTED} before the recovery watch finished` } },
     });

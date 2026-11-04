@@ -11,7 +11,9 @@ import {
   type ToolName,
 } from "./schema";
 import type { TelemetrySource } from "./source";
+import { flagContext, offFlagProblems } from "./off-flags";
 import { errorMessage } from "../errors";
+import { plural } from "../plural";
 
 interface ToolRun {
   summary: string;
@@ -138,7 +140,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
           traceId: g.traceId,
         }));
         return {
-          summary: groups.length ? `${groups.length} log groups` : "No matching log records",
+          summary: groups.length ? plural(groups.length, "log group") : "No matching log records",
           evidence,
           services: service ? [service] : groups.map((g) => g.service),
         };
@@ -171,7 +173,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
           attributes: s.attributes,
         }));
         return {
-          summary: spans.length ? `${spans.length} spans` : "No matching spans",
+          summary: spans.length ? plural(spans.length, "span") : "No matching spans",
           evidence,
           services: service ? [service] : spans.map((s) => s.service),
         };
@@ -185,7 +187,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
       execute: recorded("db_diagnostics", async ({ check }) => {
         if (external) return notConnected("database");
         const result = await source.dbDiagnostics(check);
-        const count = result.rows.length === 0 ? `${check}: no rows` : `${check}: ${result.rows.length} rows`;
+        const count = result.rows.length === 0 ? `${check}: no rows` : `${check}: ${plural(result.rows.length, "row")}`;
         const summary = result.note ? `${count}; ${result.note}` : count;
         return {
           summary,
@@ -240,7 +242,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
           files: c.files,
         }));
         return {
-          summary: `${commits.length} commits`,
+          summary: plural(commits.length, "commit"),
           evidence,
           services: [recorder.service],
         };
@@ -283,7 +285,7 @@ function readOnlyTools(source: TelemetrySource, recorder: StepRecorder) {
           };
         });
         return {
-          summary: deploys.length ? `${deploys.length} deploys` : "No deploys in window",
+          summary: deploys.length ? plural(deploys.length, "deploy") : "No deploys in window",
           evidence,
           services: service ? [service] : deploys.map((d) => d.service),
         };
@@ -297,7 +299,7 @@ function submitReportTool(source: TelemetrySource, recorder: InvestigationRecord
   const serviceNames = source.describe().services.map((s) => s.name);
   return tool({
     description:
-      "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses and must name a fault (if nothing is wrong, the verdict is healthy), and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
+      "Submit the final report. It is checked: every cited evidence ID must exist, a root_cause verdict needs at least 3 hypotheses and must name a fault (if nothing is wrong, the verdict is healthy) that doesn't rest on a feature flag the logs show is off, and every service in the dependency path must have been queried. If it is rejected, fix the listed problems (investigate more if needed) and submit again.",
     // exposure is the dependency stage's (dependencies/exposure.ts): offered
     // here, models fill it in on telemetry incidents too.
     inputSchema: investigationReportSchema.omit({ servicesQueried: true, exposure: true }).extend({ summary: reportSummarySchema }),
@@ -305,13 +307,15 @@ function submitReportTool(source: TelemetrySource, recorder: InvestigationRecord
       const report = { ...input, servicesQueried: [...recorder.queriedServices].sort() };
       const unknown = findUnknownEvidenceIds(report, recorder.evidence);
       const unqueried = serviceNames.filter((s) => !recorder.queriedServices.has(s));
+      const flags = await flagContext(source, recorder.incident.trigger);
       const problems = [
         ...reportProblems(report),
+        ...offFlagProblems(report, recorder.evidence, flags),
         ...(unknown.length ? [`unknown evidence IDs cited: ${unknown.join(", ")}`] : []),
         ...unqueried.map((s) => `service not queried yet: ${s}`),
       ];
       if (problems.length > 0) {
-        recorder.rejectedReports += 1;
+        recorder.rejectReport(problems);
         return { accepted: false, problems };
       }
       recorder.update({ report });

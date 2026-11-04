@@ -38,6 +38,11 @@ function initialDraft(view: Incident, settings: PublicModelSettings): Draft {
   };
 }
 
+// Asks the incident header to open its re-run dialog, from elsewhere on the
+// page (a failed run's notice). The header owns the dialog and its blocker.
+export const RERUN_EVENT = "triage:rerun";
+export const requestRerun = () => window.dispatchEvent(new Event(RERUN_EVENT));
+
 // Picks the models for a re-run of the incident, then starts it and opens
 // it. Every stage the run goes through can change: Investigate (and its
 // Lead, when it checks hypotheses in parallel), Fix on a live incident, and

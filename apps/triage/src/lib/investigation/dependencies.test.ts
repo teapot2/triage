@@ -5,6 +5,7 @@ import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { closeDb } from "../db";
 import type { MessageKind } from "../notifications/types";
+import { lastOpened } from "./last-opened";
 import type { AuditResult } from "./dependencies/audit";
 import type { Finding } from "./dependencies/model";
 import type { Incident } from "./schema";
@@ -130,6 +131,9 @@ describe("dependency loop", () => {
     assert.deepEqual(investigated, [incident.id]);
     assert.deepEqual(sent.at(-1), { kind: "incident_opened", incidentId: incident.id });
     assert.equal(findings.getFinding("shopfront", semver.advisoryId)?.incidentId, incident.id);
+    // For the sidebar: the announcement, and the incident it links to.
+    assert.deepEqual([lastOpened()?.incidentId, lastOpened()?.rule, lastOpened()?.by], [incident.id, "semver advisory", "dependencies"]);
+    assert.equal(loop.dependencyState().incidentId, incident.id);
 
     await audit([glob, semver]);
     const all = await depIncidents();
@@ -179,6 +183,7 @@ describe("dependency loop", () => {
     assert.equal(saved.reopenings?.length, 1);
     assert.equal(saved.dependency?.goneAt, undefined);
     assert.deepEqual(sent.at(-1), { kind: "incident_reopened", incidentId: incident.id });
+    assert.deepEqual([lastOpened()?.incidentId, lastOpened()?.reopened], [incident.id, true]);
   });
 
   it("verifies a merged fix: still found is a note, gone resolves it", async () => {
@@ -206,5 +211,10 @@ describe("dependency loop", () => {
     await audit([glob, critical]);
     assert.ok(!(await depIncidents()).some((i) => i.dependency?.advisoryId === critical.advisoryId));
     assert.equal(loop.dependencyState().status, "paused");
+    // The Watch page says why, once.
+    assert.equal(loop.dependencyState().error, loop.PAUSED);
+    // Nothing held back, nothing to say.
+    await audit([glob]);
+    assert.equal(loop.dependencyState().error, undefined);
   });
 });

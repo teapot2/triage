@@ -29,10 +29,11 @@ import { incidentBlock } from "../context";
 import type { Stage } from "../fanout/run";
 import { QuestionRecorder } from "../recorder";
 import type { Incident, Question } from "../schema";
-import { sourceFor } from "../source-for";
+import { askSourceFor, sourceFor } from "../source-for";
 import type { TelemetrySource } from "../source";
 import { listIncidents } from "../store";
 import { createInvestigationTools, forModel } from "../tools";
+import { afterAlert } from "./after-alert";
 import { type PromptText, splitTokens, toolsText } from "./context-parts";
 import {
   buildContext,
@@ -83,6 +84,7 @@ function instructions(mode: Question["mode"], image: boolean, web: boolean): str
     mode === "tools"
       ? `- Use the tools only when the question is about the system and the recorded evidence does not answer it. Prefer evidence that could disprove a claim: to say why something was ruled out, say what was checked and what it showed.
 - If the tools find nothing in the window, say so instead of guessing.
+- The incident details say up to when the tools read (their "now"): say so when you answer whether something is still happening or back to normal, and use the "After the alert" record for what came after it.
 - db_diagnostics and read_source read the system as it is now, not at alert time: say "now" when you cite them.
 - Every tool is read-only. If the question asks you to change something, point at the incident's mitigation or fix instead.`
       : mode === "full_context"
@@ -96,6 +98,7 @@ function instructions(mode: Question["mode"], image: boolean, web: boolean): str
 
 Rules:
 - Cite every claim about the system or the incident with an evidence ID in square brackets, e.g. [ev_log_3]. Cite only IDs listed ${where}. Never invent one. Questions about this conversation, the report, the incident's page or Triage itself need no citations.
+- The investigation's evidence stops at the alert; your tools don't necessarily: they read up to the tools' "now" in the incident block, which on a live incident can be after the alert. What happened after the alert (the mitigation, the recovery watch, the verification, reopenings, the resolution) is in the "After the alert" record: answer whether the metric is back, or how it went after the mitigation, from that record and cite its IDs, or from your tools when they read later than the record goes, never from the alert's own readings. When you say how far the tools read, use the tools' "now". If nothing there or in your tools covers the time asked about, say so.
 ${tools}${web ? WEB_SEARCH_RULES : ""}${image ? IMAGE_RULES : ""}
 - A question about Triage or about something on the incident's page (a label, a status, a section) is on topic: answer it from the incident details below.
 - Thanks, an acknowledgement or a reaction (frustration included) is not a question: reply in a sentence, plainly, without asking them to clarify.
@@ -106,21 +109,28 @@ ${tools}${web ? WEB_SEARCH_RULES : ""}${image ? IMAGE_RULES : ""}
 }
 
 // The question's prompt in its parts, which joined are the prompt; and of
-// the earlier questions asked, how many the history carries.
-function promptSections(incident: Incident, question: Question, source: TelemetrySource | undefined) {
+// the earlier questions asked, how many the history carries; and the record
+// after the alert's items an answer may cite. That record goes after the
+// earlier questions, just before the question: it changes as the incident
+// does, so the prompt's start stays the same for Meta's cache. `pastAlert`:
+// how far past the alert the tools read (askSourceFor).
+function promptSections(incident: Incident, question: Question, source: TelemetrySource | undefined, pastAlert: number) {
   const earlier = (incident.questions ?? []).filter((q) => q.id !== question.id);
   const evidence = [...incident.evidence, ...earlier.flatMap((q) => q.evidence)]
     .map((e) => JSON.stringify(forModel(e)))
     .join("\n");
   const history = conversationHistory(earlier, HISTORY);
   const asked = earlier.filter((q) => q.status !== "answering").length;
+  const after = afterAlert(incident, question.id);
   return {
     sections: {
-      report: incidentBlock(incident, source),
+      report: incidentBlock(incident, source, pastAlert),
       evidence: `\n\nEvidence you may cite:\n${evidence || "(none)"}\n`,
       history: history ? `\nEarlier questions:\n${history}\n` : "",
+      after: after.text,
       question: `\nQuestion: ${question.text}`,
     },
+    record: after.items,
     history: { included: Math.min(asked, HISTORY), asked },
   };
 }
@@ -152,6 +162,14 @@ type AnswerOptions = {
 
 // A full-context question's one step: reading the bundle.
 const FULL_STEP = "full_context_1";
+// That step as the asking tab hears it (questions-panel.tsx's liveView): it
+// isn't a tool call, so it goes as a data part, updated in place by its ID,
+// before the model's own parts.
+export type FullContextPart = {
+  type: "data-full-context";
+  id: string;
+  data: { status: "running" | "completed" | "error"; summary?: string; error?: string };
+};
 // One attempt, waited on longer: a prompt of several hundred thousand
 // tokens takes a while to read, and a retry would bill it again.
 const FULL_ATTEMPT_MS = 5 * 60_000;
@@ -208,6 +226,12 @@ async function answer(
   let retries = 0;
   // A full-context question reads the whole bundle in one call, no tools.
   const full = recorder.question.mode === "full_context";
+  const fullStep = (data: FullContextPart["data"]) =>
+    writer.write({ type: "data-full-context", id: FULL_STEP, data } satisfies FullContextPart);
+  // The message starts here rather than with the model's stream: the tab
+  // starts a new message on a start chunk with a new ID, which would drop
+  // the bundle's step written before it.
+  writer.write({ type: "start" });
   try {
     const stage = opts.stage ?? (full ? await fullContextStage() : await stageModel("ask"));
     provider = stage.provider;
@@ -216,11 +240,20 @@ async function answer(
     if (problem) throw new Error(problem);
 
     // A live source that can't be read (files gone) answers from the
-    // recorded evidence, like an incident without a source.
-    const source = await sourceFor(incident).catch((err) => {
+    // recorded evidence, like an incident without a source. The tools read
+    // past the alert on a live run or an endpoint check (askSourceFor); the
+    // full-context bundle stays at the alert, so it is the same for every
+    // question and Meta serves it from the cache.
+    const unavailable = (err: unknown) => {
       console.error("[triage] question source unavailable", incident.id, err);
       return undefined;
-    });
+    };
+    const { source, pastAlert } =
+      (full
+        ? await sourceFor(incident)
+            .then((s) => s && { source: s, pastAlert: 0 })
+            .catch(unavailable)
+        : await askSourceFor(incident).catch(unavailable)) ?? { source: undefined, pastAlert: 0 };
     if (full && !source) throw new Error("This incident's telemetry can't be read, so there's nothing to answer with full context.");
     const mode: Question["mode"] = full ? "full_context" : source ? "tools" : "evidence_only";
     recorder.update({ mode });
@@ -237,17 +270,20 @@ async function answer(
     const question = recorder.question;
     const image = await readQuestionImage(incident.id, question);
     if (question.image && !image) throw new Error("The attached image couldn't be read back: ask again with it");
-    const { sections, history } = promptSections(incident, question, source);
+    const { sections, record, history } = promptSections(incident, question, source, pastAlert);
     // The bundle goes first, so the prompt's start is the same for every
     // question on the incident and Meta serves it from the cache.
     let bundle: FullContext | undefined;
     if (full) {
       recorder.startStep(FULL_STEP, "full_context", {});
+      fullStep({ status: "running" });
       const room = (opts.budget ?? FULL_CONTEXT_TOKENS) - FULL_RESERVE;
       bundle = await cachedContext(incident.id, room, async () =>
         buildContext(incident, source!, opts.others ?? (await listIncidents({ service: incident.service })), room),
       );
-      recorder.completeStep(FULL_STEP, "full_context", bundleSummary(bundle, estimateTokens(bundleText(bundle.parts))), []);
+      const summary = bundleSummary(bundle, estimateTokens(bundleText(bundle.parts)));
+      recorder.completeStep(FULL_STEP, "full_context", summary, []);
+      fullStep({ status: "completed", summary });
     }
     const prompt = (bundle ? bundleText(bundle.parts) : "") + Object.values(sections).join("");
     const content: UserContent = image
@@ -257,7 +293,10 @@ async function answer(
         ]
       : prompt;
     const system = instructions(mode, image !== undefined, web);
-    const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...sections, ...bundle?.parts };
+    // The record after the alert counts as the incident report on the
+    // context card.
+    const { after, ...rest } = sections;
+    const promptText: PromptText = { instructions: system, tools: await toolsText(tools), ...rest, report: rest.report + after, ...bundle?.parts };
     const maxSteps = full ? 1 : MAX_STEPS;
 
     // As in the investigation: Meta's API only supports tool_choice "auto",
@@ -309,13 +348,13 @@ async function answer(
       tokens,
       // Streamed to the tab as it comes. A run that answers, or stops
       // without calling tools, isn't nudged.
-      read: async (result, pass) => {
+      read: async (result) => {
         let failure: unknown;
         let aborted: Error | undefined;
         let madeToolCalls = false;
         let stepToolCalls = false;
         const chunks = result.toUIMessageStream({
-          sendStart: pass === 0,
+          sendStart: false,
           sendFinish: false,
           onError: (err) => {
             failure ??= err;
@@ -374,6 +413,8 @@ async function answer(
       const cited = parseCitations(text, new Set(bundle.items.keys())).citedIds.filter((id) => !known.has(id));
       recorder.attachEvidence(FULL_STEP, cited.map((id) => bundle.items.get(id)!));
     }
+    // Of the record after the alert, only what the answer cites is kept.
+    recorder.keepEvidence(parseCitations(text, new Set(record.keys())).citedIds.map((id) => record.get(id)!));
     const { citedIds, unknownIds } = parseCitations(text, knownEvidenceIds(incident, recorder.question));
     recorder.update({
       status: text ? "answered" : "failed",
@@ -395,7 +436,10 @@ async function answer(
     // the likely cause is said too, unless the API or the clock failed.
     const text = modelErrorText(err, provider);
     const message = recorder.question.image && calledModel && !isTransientFailure(err) ? `${text} ${NO_VISION_HINT}` : text;
-    if (recorder.question.steps.some((s) => s.id === FULL_STEP && s.status === "running")) recorder.failStep(FULL_STEP, message);
+    if (recorder.question.steps.some((s) => s.id === FULL_STEP && s.status === "running")) {
+      recorder.failStep(FULL_STEP, message);
+      fullStep({ status: "error", error: message });
+    }
     recorder.update({
       status: "failed",
       error: message,

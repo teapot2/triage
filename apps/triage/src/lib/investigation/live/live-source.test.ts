@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { deriveFlagStates } from "../source";
-import { deployRecords, fetchRelease, flagEvents, flagStates, gitLogArgs, harnessPaths, listSourceFiles, shopfrontDir } from "./live-source";
-import type { LogRow } from "./otlp-files";
+import { pastThreshold } from "../recovery";
+import { evaluateRule } from "../watch-judge";
+import { defaultRules, slowMetric, tripMetric } from "../watch-rule-model";
+import {
+  deployRecords,
+  fetchRelease,
+  flagEvents,
+  flagStates,
+  gitLogArgs,
+  harnessPaths,
+  listSourceFiles,
+  p95,
+  requestSamples,
+  shopfrontDir,
+  slowSeries,
+} from "./live-source";
+import type { LogRow, SpanRow } from "./otlp-files";
 
 const at = (iso: string) => Date.parse(iso);
 const warn = (time: string, body: string, attributes: LogRow["attributes"] = {}): LogRow => ({
@@ -173,5 +188,103 @@ describe("listSourceFiles", () => {
     const files = await listSourceFiles();
     assert.ok(files.includes("src/lib/products.ts"));
     assert.deepEqual(files.filter((f) => /^src\/lib\/traffic(-profile)?\.test\.ts$/.test(f)), []);
+  });
+});
+
+describe("slowSeries", () => {
+  const MINUTE = 60_000;
+  const now = Date.parse("2026-11-03T12:02:30.000Z");
+  // Minutes from 12:00: a request on `route` starting `offset` ms in, taking `ms`.
+  let n = 0;
+  const span = (minute: number, ms: number, o: { route?: string; method?: string } = {}): SpanRow => {
+    const start = Date.parse("2026-11-03T12:00:00.000Z") + minute * MINUTE + ++n;
+    const method = o.method ?? "GET";
+    return {
+      traceId: `t${n}`,
+      spanId: `s${n}`,
+      service: "shopfront",
+      scope: "next.js",
+      name: `${method} ${o.route ?? "/"}`,
+      kind: 2,
+      start,
+      end: start + ms,
+      error: false,
+      attributes: { "http.route": o.route ?? "/", "http.method": method, "http.status_code": 200 },
+      events: [],
+    };
+  };
+  const f = { duration: (s: SpanRow) => s.end - s.start };
+  const fast = (minute: number, count: number) => Array.from({ length: count }, () => span(minute, 200));
+
+  it("counts each minute's requests slower than the limit, 0 when none are, and skips a minute with none", () => {
+    const spans = [
+      // 12:00: 5 slow of 7. 12:01: no requests at all. 12:02: 12 fast.
+      ...[1600, 2000, 4000, 1501, 9000].map((ms) => span(0, ms)),
+      span(0, 1500), // exactly the limit isn't slower than it
+      span(0, 100),
+      ...fast(2, 12),
+      // Not counted: another route, and a HEAD probe.
+      span(0, 5000, { route: "/cart" }),
+      span(0, 5000, { method: "HEAD" }),
+    ];
+    const series = slowSeries("http.server.slow_requests{route=/,le=1500}", spans, now, f)!;
+    assert.equal(series.unit, "requests");
+    assert.deepEqual(series.points(3), [
+      { t: "2026-11-03T12:00:00.000Z", value: 5 },
+      { t: "2026-11-03T12:02:00.000Z", value: 0 },
+    ]);
+    const share = slowSeries("http.server.slow_share{route=/,le=1500}", spans, now, f)!;
+    assert.equal(share.unit, "%");
+    assert.deepEqual(share.points(3), [
+      { t: "2026-11-03T12:00:00.000Z", value: 71.43 },
+      { t: "2026-11-03T12:02:00.000Z", value: 0 },
+    ]);
+  });
+
+  it("serves the series a slow-request rule's incident charts, for any route", () => {
+    const spans = [span(0, 3000, { route: "/products/[id]" }), span(0, 50, { route: "/products/[id]" })];
+    const name = slowMetric("count", "/products/[id]", 1000);
+    assert.equal(name, "http.server.slow_requests{route=/products/[id],le=1000}");
+    assert.deepEqual(slowSeries(name, spans, now, f)!.points(3), [{ t: "2026-11-03T12:00:00.000Z", value: 1 }]);
+    assert.deepEqual(slowSeries(slowMetric("share", "/products/[id]", 1000), spans, now, f)!.points(3), [
+      { t: "2026-11-03T12:00:00.000Z", value: 50 },
+    ]);
+  });
+
+  it("answers only to a slow-request name", () => {
+    assert.equal(slowSeries("http.server.request.duration.p95{route=/}", [], now, f), undefined);
+    assert.equal(slowSeries("http.server.slow_requests{route=/}", [], now, f), undefined);
+    assert.equal(slowSeries("slo.burn_rate{route=/,objective=99,le=500}", [], now, f), undefined);
+  });
+
+  // The live rehearsal: after the flag-off a dev-mode page still has the odd
+  // slow request, which moves a p95 over ~15 requests a minute past the
+  // limit, but by the rule's own measure the page has recovered.
+  it("judges a Page latency incident as the watch judged the rule, not on p95", () => {
+    const rule = defaultRules.find((r) => r.id === "page-latency")!;
+    const { metric, threshold } = tripMetric(rule, "/");
+    assert.deepEqual({ metric, threshold }, { metric: "http.server.slow_requests{route=/,le=1500}", threshold: 10 });
+    const minute = (slow: number) => [...Array.from({ length: slow }, () => 4000), ...Array.from({ length: 14 - slow }, () => 300)];
+    // 12:00 the leak (12 slow), 12:01 one slow request, 12:02 ten.
+    const spans = [0, 1, 2].flatMap((m) => minute([12, 1, 10][m]).map((ms) => span(m, ms)));
+    const points = slowSeries(metric, spans, now, f)!.points(3);
+    const past = pastThreshold(metric, threshold);
+    assert.deepEqual(
+      points.map((p) => [p.value, past(p.value)]),
+      [
+        [12, true],
+        [1, false],
+        [10, false],
+      ],
+    );
+    // The same minutes' p95 is past the slow limit throughout.
+    for (const m of [0, 1, 2]) assert.ok(p95(minute([12, 1, 10][m])) > 1500);
+    // And the watch, judging each minute's requests, agrees with the series.
+    for (const m of [0, 1, 2]) {
+      const end = Date.parse("2026-11-03T12:00:00.000Z") + (m + 1) * MINUTE - 1;
+      const samples = requestSamples(spans, end - MINUTE, end);
+      const r = evaluateRule({ ...rule, windowSeconds: 60 }, samples, end, new Map());
+      assert.equal(r.status === "breaching", past(points[m].value));
+    }
   });
 });

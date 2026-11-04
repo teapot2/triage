@@ -1,8 +1,8 @@
-import { metricLabel } from "@/components/incident/metric-labels";
+import { limitText, metricLabel } from "@/components/incident/metric-labels";
 import { citationOrder, otherHypotheses } from "../investigation/citations";
 import { gradeHypothesis, gradeLabels, verdictHypothesis } from "../investigation/confidence-grade";
 import { evidenceLine, statusInWords } from "../investigation/postmortem/render";
-import { withUnit } from "../investigation/postmortem/timeline";
+import { reopeningText, withUnit } from "../investigation/postmortem/timeline";
 import type {
   Claim,
   Evidence,
@@ -103,7 +103,7 @@ export function incidentListMarkdown(rows: IncidentRow[], total: number): string
 function alertSection(incident: Incident): string {
   const { trigger } = incident;
   const lines = [
-    `${metricLabel(trigger.metric)} (\`${trigger.metric}\`) observed ${withUnit(trigger.observed, trigger.unit)}, threshold ${withUnit(trigger.threshold, trigger.unit)}.`,
+    `${metricLabel(trigger.metric)} (\`${trigger.metric}\`) observed ${withUnit(trigger.observed, trigger.unit)}, threshold ${limitText(trigger.metric, withUnit(trigger.threshold, trigger.unit))}.`,
   ];
   if (trigger.rule) lines.push(`Rule: ${trigger.rule.name}: ${trigger.rule.description}`);
   if (trigger.route) lines.push(`Route: \`${trigger.route}\``);
@@ -226,7 +226,7 @@ function resolutionSection(incident: Incident): string | undefined {
   const v = incident.verification;
   if (v && !incident.resolvedAt) lines.push(`Verification after the ${v.after}: ${v.status} (${v.windowMinutes} min quiet window).`);
   const reopened = incident.reopenings?.length ?? 0;
-  if (reopened) lines.push(`Reopened ${reopened} time${reopened === 1 ? "" : "s"}, last: ${incident.reopenings!.at(-1)!.why}`);
+  if (reopened) lines.push(`Reopened ${reopened} time${reopened === 1 ? "" : "s"}, last: ${reopeningText(incident.reopenings!.at(-1)!)}`);
   return lines.length ? `## Resolution\n\n${lines.join("\n")}` : undefined;
 }
 
@@ -257,6 +257,7 @@ export function incidentMarkdown(incident: Incident, baseUrl: string): string {
     // Up front, so an agent knows not to ask it questions.
     incident.archivedAt &&
       `Archived ${utc(incident.archivedAt)}: read-only, so ask_incident is refused. Restore it on its page to work on it again.`,
+    incident.relatedTo && `Related to \`${incident.relatedTo.id}\` (${incident.relatedTo.title}). ${incident.relatedTo.why}`,
   ]
     .filter(Boolean)
     .join("\n\n");

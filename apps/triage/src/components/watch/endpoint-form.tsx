@@ -26,10 +26,12 @@ import {
   DEFAULT_AUTH_HEADER,
   defaultCheck,
   describeCheck,
+  duration,
   MAX_CHECKS,
   originOf,
   ruleName,
   ruleSeverity,
+  slowLimitProblem,
   type UptimeCheck,
   type UptimeRule,
   urlProblem,
@@ -122,8 +124,10 @@ function fromDraft(d: Draft, base: UptimeCheck): { check?: UptimeCheck; errors: 
   const max = parseNumber(d.statusMax, 100, 599);
   if (min === undefined || max === undefined) errors.status = "Status codes from 100 to 599.";
   else if (min > max) errors.status = "The lowest status can't be above the highest.";
-  if (n.slowMs !== undefined && n.timeoutMs !== undefined && n.slowMs > n.timeoutMs) {
-    errors.slowMs = "Can't be past No answer within, under Down.";
+  // Under, not equal: past the timeout a request is aborted as Down, so a
+  // limit at the timeout would never see a slow response.
+  if (n.slowMs !== undefined && n.timeoutMs !== undefined && slowLimitProblem({ slowMs: n.slowMs, timeoutMs: n.timeoutMs })) {
+    errors.slowMs = `Must be under the timeout (No answer within, ${duration(n.timeoutMs)}).`;
   }
   if (Object.keys(errors).length > 0) return { errors };
 

@@ -10,6 +10,7 @@ import {
   burnThreshold,
   durationText,
   SLOW_BURN_SEVERITY,
+  shortWindowMinimum,
 } from "./model";
 import type { CountsFn } from "./rollups";
 
@@ -30,16 +31,17 @@ export const SLOW_BURN_HOLD_MS = 5 * 60_000;
 
 // Judges an SLO rule at `now` on each of `routes` it covers. An alert fires
 // on a route when its burn rate is over the alert's threshold in both its
-// windows, with at least minRequests in the long one; fewer, and that alert
+// windows, with at least minRequests in the long one and
+// shortWindowMinimum in the short one; fewer in either, and that alert
 // doesn't judge the route. A fast alert trips at once, at the rule's
 // severity; the slow one once it has fired for SLOW_BURN_HOLD_MS, at
 // SLOW_BURN_SEVERITY, timed in `held` (keyed "rule|route|slow", kept by the
 // caller across checks). A fast burn anywhere wins the trip. The short
 // windows are the debounce, and clear an alert soon after the burn stops.
 // One route of an SLO rule at `now`: whether any alert judged it (had
-// minRequests in its long window), the alert firing on it, if any (both its
-// windows over its threshold, the fastest first), and what's left of its
-// budget. Shared with the service page's budgets (budget.ts).
+// enough requests in both its windows), the alert firing on it, if any
+// (both its windows over its threshold, the fastest first), and what's left
+// of its budget. Shared with the service page's budgets (budget.ts).
 export function judgeRoute(
   rule: WatchRule,
   route: string,
@@ -55,11 +57,13 @@ export function judgeRoute(
   for (const alert of burnAlerts) {
     const long = over(alert.longMs);
     if (long.total < rule.minRequests) continue;
+    const short = over(alert.shortMs);
+    if (short.total < shortWindowMinimum(alert, rule.minRequests, c)) continue;
     judged = true;
     const threshold = burnThreshold(alert, c.windowDays);
     const rate = burnRate(long, c.objectivePercent);
     if (firing || rate <= threshold) continue;
-    if (burnRate(over(alert.shortMs), c.objectivePercent) <= threshold) continue;
+    if (burnRate(short, c.objectivePercent) <= threshold) continue;
     firing = { alert, rate, threshold, longMs: alert.longMs, shortMs: alert.shortMs, budgetLeftPercent: left };
   }
   return { judged, firing, left };
@@ -109,6 +113,7 @@ export function evaluateSloRule(
         route: trip.route,
         method: trip.method,
         burn,
+        speed: alert.speed,
         ...(alert.speed === "slow" ? { severity: SLOW_BURN_SEVERITY } : {}),
       },
       budgetLeftPercent: lowest?.left,

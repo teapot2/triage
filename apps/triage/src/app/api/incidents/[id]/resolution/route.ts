@@ -46,7 +46,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         return resolved(i, now);
       }
       if (i.status !== "resolved") throw new Refused("only a resolved incident can be reopened");
-      return reopened(i, { at: now, by: "person", why: note?.trim() || "Reopened by a person" });
+      // No stand-in when no note is given: the reopening already says who.
+      return reopened(i, { at: now, by: "person", why: note?.trim() ?? "" });
     });
     if (action === "resolve") notify("resolved", next);
     return Response.json(action === "resolve" ? { status: next.status, resolvedAt: next.resolvedAt } : { status: next.status });

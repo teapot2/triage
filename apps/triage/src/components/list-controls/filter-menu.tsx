@@ -29,7 +29,7 @@ export type FilterOption = {
   icon?: ReactNode;
   // How many of the list's items have it.
   count?: number;
-  // A heading the option is listed under ("In progress", "Done"); options
+  // A heading the option is listed under ("Open", "Done"); options
   // with the same group must be next to each other.
   group?: string;
 };

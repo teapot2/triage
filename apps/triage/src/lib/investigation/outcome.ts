@@ -1,7 +1,7 @@
 import type { StatusTone } from "@/components/ui/badge";
-import { metricLabel } from "@/components/incident/metric-labels";
+import { limitSides, metricLabel } from "@/components/incident/metric-labels";
 import { type ConfidenceGrade, gradeHypothesis, laneOf, mitigationRecovered, regressionProven, verdictHypothesis } from "./confidence-grade";
-import { reopenedBy, withUnit } from "./postmortem/timeline";
+import { reopeningText, withUnit } from "./postmortem/timeline";
 import type { Hypothesis, Incident, Mitigation, Verification } from "./schema";
 
 // How the diagnosis held up: whether the first diagnosis held, read off what
@@ -63,7 +63,7 @@ function mitigationSignals(incident: Incident): Signal[] {
   const r = m.recovery;
   const doing = mitigationDoing(m);
   if (!r) return [{ kind: "mitigation", status: "unknown", at: m.appliedAt, text: `${doing} was applied; no recovery is recorded` }];
-  const under = `${metricLabel(r.metric)} back under ${withUnit(r.threshold, incident.trigger.unit)}`;
+  const under = `${metricLabel(r.metric)} back ${limitSides(r.metric).healthy} ${withUnit(r.threshold, incident.trigger.unit)}`;
   if (mitigationRecovered(incident)) return [{ kind: "mitigation", status: "confirmed", at: r.recoveredAt, text: `${doing} brought ${under}` }];
   if (r.status === "not_recovered") {
     return [{ kind: "mitigation", status: "contradicted", at: r.checkedAt, text: `${doing} did not bring ${under}${r.note ? `: ${firstLine(r.note)}` : ""}` }];
@@ -147,13 +147,13 @@ function verificationSignals(incident: Incident): Signal[] {
   const after = afterInWords[v.after];
   switch (v.status) {
     case "resolved":
-      return [{ kind: "verification", status: "confirmed", at: v.finishedAt, text: `${label} stayed under ${limit} for the ${v.windowMinutes}-minute quiet window after ${after}` }];
+      return [{ kind: "verification", status: "confirmed", at: v.finishedAt, text: `${label} stayed ${limitSides(v.metric).healthy} ${limit} for the ${v.windowMinutes}-minute quiet window after ${after}` }];
     case "breached":
       return [{
         kind: "verification",
         status: "contradicted",
         at: v.breachedAt,
-        text: `${label} went back over ${limit}${v.breachValue !== undefined ? ` (${withUnit(v.breachValue, incident.trigger.unit)})` : ""} in the quiet window after ${after}`,
+        text: `${label} went back ${limitSides(v.metric).breach} ${limit}${v.breachValue !== undefined ? ` (${withUnit(v.breachValue, incident.trigger.unit)})` : ""} in the quiet window after ${after}`,
       }];
     case "verifying":
       return [{ kind: "verification", status: "unknown", at: v.startedAt, text: `${label} is being watched for ${v.windowMinutes} minutes after ${after}` }];
@@ -167,7 +167,7 @@ function reopeningSignals(incident: Incident): Signal[] {
     kind: r.by === "person" ? "human" : "reopening",
     status: r.by === "person" ? "unknown" : "contradicted",
     at: r.at,
-    text: `Reopened by ${reopenedBy[r.by]}: ${firstLine(r.why)}`,
+    text: reopeningText(r),
   }));
 }
 

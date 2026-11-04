@@ -14,6 +14,8 @@ import {
   ruleId,
   ruleSeverity,
   runStatus,
+  slowLimitProblem,
+  slowLimitRefusal,
   withSavedSecrets,
 } from "./model";
 
@@ -37,6 +39,20 @@ describe("uptime check model", () => {
     assert.equal(checkSchema.safeParse({ ...google, url: "https://user:pw@example.com" }).success, false);
     assert.equal(checkSchema.safeParse({ ...google, slowMs: 20_000 }).success, false);
     assert.equal(checkSchema.safeParse({ ...google, expectedStatus: { min: 300, max: 200 } }).success, false);
+  });
+
+  it("wants a new or changed slow limit under the timeout, and still loads one saved equal", () => {
+    const equal = { ...google, slowMs: 15_000 };
+    // A saved check with the two equal still reads.
+    assert.equal(checkSchema.safeParse(equal).success, true);
+    assert.equal(slowLimitProblem(google), undefined);
+    assert.equal(slowLimitProblem(equal), "the slow limit (15 s) must be under the timeout (15 s), or Slow never trips");
+    assert.equal(slowLimitRefusal([equal], []), "Google: the slow limit (15 s) must be under the timeout (15 s), or Slow never trips");
+    assert.equal(slowLimitRefusal([equal], [google]), slowLimitRefusal([equal], []));
+    // Left as it was saved, it doesn't stop a save of the list.
+    const other = { ...google, id: "chk_def456", name: "Other" };
+    assert.equal(slowLimitRefusal([equal, other], [equal]), undefined);
+    assert.equal(slowLimitRefusal([{ ...equal, slowMs: 20_000, timeoutMs: 20_000 }], [equal]), "Google: the slow limit (20 s) must be under the timeout (20 s), or Slow never trips");
   });
 
   it("caps the list at five and refuses duplicate ids", () => {
@@ -103,8 +119,19 @@ describe("uptime check model", () => {
     assert.equal(runStatus([]), undefined);
     assert.equal(incidentTitle(google, "down", 401), "www.google.com is rejecting the check's credentials");
     assert.equal(incidentTitle(google, "down", 403), "www.google.com is rejecting the check's credentials");
-    assert.equal(incidentTitle(google, "down", 503), "www.google.com is not responding");
     assert.equal(incidentTitle(google, "slow", 401), "Slow responses from www.google.com");
+  });
+
+  it("names the status a Down run answered with every time, and only then", () => {
+    // Shopfront's /api/health answers 503 when its database probe fails.
+    const local = { ...google, url: "http://localhost:3001/api/health" };
+    assert.equal(incidentTitle(local, "down", 503), "localhost:3001 is returning HTTP 503");
+    assert.equal(incidentTitle(google, "down", 302), "www.google.com is returning HTTP 302");
+    // Timeouts, connection failures and mixed runs have no one status.
+    assert.equal(incidentTitle(local, "down", undefined), "localhost:3001 is not responding");
+    // A status the check expects can't be why it's down.
+    assert.equal(incidentTitle(google, "down", 200), "www.google.com is not responding");
+    assert.equal(incidentTitle({ ...google, expectedStatus: { min: 200, max: 503 } }, "down", 503), "www.google.com is not responding");
   });
 
   it("keys rules by check and kind, down sev2 and slow sev3", () => {

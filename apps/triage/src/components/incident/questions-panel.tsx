@@ -60,7 +60,8 @@ import { scrollsItself, scrollToEnd, useFollowBottom } from "@/hooks/use-follow-
 import { useSpeechPreferences } from "@/hooks/use-speech-preferences";
 import { type ShrunkImage, shrinkImage, UnreadableImage } from "@/lib/images/shrink";
 import { isArchived } from "@/lib/investigation/archive";
-import { askRefusal, DEFAULT_IMAGE_QUESTION, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
+import type { FullContextPart } from "@/lib/investigation/ask/agent";
+import { askRefusal, DEFAULT_IMAGE_QUESTION, knowsAfterAlert, MAX_QUESTION_CHARS, plainAnswer } from "@/lib/investigation/ask/rules";
 import { type Incident, type InvestigationStep, type Question, type StageChoice, toolNameSchema } from "@/lib/investigation/schema";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { searchSummary, WEB_SEARCH } from "@/lib/investigation/web-search";
@@ -72,6 +73,7 @@ import { sseJsonStream } from "@/lib/sse";
 import { cn } from "@/lib/utils";
 import { AnswerText } from "./answer-text";
 import { formatShare } from "./context-meter";
+import { limitSides, metricLabel } from "./metric-labels";
 import { type ContextSegment, ContextWindow } from "./context-window";
 import { formatCompact, formatDuration } from "./format";
 import { StepRow } from "./investigation-timeline";
@@ -91,6 +93,25 @@ import { errorMessage } from "@/lib/errors";
 // When a tool call began and ended, by this tab's clock: the stream carries
 // no timestamps.
 type Timing = Map<string, { start: number; end?: number }>;
+
+// A full-context question's first step, reading everything Triage holds on
+// the service, comes as a data part (ask/agent.ts), not a tool call: it runs
+// before the model is called.
+const FULL_CONTEXT_PART: FullContextPart["type"] = "data-full-context";
+function fullContextPart(part: UIMessage["parts"][number]): FullContextPart | undefined {
+  return part.type === FULL_CONTEXT_PART && typeof part.id === "string" ? (part as FullContextPart) : undefined;
+}
+
+// A part that is a step (a tool call or the full-context read): its ID and
+// whether it has ended.
+function stepState(part: UIMessage["parts"][number]): { id: string; ended: boolean } | undefined {
+  const full = fullContextPart(part);
+  if (full) return { id: full.id, ended: full.data.status !== "running" };
+  if (isToolUIPart(part)) {
+    return { id: part.toolCallId, ended: part.state === "output-available" || part.state === "output-error" };
+  }
+  return undefined;
+}
 
 // A screenshot attached to a question, already shrunk (lib/images/shrink),
 // with an object URL for its thumbnail until the saved copy takes over.
@@ -356,10 +377,11 @@ export function useAskQuestion(
         for await (const message of readUIMessageStream({ stream, terminateOnError: true })) {
           const now = Date.now();
           for (const part of message.parts) {
-            if (!isToolUIPart(part)) continue;
-            const t = timing.get(part.toolCallId);
-            if (!t) timing.set(part.toolCallId, { start: now });
-            else if (t.end === undefined && (part.state === "output-available" || part.state === "output-error")) t.end = now;
+            const step = stepState(part);
+            if (!step) continue;
+            const t = timing.get(step.id);
+            if (!t) timing.set(step.id, { start: now });
+            else if (t.end === undefined && step.ended) t.end = now;
           }
           setLive((l) => l && { ...l, message });
         }
@@ -492,8 +514,12 @@ interface Suggestion {
   label: ReactNode;
 }
 
-// From the report: why each ruled-out cause was ruled out, what changed,
-// the slowest request, and whether the mitigation worked.
+// From the report: why each ruled-out cause was ruled out, then what fits
+// the alert. A dependency advisory has no time window or slow request, so
+// it asks where the package is used and what brought it in; an alert on
+// errors asks for a failing request rather than the slowest one. Once a
+// mitigation is applied, whether the alert's metric is back when Ask can
+// read what came after the alert, else what the mitigation changed.
 export function suggestedQuestions(incident: Incident): Suggestion[] {
   const plain = (text: string, icon: LucideIcon): Suggestion => ({ text, icon, label: text });
   const out: Suggestion[] = [];
@@ -509,11 +535,31 @@ export function suggestedQuestions(incident: Incident): Suggestion[] {
       ),
     });
   }
+  const { dependency, trigger } = incident;
+  if (dependency) {
+    out.push(
+      plain(`Where does our code use ${dependency.package}?`, ScanSearchIcon),
+      plain(`Which change brought in ${dependency.package} ${dependency.versions[0]}?`, GitCommitHorizontalIcon),
+    );
+    return out;
+  }
+  const errors = /error_ratio|slo\.burn_rate/.test(trigger.metric) || incident.uptime?.rule === "down";
   out.push(
     plain("What changed in the hour before the alert?", GitCommitHorizontalIcon),
-    plain("Show me the slowest request", TimerIcon),
+    errors ? plain("Show me a failing request", CircleXIcon) : plain("Show me the slowest request", TimerIcon),
   );
-  if (incident.mitigation?.state === "applied") out.push(plain("Is the pool back to normal?", ActivityIcon));
+  // Only when Ask can see past the alert (knowsAfterAlert): otherwise it
+  // has nothing but the alert's own reading to answer from.
+  if (knowsAfterAlert(incident)) {
+    // "p95 latency", without the route the title already gives.
+    const label = metricLabel(trigger.metric).split(" · ")[0];
+    const metric = /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+    // "back under", "back at or under" (a "more than N" count), "back at or
+    // over" (availability).
+    out.push(plain(`Is ${metric} back ${limitSides(trigger.metric).healthy} the limit?`, ActivityIcon));
+  } else if (incident.mitigation?.state === "applied") {
+    out.push(plain("What did the mitigation change?", RotateCcwIcon));
+  }
   return out;
 }
 
@@ -541,6 +587,11 @@ interface QuestionView {
   context?: Question["context"];
   cachedInputTokens?: number;
   answeredAt?: string;
+  // From this tab's stream, until the saved copy takes over. Evidence the
+  // answer cites may only arrive with that copy (a full-context answer's
+  // items are kept once it's answered), so an ID not known yet isn't
+  // struck until then.
+  live?: boolean;
 }
 
 function savedView(q: Question, key: string, incidentId: string): QuestionView {
@@ -587,6 +638,26 @@ function liveView(live: LiveQuestion): QuestionView {
   const thoughts: QuestionView["thoughts"] = [];
   let answer = "";
   parts.forEach((part, i) => {
+    const full = fullContextPart(part);
+    if (full) {
+      const t = live.timing.get(full.id);
+      const start = t?.start ?? Date.now();
+      const { status, summary, error } = full.data;
+      steps.push({
+        id: full.id,
+        tool: "full_context",
+        input: {},
+        status: status === "running" ? "running" : status === "error" ? "error" : "completed",
+        startedAt: new Date(start).toISOString(),
+        durationMs: t?.end !== undefined ? t.end - start : undefined,
+        summary,
+        // What the answer cites of it is kept once it's answered, and the
+        // saved copy shows it.
+        evidenceIds: [],
+        error,
+      });
+      return;
+    }
     if (isToolUIPart(part)) {
       const tool = toolNameSchema.safeParse(getToolName(part));
       if (!tool.success) return;
@@ -630,6 +701,7 @@ function liveView(live: LiveQuestion): QuestionView {
     error: live.error,
     steps,
     thoughts,
+    live: true,
   };
 }
 
@@ -927,15 +999,21 @@ function ChatTurn({
     [view.thoughts, view.steps],
   );
   // What the folded rows hold: "3 tool calls", or "2 thoughts" when the
-  // model answered from the evidence it had.
-  const calls = view.steps.length;
+  // model answered from the evidence it had. A full-context answer has no
+  // tools: its one step is reading everything, said as such.
+  const readAll = view.steps.some((s) => s.tool === "full_context");
+  const calls = view.steps.filter((s) => s.tool !== "full_context").length;
   const thoughts = view.thoughts.length;
-  const folded =
+  const folded = [
+    readAll && "read full context",
     calls > 0
       ? `${calls} tool ${calls === 1 ? "call" : "calls"}`
       : thoughts > 0
         ? `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`
-        : undefined;
+        : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const list = (
     <ol className="-mx-2 flex flex-col">
       {rows.map((row) =>
@@ -1020,7 +1098,9 @@ function ChatTurn({
             )}
           </div>
         ) : (
-          (view.answer || !answering) && <AnswerText text={view.answer} streaming={answering} />
+          (view.answer || !answering) && (
+            <AnswerText text={view.answer} streaming={answering} unsettled={answering || view.live === true} />
+          )
         )}
 
         {view.status === "answered" && (
@@ -1266,7 +1346,8 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
   tools: {
     icon: ScanSearchIcon,
     text: "Read-only tools, alert window",
-    detail: "Answers with the investigation's read-only tools over the alert's window, citing evidence like the report.",
+    detail:
+      "Answers with the investigation's read-only tools over the alert's window (on a live run or an endpoint check, up to two hours past it) and the record of what came after, citing evidence like the report.",
   },
   evidence_only: {
     icon: ArchiveIcon,
@@ -1657,8 +1738,8 @@ function Composer({
             </TooltipTrigger>
             <TooltipContent>
               {ask.fullContext
-                ? "Full context on · Wonder reads the source, history, past incidents and telemetry in one call"
-                : "Full context off"}
+                ? "Full context on · Wonder reads the service's source, git history, earlier incidents and telemetry in one call"
+                : "Full context off · turn on to have Wonder read the service's source, git history, earlier incidents and telemetry in one call"}
             </TooltipContent>
           </Tooltip>
         )}
@@ -1679,7 +1760,9 @@ function Composer({
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              {ask.webSearch ? "Web search on · may look up a library's docs and cite them" : "Web search off"}
+              {ask.webSearch
+                ? "Web search on · may look up a library's public docs and cite them, never this incident's data"
+                : "Web search off · turn on to let the answer look up a library's public docs and cite them"}
             </TooltipContent>
           </Tooltip>
         )}

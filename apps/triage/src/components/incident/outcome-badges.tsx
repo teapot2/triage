@@ -2,7 +2,7 @@ import { CheckIcon, XIcon } from "lucide-react";
 import { ResultChip } from "@/components/ui/badge";
 import { burnText } from "@/lib/slo/model";
 import { formatDuration } from "./format";
-import { lowerIsWorse } from "./metric-labels";
+import { exclusiveLimit, lowerIsWorse } from "./metric-labels";
 
 // What checks returned, as ResultChips: a test or command, an HTTP status,
 // an alert's value against its limit, a log line's level. Small square
@@ -48,7 +48,8 @@ const metricValue = (n: number, unit: string) =>
 
 // An alert's measured value against its limit: the value as a chip, red
 // when past the limit (over it, or under it for a metric where less is
-// worse) and green when within it, then the limit as plain text.
+// worse) and green when within it, then the limit as plain text: "limit
+// 1500 ms", or "more than 3 requests" for a rule that says it that way.
 export function MetricBadges({
   metric,
   observed,
@@ -70,7 +71,9 @@ export function MetricBadges({
   return (
     <span className="inline-flex items-center gap-1.5">
       <ResultChip tone={past ? "destructive" : "success"}>{metricValue(observed, unit)}</ResultChip>
-      <span className="text-muted-foreground text-xs tabular-nums">limit {metricValue(threshold, unit)}</span>
+      <span className="text-muted-foreground text-xs tabular-nums">
+        {metric && exclusiveLimit(metric) ? "more than" : "limit"} {metricValue(threshold, unit)}
+      </span>
     </span>
   );
 }

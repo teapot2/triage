@@ -247,6 +247,8 @@ describe("runFanout", () => {
     // What it gathered before it failed is still evidence for the merge.
     assert.match(userText(seen.find((s) => s.phase === "merge")!.call), /h2: Traffic spike[\s\S]*Finding: unclear \(the check failed: lane model fell over\)/);
     assert.equal(incident.status, "diagnosed", incident.run?.error);
+    // Its one answered call's tokens count, beside h1's two.
+    assert.equal(incident.run?.inputTokens, 300);
   });
 
   it("nudges a lane that stops without a finding once, then counts it unclear", async () => {
@@ -403,6 +405,22 @@ describe("runFanout", () => {
     });
     assert.match(userText(seen.find((s) => s.phase === "single")!.call), /Hypotheses checked so far/);
     assert.equal(incident.status, "diagnosed", incident.run?.error);
+  });
+
+  it("keeps the lead's and the lanes' tokens on a run that fails part-way", async () => {
+    const { incident } = await investigate({
+      scout: scout(poolAlert),
+      h1: supportedLane,
+      h2: refutedLane,
+      merge: () => new Error("lead model down"),
+      single: () => new Error("model down too"),
+    });
+    assert.equal(incident.status, "failed");
+    assert.match(incident.run?.error ?? "", /model down too/);
+    // 2 scout + 2 + 2 lanes + the merge's and the single agent's failed calls.
+    assert.equal(incident.run?.modelSteps, 8);
+    assert.equal(incident.run?.inputTokens, 400);
+    assert.equal(incident.run?.fanout?.inputTokens, 200);
   });
 });
 

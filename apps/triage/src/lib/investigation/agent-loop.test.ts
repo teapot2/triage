@@ -105,8 +105,8 @@ describe("runAgentLoop", () => {
 const stage: Stage = { provider: "meta", model: "scripted", effort: "high", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test" };
 const NUDGE = /^You have not submitted an accepted report yet\./;
 
-async function investigate(script: (call: Call) => Turn) {
-  const s = getScenario("pool-leak")!;
+async function investigate(script: (call: Call) => Turn, scenario = "pool-leak") {
+  const s = getScenario(scenario)!;
   const seen: Call[] = [];
   const incident = await runInvestigation(await scenarioIncident(s), createScenarioSource(s), {
     stage,
@@ -143,7 +143,26 @@ describe("runInvestigation's loop", () => {
     const { incident, seen } = await investigate(() => ({ text: "Still thinking." }));
     assert.equal(seen.length, 3);
     assert.equal(incident.status, "failed");
-    assert.equal(incident.run?.error, "No accepted report after 3 model steps");
+    // Stopped with steps to spare: not out of steps.
+    assert.equal(incident.run?.error, "The model stopped without submitting a report after 3 steps");
+    assert.equal(incident.run?.modelSteps, 3);
+  });
+
+  it("keeps the steps and tokens a run spent when its model fails part-way", async () => {
+    const { incident } = await investigate(inOrder(survey, { tools: [["query_logs", { service: "shopfront" }]] }, new Error("model fell over")));
+    assert.equal(incident.status, "failed");
+    assert.match(incident.run?.error ?? "", /model fell over/);
+    assert.equal(incident.run?.modelSteps, 3);
+    // Two calls answered (100 in, 10 out each); the third threw.
+    assert.equal(incident.run?.inputTokens, 200);
+    assert.equal(incident.run?.outputTokens, 20);
+  });
+
+  it("counts a successful run's tokens once", async () => {
+    const { incident } = await investigate(inOrder(survey, { tools: [["submit_report", report]] }));
+    assert.equal(incident.status, "diagnosed", incident.run?.error);
+    assert.equal(incident.run?.inputTokens, 200);
+    assert.equal(incident.run?.outputTokens, 20);
   });
 
   it("hands a rejected report's problems back, and takes the fixed one", async () => {
@@ -159,6 +178,9 @@ describe("runInvestigation's loop", () => {
     assert.ok(rejected.problems.some((p) => p.includes("ev_db_9")), rejected.problems.join("\n"));
     assert.equal(incident.status, "diagnosed", incident.run?.error);
     assert.equal(incident.run?.rejectedReports, 1);
+    // What it got wrong is kept on the run, for the timeline.
+    assert.equal(incident.run?.reportRejections?.length, 1);
+    assert.match(incident.run?.reportRejections?.[0] ?? "", /ev_db_9/);
     assert.equal(incident.report?.hypotheses[0].causalChain?.rootCause.evidenceIds[0], "ev_db_1");
   });
 
@@ -175,5 +197,35 @@ describe("runInvestigation's loop", () => {
     assert.deepEqual(toolNames(seen[gated]), ["submit_report"]);
     assert.equal(incident.status, "diagnosed", incident.run?.error);
     assert.equal(incident.run?.modelSteps, 27);
+  });
+
+  it("sends back a root cause resting on a flag that is off, and takes a different verdict", async () => {
+    // traffic-rush: every flag is off at the alert ("flags: loaded" at boot).
+    const onFlag = rootCause({ symptom: "ev_metric_1", cause: "ev_db_1", ruledOut: "ev_metric_1" });
+    onFlag.hypotheses[0].title = "FF_LIVE_RATINGS reviews loop slows every listing";
+    const load = rootCause({ symptom: "ev_metric_1", cause: "ev_metric_1", ruledOut: "ev_db_1" });
+    load.summary = "Every page slowed when the request rate tripled; nothing is broken.";
+    load.hypotheses[0].title = "Request rate tripled";
+    load.hypotheses[0].causalChain.rootCause.text = "Traffic rose from 2 to 6 requests per second";
+    const { incident, seen } = await investigate(
+      inOrder(survey, { tools: [["submit_report", onFlag]] }, { tools: [["submit_report", load]] }),
+      "traffic-rush",
+    );
+    const rejected = toolOutputs(seen[2]).find((o) => o.toolName === "submit_report")?.value as {
+      accepted: boolean;
+      problems: string[];
+    };
+    assert.equal(rejected.accepted, false);
+    // Rejected for that alone: the report passes every other check.
+    assert.deepEqual(
+      rejected.problems,
+      [
+        "The root cause of A depends on FF_LIVE_RATINGS (it names FF_LIVE_RATINGS), but the logs show it was off at the alert (07:21); code behind it isn't running now. Rule it out, or name what is causing this now. If something it left behind while it was on is still the cause (resources it still holds, data it wrote), say so, and that FF_LIVE_RATINGS is off.",
+      ],
+    );
+    assert.equal(incident.status, "diagnosed", incident.run?.error);
+    assert.equal(incident.run?.rejectedReports, 1);
+    assert.match(incident.run?.reportRejections?.[0] ?? "", /depends on FF_LIVE_RATINGS/);
+    assert.equal(incident.report?.hypotheses[0].title, "Request rate tripled");
   });
 });

@@ -50,10 +50,20 @@ export function DataChangeReview({
               <li key={reason}>{reason}</li>
             ))}
           </ul>
-          <span>
-            The sandbox tested the code against a throwaway copy of the database and never ran this SQL, so it
-            can&apos;t prove this part. It runs against production when the PR is deployed.
-          </span>
+          {/* Only SQL files go unrun. Without one (the model's flag, or SQL
+              inside code), the sandbox did run the code, so say what it
+              couldn't check instead. */}
+          {change.unproven.length > 0 ? (
+            <span>
+              The sandbox tested the code against a throwaway copy of the database and never ran this SQL, so it
+              can&apos;t prove this part. It runs against production when the PR is deployed.
+            </span>
+          ) : (
+            <span>
+              The sandbox ran this code against a throwaway copy of the database, which can&apos;t show what it does to
+              production&apos;s data. Check the diff before approving.
+            </span>
+          )}
         </AlertDescription>
       </Alert>
       {change.unproven.map((file) => (

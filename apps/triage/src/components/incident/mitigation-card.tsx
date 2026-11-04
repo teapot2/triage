@@ -20,14 +20,24 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { isArchived } from "@/lib/investigation/archive";
 import { withUnit } from "@/lib/investigation/postmortem/timeline";
+import { sourceKind } from "@/lib/investigation/source-kind";
+import { burnText } from "@/lib/slo/model";
 import type { Incident, Mitigation } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { Citations } from "./evidence";
 import { formatPercent, formatTime } from "./format";
+import { limitSides, pastLimit } from "./metric-labels";
 import { THIS_INCIDENT } from "./incident-commands";
 import type { ChartMarker } from "./metric-chart";
 import { type Step, StepList } from "./progress-steps";
-import { quietMinutes, VerificationLine } from "./verification";
+import {
+  quietMinutes,
+  reopenedSinceVerified,
+  reopenedWords,
+  resolutionOptions,
+  VerificationLine,
+  VerifyButton,
+} from "./verification";
 import { errorMessage } from "@/lib/errors";
 
 type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
@@ -35,7 +45,7 @@ type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
 // Like useApprovalDecision, except the saved state keeps moving after the
 // decision (approved, running, applied), so the click only stands in for
 // the state it was made over; once the server's state changes, it wins.
-function useMitigationDecision(incidentId: string, saved: Mitigation["state"]) {
+function useMitigationDecision(incident: Incident, saved: Mitigation["state"]) {
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<{ decision: MitigationDecision; over: Mitigation["state"] }>();
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +54,7 @@ function useMitigationDecision(incidentId: string, saved: Mitigation["state"]) {
     setOptimistic({ decision, over: saved });
     setError(null);
     try {
-      const res = await fetch(`/api/incidents/${incidentId}/mitigation`, {
+      const res = await fetch(`/api/incidents/${incident.id}/mitigation`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ decision }),
@@ -52,7 +62,7 @@ function useMitigationDecision(incidentId: string, saved: Mitigation["state"]) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       if (decision === "approved") toast.success("Mitigation approved", { description: "Applying it, then watching the alert's metric." });
-      else toast("Mitigation denied", { description: "Nothing is changed; the fix still follows." });
+      else toast("Mitigation denied", { description: permanentFix(incident).denied });
     } catch (err) {
       setOptimistic(undefined);
       setError(errorMessage(err));
@@ -96,7 +106,7 @@ export function MitigationCard({ incident, readOnly = false, className }: { inci
   const mitigation = incident.mitigation!;
   // Archived, the card only reports: nothing to approve, deny or retry.
   const locked = readOnly || isArchived(incident);
-  const { state, decide, error } = useMitigationDecision(incident.id, mitigation.state);
+  const { state, decide, error } = useMitigationDecision(incident, mitigation.state);
   const [confirming, setConfirming] = useState(false);
   useRegisterCommands(
     "incident-mitigation",
@@ -172,7 +182,7 @@ export function MitigationCard({ incident, readOnly = false, className }: { inci
           {state === "proposed" || state === "denied" ? (
             <p className="text-muted-foreground text-xs">{decisionLine(state, mitigation, { readOnly, error })}</p>
           ) : (
-            <StepList steps={mitigationSteps(state, mitigation, incident, error)} />
+            <StepList steps={mitigationSteps(state, mitigation, incident, error, locked)} />
           )}
         </div>
       </div>
@@ -216,13 +226,17 @@ export function MitigationCard({ incident, readOnly = false, className }: { inci
             <AlertDialogTitle>Approve this mitigation?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="flex flex-col gap-2">
-                <p>Triage runs these steps on {incident.service}:</p>
+                <p>
+                  {simulated(incident)
+                    ? `This is a recorded incident, so Triage simulates these steps and nothing on ${incident.service} changes:`
+                    : `Triage runs these steps on ${incident.service}:`}
+                </p>
                 <ol className="list-decimal pl-5">
                   {mitigation.steps.map((s) => (
                     <li key={s}>{s}</li>
                   ))}
                 </ol>
-                <p>The tested patch still ships separately as the permanent fix.</p>
+                <p>{permanentFix(incident).approving}</p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -250,25 +264,100 @@ function decisionLine(
   return readOnly ? `${facts} · use the run to approve it` : facts;
 }
 
+// The permanent fix beside the mitigation, as far as the fix stage has got:
+// for the approve dialog, and for the deny toast. The fix stage may still be
+// writing, may have declined or failed, and a bundled example may have none.
+export function permanentFix(incident: Pick<Incident, "fix" | "fixRun" | "approval" | "run">): { approving: string; denied: string } {
+  const { fix, fixRun, approval } = incident;
+  if (fixRun?.status === "writing" || fixRun?.status === "testing") {
+    return {
+      approving: "A fix is being written and proven separately as the permanent fix.",
+      denied: "Nothing is changed; a fix is still being written.",
+    };
+  }
+  if (fix) {
+    const proven = fixRun?.status === "proven" ? "proven fix" : "fix";
+    if (approval?.state === "approved") {
+      return {
+        approving: `The approved ${proven} ships separately as the permanent fix.`,
+        denied: "Nothing is changed; the approved fix still ships.",
+      };
+    }
+    if (approval?.state === "denied") {
+      return { approving: `The ${proven} was denied, so this is the only change for now.`, denied: "Nothing is changed." };
+    }
+    return {
+      approving: `A ${proven} waits for approval separately as the permanent fix.`,
+      denied: "Nothing is changed; the fix still waits for approval.",
+    };
+  }
+  if (fixRun?.status === "failed") return { approving: "No fix could be proven, so this is the only change for now.", denied: "Nothing is changed." };
+  // Declined, or no fix stage: on a run, it may not have started yet.
+  const none = fixRun || !incident.run ? "No code fix was proposed" : "No code fix has been proposed yet";
+  return { approving: `${none}, so this is the only change for now.`, denied: "Nothing is changed." };
+}
+
+// Why the recovery watch ended without a recovery, in a few words. The
+// full note is under Details. No note: it ran its 5 min over the limit.
+export function notRecoveredWhy(note: string | undefined): string {
+  if (!note) return "still past the limit after 5 min";
+  if (/^the watch stopped/i.test(note)) return "the watch stopped";
+  if (/^no requests/i.test(note)) return "no requests since the mitigation";
+  const line = note.trim().split("\n")[0].replace(/\.$/, "");
+  return line.charAt(0).toLowerCase() + line.slice(1);
+}
+
 // "02:06": to the minute, as the chart's axis reads.
 const hhmm = (iso: string) => formatTime(iso).slice(0, 5);
+
+// Only a run on the service itself changes it: live Shopfront, or an
+// endpoint check on it (executorFor picks the executor the same way; an
+// external check's mitigation fails rather than pretend). Scenarios and
+// examples replay a recorded recovery.
+const simulated = (incident: Incident) => {
+  const kind = sourceKind(incident);
+  return kind !== "live" && kind !== "uptime";
+};
 
 // Once approved, where it stands in three steps: applying it, the alert's
 // metric coming back under its limit, and the quiet window that resolves
 // the incident. The metric is the chart's, just below, so each step gives
 // only its value and its time.
-function mitigationSteps(state: Mitigation["state"], mitigation: Mitigation, incident: Incident, error: string | null): Step[] {
-  const { unit } = incident.trigger;
-  const value = (n: number) => (unit === "ratio" ? formatPercent(n) : withUnit(Math.round(n), unit));
+function mitigationSteps(
+  state: Mitigation["state"],
+  mitigation: Mitigation,
+  incident: Incident,
+  error: string | null,
+  locked: boolean,
+): Step[] {
+  const { unit, metric } = incident.trigger;
+  // Burn rates as the verification card and the SLO pages write them ("83.3×").
+  const value = (n: number) =>
+    unit === "ratio" ? formatPercent(n) : unit === "×" ? burnText(n) : withUnit(Math.round(n), unit);
+  // "under 500 ms" for latency, "at or under 3 requests" for a count of
+  // slow requests, "at or over 100%" for availability.
+  const sides = limitSides(metric);
+  const healthy = (n: number, limit: number) => !pastLimit(metric, limit)(n);
+  // A verification asked for from the card, when the route would take one.
+  const verifyAction = (label: string) =>
+    !locked && resolutionOptions(incident).verify ? (
+      <div className="flex">
+        <VerifyButton incident={incident}>{label}</VerifyButton>
+      </div>
+    ) : undefined;
 
   // 1. Applying it on the service.
   let apply: Step;
   if (state === "failed") {
     apply = { title: "Not applied", state: "failed", summary: error ?? mitigation.error ?? "the mitigation failed" };
   } else if (state === "applied") {
-    apply = { title: "Applied", state: "done", summary: mitigation.appliedAt && hhmm(mitigation.appliedAt) };
+    // On the chart's clock, like the recovery after it: a simulated one
+    // replays the recording, so its wall time would sit days apart.
+    const at = mitigation.recovery?.since ?? mitigation.appliedAt;
+    const time = at && hhmm(at);
+    apply = { title: "Applied", state: "done", summary: simulated(incident) ? (time ? `simulated · ${time}` : "simulated") : time };
   } else {
-    apply = { title: "Applying", state: "current", summary: `on ${incident.service}` };
+    apply = { title: "Applying", state: "current", summary: simulated(incident) ? "simulated, nothing changes" : `on ${incident.service}` };
   }
 
   // 2. The alert's metric back under its limit, as the recovery watch saw it.
@@ -276,16 +365,21 @@ function mitigationSteps(state: Mitigation["state"], mitigation: Mitigation, inc
   let recover: Step;
   if (recovery?.status === "recovered") {
     const last = recovery.series.at(-1)?.value;
-    const back = last === undefined ? "back under the limit" : `back to ${value(last)}`;
+    const back = last === undefined ? `back ${sides.healthy} the limit` : `back to ${value(last)}`;
     recover = { title: "Recovered", state: "done", summary: recovery.recoveredAt ? `${back} at ${hhmm(recovery.recoveredAt)}` : back };
   } else if (recovery?.status === "watching") {
     let under = 0;
-    while (under < recovery.series.length && recovery.series.at(-1 - under)!.value < recovery.threshold) under++;
-    recover = { title: "Recovering", state: "current", summary: `${under} min under ${value(recovery.threshold)} so far` };
+    while (under < recovery.series.length && healthy(recovery.series.at(-1 - under)!.value, recovery.threshold)) under++;
+    recover = { title: "Recovering", state: "current", summary: `${under} min ${sides.healthy} ${value(recovery.threshold)} so far` };
   } else if (recovery) {
-    // A note means the watch was cut off (a restart), not that it ran its
-    // 5 min; the note itself is under Details.
-    recover = { title: "Not recovered", state: "failed", summary: recovery.note ? "the watch stopped" : "still over the limit after 5 min" };
+    // Without a verification yet, one can be asked for from here: the
+    // metric may come back after the 5 min, or have had no requests.
+    recover = {
+      title: "Not recovered",
+      state: "failed",
+      summary: notRecoveredWhy(recovery.note),
+      detail: incident.verification ? undefined : verifyAction("Verify"),
+    };
   } else {
     recover = { title: "Recover", state: "todo" };
   }
@@ -293,12 +387,21 @@ function mitigationSteps(state: Mitigation["state"], mitigation: Mitigation, inc
   // 3. The quiet window that resolves the incident.
   const v = state === "applied" ? incident.verification : undefined;
   let verify: Step;
-  if (v?.status === "resolved") {
+  // Verified, then reopened: the reopening stands, not the resolution.
+  const undone = v && reopenedSinceVerified(incident);
+  if (v && undone) {
+    verify = {
+      title: "Reopened",
+      state: "failed",
+      summary: `${hhmm(undone.at)} · ${reopenedWords(undone, v)}`,
+      detail: verifyAction("Verify again"),
+    };
+  } else if (v?.status === "resolved") {
     const at = incident.resolvedAt ?? v.finishedAt;
-    const window = `${quietMinutes(v)} min under ${value(v.threshold)}`;
+    const window = `${quietMinutes(v)} min ${sides.healthy} ${value(v.threshold)}`;
     verify = { title: "Verified", state: "done", summary: at ? `${window}, resolved ${hhmm(at)}` : window };
   } else if (v?.status === "verifying") {
-    verify = { title: "Verifying", state: "current", summary: `${quietMinutes(v)} of ${v.windowMinutes} min under ${value(v.threshold)}` };
+    verify = { title: "Verifying", state: "current", summary: `${quietMinutes(v)} of ${v.windowMinutes} min ${sides.healthy} ${value(v.threshold)}` };
   } else if (v) {
     // Breached or stopped: the line says why, with Verify again.
     verify = { title: "Not verified", state: "failed", detail: <VerificationLine incident={incident} verification={v} /> };

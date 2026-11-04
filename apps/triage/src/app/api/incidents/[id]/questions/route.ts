@@ -45,7 +45,7 @@ async function readBody(req: Request): Promise<Body | Response> {
     if (!parsed.success) {
       return Response.json(
         {
-          error: `expected { text, webSearch?, model?: { provider, model, effort? } }, text 1 to ${MAX_QUESTION_CHARS} characters`,
+          error: `expected { text, webSearch?, fullContext?, model?: { provider, model, effort? } }, text 1 to ${MAX_QUESTION_CHARS} characters`,
         },
         { status: 400 },
       );

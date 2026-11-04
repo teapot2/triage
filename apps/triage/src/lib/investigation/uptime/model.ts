@@ -81,6 +81,9 @@ export const checkSchema = z
     // Ok responses in a row that confirm a recovery; one could be luck.
     healthyChecksToRecover: z.number().int().min(2).max(10),
   })
+  // Lenient on purpose: this schema reads saved checks too, and some were
+  // saved with the two equal. A new or changed slow limit has to be under
+  // the timeout (slowLimitProblem), which the form and the PUT enforce.
   .refine((c) => c.slowMs <= c.timeoutMs, { message: "the slow limit can't be past the timeout", path: ["slowMs"] })
   .refine((c) => c.expectedStatus.min <= c.expectedStatus.max, {
     message: "the lowest expected status can't be above the highest",
@@ -92,6 +95,27 @@ export const checksSchema = z
   .array(checkSchema)
   .max(MAX_CHECKS, `at most ${MAX_CHECKS} checks`)
   .refine((checks) => new Set(checks.map((c) => c.id)).size === checks.length, "check ids must be unique");
+
+// A response is slow past slowMs and down at timeoutMs (the request is
+// aborted), so a slow limit that isn't under the timeout never trips Slow.
+export function slowLimitProblem(c: Pick<UptimeCheck, "slowMs" | "timeoutMs">): string | undefined {
+  if (c.slowMs < c.timeoutMs) return undefined;
+  return `the slow limit (${duration(c.slowMs)}) must be under the timeout (${duration(c.timeoutMs)}), or Slow never trips`;
+}
+
+// The first check in a list about to be saved whose slow limit isn't under
+// its timeout, naming it; a check saved that way before and left as it was
+// is let through, so editing another check doesn't fail on it.
+export function slowLimitRefusal(next: UptimeCheck[], saved: UptimeCheck[]): string | undefined {
+  for (const c of next) {
+    const problem = slowLimitProblem(c);
+    if (!problem) continue;
+    const was = saved.find((s) => s.id === c.id);
+    if (was && was.slowMs === c.slowMs && was.timeoutMs === c.timeoutMs) continue;
+    return `${c.name}: ${problem}`;
+  }
+  return undefined;
+}
 
 // The check as the browser may see it: the header's name without its value.
 export const publicCheck = (c: UptimeCheck): UptimeCheck => (c.auth ? { ...c, auth: { header: c.auth.header } } : c);
@@ -226,10 +250,24 @@ export function runStatus(run: UptimeSample[]): number | undefined {
 }
 
 // "Slow responses from www.google.com", "www.google.com is not responding".
-// A Down run that was answered, every time, with 401 or 403 is the endpoint
-// turning the check away, not an outage, and the title says so.
+// `status` is the one every result of the Down run answered with (runStatus).
+// A run answered, every time, with 401 or 403 is the endpoint turning the
+// check away, not an outage, and the title says so; any other status out of
+// the expected range is named ("is returning HTTP 503"): it answers, just
+// not well. Timeouts, connection failures and mixed runs are not responding.
 export function incidentTitle(check: UptimeCheck, rule: UptimeRule, status?: number): string {
-  if (rule !== "down") return `Slow responses from ${checkHost(check)}`;
-  if (status === 401 || status === 403) return `${checkHost(check)} is rejecting the check's credentials`;
-  return `${checkHost(check)} is not responding`;
+  const host = checkHost(check);
+  if (rule !== "down") return `Slow responses from ${host}`;
+  return `${host} ${downWords(check, status)}`;
+}
+
+// What a Down run says about the endpoint, after its name: "is not
+// responding", "is returning HTTP 503", "is rejecting the check's
+// credentials". The title, the sidebar's announcement and a reopening's
+// note all use it, so they never disagree.
+export function downWords(check: UptimeCheck, status?: number): string {
+  if (status === 401 || status === 403) return "is rejecting the check's credentials";
+  const { min, max } = check.expectedStatus;
+  if (status !== undefined && (status < min || status > max)) return `is returning HTTP ${status}`;
+  return "is not responding";
 }

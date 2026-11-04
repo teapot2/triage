@@ -52,6 +52,7 @@ export function MetricChart({
   label,
   unit,
   threshold,
+  limitLabel,
   lowerIsWorse = false,
   markers = [],
   compact = false,
@@ -65,6 +66,8 @@ export function MetricChart({
   label: string;
   unit: string;
   threshold?: number;
+  // The limit line's label, "limit <threshold>" unless given ("more than 3").
+  limitLabel?: string;
   // Past the limit is under it, as for availability.
   lowerIsWorse?: boolean;
   // Events to mark on the time axis, such as the deploy behind the incident.
@@ -209,7 +212,7 @@ export function MetricChart({
               compact
                 ? undefined
                 : {
-                    value: `limit ${threshold}`,
+                    value: limitLabel ?? `limit ${threshold}`,
                     position: "insideBottomRight",
                     fill: "var(--muted-foreground)",
                     fontSize: 11,

@@ -30,12 +30,12 @@ import { HypothesesChecked } from "./hypotheses-checked";
 import { incidentSubject } from "./incident-export";
 import { InvestigationTimeline } from "./investigation-timeline";
 import { type ChartMarker, MetricChart } from "./metric-chart";
-import { lowerIsWorse, metricLabel } from "./metric-labels";
+import { exclusiveLimit, lowerIsWorse, metricLabel } from "./metric-labels";
 import { MitigationCard, mitigationMarker, NoMitigationCard } from "./mitigation-card";
 import { MetricBadges } from "./outcome-badges";
 import { hasPostmortem, PostmortemPanel } from "./postmortem-panel";
 import { type Ask, QuestionsPanel } from "./questions-panel";
-import { ReopenedNotice, reopening, VerificationCard } from "./verification";
+import { RelatedLine, ReopenedNotice, reopening, VerificationCard } from "./verification";
 
 type SectionId = "overview" | "fix" | "investigation" | "ask" | "postmortem";
 
@@ -84,7 +84,10 @@ export function IncidentReport({
   const sections: ReportSection[] = [{ id: "overview", label: "Overview", icon: LayoutListIcon }];
   // Also while a new attempt is written after a deny: the denied ones stay.
   if (fix || fixAttempts?.length) sections.push({ id: "fix", label: "Fix", icon: WrenchIcon });
-  if (steps.length > 0) {
+  // From the moment a run starts, so the page can open on it (and Watch the
+  // investigation has somewhere to go) before the first tool call; the
+  // timeline says it's waiting until then.
+  if (running || steps.length > 0 || (incident.thoughts?.length ?? 0) > 0) {
     sections.push({ id: "investigation", label: "Investigation", icon: RouteIcon, count: steps.length });
   }
   // Questions open once there's a report to ask about. The count is the
@@ -164,7 +167,13 @@ export function IncidentReport({
       {/* A fan-out run's hypotheses, under the verdict they were merged
           into, or being checked while it runs. */}
       {run?.fanout && (
-        <HypothesesChecked fanout={run.fanout} lanes={run} running={running} className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])} />
+        <HypothesesChecked
+          fanout={run.fanout}
+          lanes={run}
+          running={running}
+          reported={!running && report !== undefined}
+          className={cn(arrive && [arrive, "delay-75 fill-mode-backwards"])}
+        />
       )}
 
       {mitigation && (
@@ -218,6 +227,7 @@ export function IncidentReport({
           label={metricLabel(trigger.metric)}
           unit={trigger.unit}
           threshold={trigger.threshold}
+          limitLabel={exclusiveLimit(trigger.metric) ? `more than ${trigger.threshold}` : undefined}
           lowerIsWorse={lowerIsWorse(trigger.metric)}
           markers={markers}
           exportAs={{ subject: incidentSubject(incident) }}
@@ -229,8 +239,9 @@ export function IncidentReport({
   const content: Record<SectionId, () => ReactNode> = {
     overview: () => (
       <div className="flex flex-col gap-8">
-        {incident.status === "failed" && run?.error && <FailedRunNotice run={{ ...run, error: run.error }} />}
+        {incident.status === "failed" && run?.error && <FailedRunNotice incident={incident} run={{ ...run, error: run.error }} />}
         {reopened && <ReopenedNotice incident={incident} reopening={reopened} />}
+        {incident.relatedTo && <RelatedLine related={incident.relatedTo} />}
         {incident.dependency ? (
           <DependencyOverview incident={incident} advisory={incident.dependency} unknownEvidenceIds={unknownEvidenceIds} onSection={setSelected} />
         ) : (

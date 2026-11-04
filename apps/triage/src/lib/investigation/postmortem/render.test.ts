@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { citationOrder } from "../citations";
 import type { Evidence, Incident } from "../schema";
 import { exampleIncidents } from "../fixtures";
-import { footnoteNumbers, postmortemMarkdown, postmortemParts, statusInWords } from "./render";
+import { actionItems, footnoteNumbers, postmortemMarkdown, postmortemParts, statusInWords } from "./render";
 import { type BuiltInSection, builtInSections, type Template } from "./template";
 import { mitigated, poolLeak, reopened, resolved } from "./test-incidents";
 
@@ -166,7 +166,7 @@ describe("postmortemMarkdown", () => {
     assert.match(header, /^# Postmortem: p95 latency and 500s on GET \/api\/products\/:id/);
     assert.ok(header.includes("shopfront · SEV2 · fix awaiting approval"));
     assert.ok(header.includes("Detected 2026-10-23 02:14:00 UTC by Triage's watch"));
-    assert.ok(header.includes("Written by Triage (muse-spark-1.3) on 2026-10-23 02:20:41 UTC"));
+    assert.ok(header.includes("Written by Triage (muse-spark-1.3 via Meta Model API) on 2026-10-23 02:20:41 UTC"));
     assert.ok(!header.includes("sebastian"));
   });
 
@@ -182,6 +182,36 @@ describe("postmortemMarkdown", () => {
   it("says how long the metric was over the threshold, at least when it hasn't recovered", () => {
     assert.ok(section(postmortemMarkdown(poolLeak()), "## Impact").includes("for at least 10 min, from 02:10:00 UTC"));
     assert.ok(section(postmortemMarkdown(mitigated()), "## Impact").includes("for 8 min, from 02:10:00 UTC"));
+  });
+
+  it("gives the baseline only when it was on the healthy side of the threshold", () => {
+    assert.ok(section(postmortemMarkdown(poolLeak()), "## Impact").includes("Baseline before the incident: 118 ms"));
+    // A baseline window the fault had already reached: 4625 ms under a 500 ms threshold.
+    const late = poolLeak();
+    late.evidence = late.evidence.map((e) => (e.kind === "metric" && e.metric === late.trigger.metric ? { ...e, baseline: 4625 } : e));
+    assert.ok(!section(postmortemMarkdown(late), "## Impact").includes("Baseline"));
+    // Where less is worse, a baseline under the threshold breached it.
+    const availability = (baseline: number): Incident => {
+      const incident = poolLeak();
+      const metric = "uptime.availability";
+      incident.trigger = { ...incident.trigger, metric, unit: "%", threshold: 99, series: [] };
+      incident.evidence = incident.evidence.map((e) => (e.kind === "metric" ? { ...e, metric, unit: "%", baseline } : e));
+      return incident;
+    };
+    assert.ok(section(postmortemMarkdown(availability(99.9)), "## Impact").includes("Baseline before the incident: 99.9%"));
+    assert.ok(!section(postmortemMarkdown(availability(97)), "## Impact").includes("Baseline"));
+  });
+
+  it("gives the metric's baseline in the appendix with its unit", () => {
+    const md = postmortemMarkdown(poolLeak());
+    assert.ok(section(md, "## Evidence").includes("baseline 118 ms, observed 2950 ms"));
+  });
+
+  it("names the postmortem's model with its provider and effort", () => {
+    const incident = poolLeak();
+    incident.postmortem = { ...incident.postmortem!, provider: "meta", reasoningEffort: "high" };
+    const header = postmortemMarkdown(incident).split("\n## ")[0];
+    assert.ok(header.includes("Written by Triage (muse-spark-1.3 via Meta Model API, high effort) on"));
   });
 
   it("says when it resolved, and ends the timeline there with the time to resolve", () => {
@@ -219,6 +249,18 @@ describe("postmortemMarkdown", () => {
     assert.match(actions, /\| 1 \| Merge the fix: Release the pooled client.*\(\[PR\]\(https:\/\/github\.com\/acme\/shopfront\/pull\/7\)\) \| Fix this \| P1 \|/);
     assert.match(actions, /\| 2 \| Lint for pooled clients .* \| Prevent the class \| P2 \|  \|  \|/);
     assert.ok(md.includes("fix approved, PR open"));
+  });
+
+  it("lists the table's rows for the export: the fix, then the postmortem's items", () => {
+    const incident = poolLeak();
+    const items = actionItems(incident);
+    assert.deepEqual(items[0], { title: `Review the proposed fix: ${incident.fix!.summary.trim()}`, kind: "fix_this", priority: "P1" });
+    assert.deepEqual(items.slice(1), incident.postmortem!.actionItems);
+    incident.approval = { state: "approved", requestedAt: "2026-10-23T02:16:30.000Z", prState: "opened", prUrl: "https://github.com/acme/shopfront/pull/7" };
+    assert.equal(actionItems(incident)[0].prUrl, "https://github.com/acme/shopfront/pull/7");
+    assert.match(actionItems(incident)[0].title, /^Merge the fix: /);
+    // No fix and no items: nothing to list, or to export.
+    assert.deepEqual(actionItems({ ...incident, fix: undefined, postmortem: { ...incident.postmortem!, actionItems: [] } }), []);
   });
 
   it("strikes an unknown evidence ID", () => {
@@ -348,5 +390,12 @@ describe("statusInWords", () => {
     assert.equal(statusInWords({ ...poolLeak(), status: "resolved" }), "resolved");
     assert.equal(statusInWords({ ...poolLeak(), status: "healthy" }), "no issue found");
     assert.equal(statusInWords({ ...poolLeak(), status: "failed" }), "investigation failed");
+    assert.equal(statusInWords({ ...poolLeak(), status: "investigating", approval: undefined }), "investigating");
+    const approved = { ...poolLeak().approval!, state: "approved" as const, prState: "opened" as const };
+    assert.equal(statusInWords({ ...poolLeak(), status: "diagnosed", approval: approved }), "fix approved, PR open");
+    assert.equal(
+      statusInWords({ ...poolLeak(), status: "diagnosed", approval: { ...approved, prMergedAt: "2026-10-23T03:00:00.000Z" } }),
+      "fix merged, verifying",
+    );
   });
 });

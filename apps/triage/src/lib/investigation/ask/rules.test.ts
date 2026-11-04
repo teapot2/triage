@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { exampleIncidents } from "../fixtures";
+import { mitigated, poolLeak, resolved } from "../postmortem/test-incidents";
 import type { Incident, Question } from "../schema";
 import {
   askRefusal,
   conversationHistory,
   knownEvidenceIds,
+  knowsAfterAlert,
   nextQuestionId,
   parseCitations,
   plainAnswer,
@@ -142,5 +144,34 @@ describe("plainAnswer", () => {
       plainAnswer("- Pool at 10 of 10 [ev_metric_1, ev_log_2].\n- Turned on at 01:52 [ev_q1_flag_1] [ev_deploy_1]\n\nSee [the runbook]."),
       "- Pool at 10 of 10.\n- Turned on at 01:52\n\nSee [the runbook].",
     );
+  });
+});
+
+// The "Is <metric> back under the limit?" suggestion is offered only when
+// this holds (questions-panel.tsx's suggestedQuestions).
+describe("knowsAfterAlert", () => {
+  it("holds when the record has the recovery's or the verification's minutes", () => {
+    assert.equal(knowsAfterAlert(resolved()), true);
+    const recovering = mitigated();
+    recovering.mitigation!.recovery!.series = [{ t: "2026-10-23T02:16:00.000Z", value: 300 }];
+    assert.equal(knowsAfterAlert(recovering), true);
+  });
+
+  it("holds on a live run or an endpoint check once a mitigation is applied, whose tools read past the alert", () => {
+    for (const source of ["live:shopfront", "uptime:chk_abc123"]) {
+      const incident = mitigated();
+      incident.run = { ...incident.run!, source };
+      incident.mitigation!.recovery = undefined;
+      assert.equal(knowsAfterAlert(incident), true, source);
+      incident.mitigation!.state = "proposed";
+      assert.equal(knowsAfterAlert(incident), false, source);
+    }
+  });
+
+  it("doesn't on a scenario or a bundled example with nothing recorded after the alert", () => {
+    // mitigated()'s recovery has no minutes, and a scenario's tools stop at the alert.
+    assert.equal(knowsAfterAlert(mitigated()), false);
+    assert.equal(knowsAfterAlert(poolLeak()), false);
+    assert.equal(knowsAfterAlert(finished()), false);
   });
 });

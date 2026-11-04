@@ -11,6 +11,7 @@ import { SidebarMenuAction, SidebarMenuButton, useSidebar } from "@/components/u
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNow } from "@/hooks/use-now";
 import { type EndpointState, endpointWord, inTrouble } from "@/components/watch/endpoint-client";
+import type { LastOpened } from "@/lib/investigation/last-opened";
 import type { RuleState, WatchState } from "@/lib/investigation/watch";
 import { cn } from "@/lib/utils";
 
@@ -33,13 +34,38 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 // Unavailable or an incident open first, then slow.
 const trouble = (e: EndpointState) => (e.status === "unavailable" ? 2 : 1) + (e.status === "alerting" ? 2 : 0);
 
+// An incident open on the watch, from any of its loops: the rules' newest
+// episode first, then an endpoint's, then a dependency advisory's. The row
+// reads as alerting while there is one, and links to it. `on` names what
+// it's open on, for the row's first line.
+type Open = { id: string; on: string };
+function openIncident(s: State): Open | undefined {
+  if (!s.enabled) return undefined;
+  if (s.status === "alerting" && s.incidentId) return { id: s.incidentId, on: "shopfront" };
+  const endpoint = s.endpoints?.find((e) => e.status === "alerting" && e.incidentId);
+  if (endpoint?.incidentId) return { id: endpoint.incidentId, on: endpoint.name };
+  const d = s.dependencies;
+  if (d?.open && d.incidentId) return { id: d.incidentId, on: d.service };
+  return undefined;
+}
+
 // The second line: what the last check saw, in as few words as fit.
-function reading(s: State, now: number): string {
+function reading(s: State, open: Open | undefined, now: number): string {
   if (!s.enabled) return "Not checking shopfront";
-  if (s.error) return s.status === "alerting" ? "Couldn't open an incident" : "Last check failed";
-  if (s.status === "alerting" && s.lastOpened) {
+  if (s.error) return s.errorKind === "open" ? "Couldn't open an incident" : "Last check failed";
+  if (open && s.lastOpened?.incidentId === open.id) {
     const ago = formatAgo(s.lastOpened.at, now);
     return `${s.lastOpened.reopened ? "Reopened" : "Opened"} ${ago === "now" ? "just now" : `${ago} ago`} · ${s.lastOpened.rule}`;
+  }
+  // Opened before something newer (or before this server started): a rule
+  // in the linked incident's episode, as each rule has its own.
+  const alerting =
+    open && s.status === "alerting"
+      ? (s.rules.find((r) => r.status === "alerting" && r.incidentId === open.id) ?? s.rules.find((r) => r.status === "alerting"))
+      : undefined;
+  if (alerting) return `${alerting.name} · incident open`;
+  if (open && open.id === s.dependencies?.incidentId) {
+    return `${plural(s.dependencies.open, "advisory", "advisories")} with an incident open`;
   }
   // An endpoint in trouble, when no rule is: "Google · slow, check 2 of 3".
   const ruleTrouble = s.rules.some((r) => r.status === "breaching" || r.status === "alerting");
@@ -50,16 +76,42 @@ function reading(s: State, now: number): string {
   if (c.requests === 0) return "No requests in the last minute";
   // Over a limit, the rule and how close it is to opening an incident.
   const breaching = s.rules.find((r) => r.status === "breaching");
-  if (breaching) return `${breaching.name} · check ${breaching.checks} of ${breaching.needed}`;
+  if (breaching) return breachingLine(breaching);
   if (s.status === "idle") return `${plural(c.requests, "request", "requests")}, too few to judge`;
   const ok = s.rules.filter((r) => r.status === "ok").length;
   return `${plural(ok, "rule", "rules")} OK · ${c.requests}/min`;
 }
 
+// A rule over its limit: how close it is to opening an incident, or, during
+// an SLO's slow-burn hold (no check counted yet), that it's a slow burn.
+function breachingLine(r: Pick<RuleState, "name" | "checks" | "needed">): string {
+  return r.checks ? `${r.name} · check ${r.checks} of ${r.needed}` : `${r.name} · slow burn`;
+}
+
+// What the sidebar announces when the watch opens or reopens an incident.
+function announcement(last: LastOpened): { title: string; description: string } {
+  if (last.reopened) {
+    const again =
+      last.by === "uptime"
+        ? `${last.rule} again, soon after it was resolved.`
+        : last.by === "dependencies"
+          ? `The dependency audit found the ${last.rule} again after it was resolved.`
+          : `Shopfront tripped the ${last.rule} rule again soon after it was resolved.`;
+    return { title: `Reopened ${last.title ?? "an incident"}`, description: again };
+  }
+  const why =
+    last.by === "uptime"
+      ? `${last.rule}.`
+      : last.by === "dependencies"
+        ? `The dependency audit found a ${last.rule}.`
+        : `Shopfront tripped the ${last.rule} rule.`;
+  return { title: "Triage opened an incident", description: `${why} The investigation has started.` };
+}
+
 const ruleWord: Record<RuleState["status"], string> = {
   ok: "OK",
   breaching: "over its limit",
-  alerting: "opened the incident",
+  alerting: "incident open",
   idle: "not enough traffic",
   paused: "off",
 };
@@ -136,17 +188,8 @@ export function WatchStatus() {
           seen.current = opened;
           router.refresh();
           const view = { label: "View", onClick: () => router.push(`/incidents/${last.incidentId}`) };
-          if (last.reopened) {
-            toast.error(`Reopened ${last.title ?? "an incident"}`, {
-              description: `Shopfront tripped the ${last.rule} rule again soon after it was resolved.`,
-              action: view,
-            });
-          } else {
-            toast.error("Triage opened an incident", {
-              description: `Shopfront tripped the ${last.rule} rule. The investigation has started.`,
-              action: view,
-            });
-          }
+          const { title, description } = announcement(last);
+          toast.error(title, { description, action: view });
         }
       } catch {
         // The next poll tries again.
@@ -170,10 +213,12 @@ export function WatchStatus() {
     if (res?.ok) setState((await res.json()) as State);
   }
 
-  const status = state?.status ?? "paused";
-  const { label, tone, pulse } = look[status];
-  const line2 = state ? reading(state, now) : "Connecting…";
-  const incident = status === "alerting" ? state?.lastOpened?.incidentId : undefined;
+  const open = state ? openIncident(state) : undefined;
+  const status = open ? "alerting" : (state?.status ?? "paused");
+  const { tone, pulse } = look[status];
+  const label = open ? `Incident open on ${open.on}` : look[status].label;
+  const line2 = state ? reading(state, open, now) : "Connecting…";
+  const incident = open?.id;
   const ToggleIcon = state?.enabled === false ? PlayIcon : PauseIcon;
   const toggleLabel = state?.enabled === false ? "Resume watching" : "Pause watching";
 

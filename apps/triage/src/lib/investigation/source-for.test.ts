@@ -5,8 +5,9 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { closeDb } from "../db";
 import { exampleIncidents } from "./fixtures";
+import { toSummary } from "./list-summary";
 import type { Incident } from "./schema";
-import { sourceFor } from "./source-for";
+import { ASK_REACH_MINUTES, askSourceFor, sourceFor } from "./source-for";
 import { sourceKind } from "./source-kind";
 import { saveChecks } from "./uptime/checks";
 import { defaultCheck } from "./uptime/model";
@@ -37,6 +38,9 @@ describe("sourceFor", () => {
     const source = await sourceFor(withSource("scenario:pool-leak"));
     assert.equal(source?.describe().id, "scenario:pool-leak");
     assert.equal(sourceKind(withSource("scenario:healthy")), "scenario");
+    // A list summary carries the source too, for the list's replay tag.
+    assert.equal(sourceKind(toSummary(withSource("scenario:healthy"))), "scenario");
+    assert.equal(sourceKind(toSummary(withSource(undefined))), undefined);
   });
 
   it("anchors the live source at the alert, not at the call", async () => {
@@ -73,5 +77,49 @@ describe("sourceFor", () => {
     assert.equal(sourceKind(withSource("scenario:nope")), undefined);
     assert.equal(await sourceFor(withSource("otlp:elsewhere")), undefined);
     assert.equal(await sourceFor(withSource(undefined)), undefined);
+  });
+});
+
+// Ask's tools: past the alert where there is later telemetry to read.
+describe("askSourceFor", () => {
+  const alert = Date.parse("2026-10-28T10:00:00.000Z");
+  const minutes = (n: number) => alert + n * 60_000;
+
+  it("reads a live run up to now, at most ASK_REACH_MINUTES past the alert", async () => {
+    const live = withSource("live:shopfront");
+    const soon = await askSourceFor(live, minutes(25.5));
+    assert.equal(soon?.source.describe().now, new Date(minutes(25.5)).toISOString());
+    assert.equal(soon?.pastAlert, 25);
+    const later = await askSourceFor(live, minutes(600));
+    assert.equal(later?.source.describe().now, new Date(minutes(ASK_REACH_MINUTES)).toISOString());
+    assert.equal(later?.pastAlert, ASK_REACH_MINUTES);
+    // Within the first minute, it is the alert's source.
+    const atAlert = await askSourceFor(live, minutes(0.5));
+    assert.equal(atAlert?.source.describe().now, "2026-10-28T10:00:00.000Z");
+    assert.equal(atAlert?.pastAlert, 0);
+  });
+
+  it("reads an endpoint check's samples after the alert", async () => {
+    const check = defaultCheck({ id: "chk_def456", name: "Example", url: "https://example.org/" });
+    await saveChecks([check]);
+    await appendSample(check.id, { at: "2026-10-28T09:59:30.000Z", ms: 15_000, outcome: "down", error: "timeout after 15000 ms" });
+    await appendSample(check.id, { at: "2026-10-28T10:20:30.000Z", ms: 15_000, outcome: "down", error: "connection reset" });
+    const incident = withSource("uptime:chk_def456");
+    const at = await sourceFor(incident);
+    assert.deepEqual((await at!.queryLogs({ windowMinutes: 30 })).map((g) => g.message), ["timeout after 15000 ms"]);
+    const asked = await askSourceFor(incident, minutes(30));
+    assert.equal(asked?.pastAlert, 30);
+    assert.deepEqual(
+      (await asked!.source.queryLogs({ windowMinutes: 60 })).map((g) => g.message).sort(),
+      ["connection reset", "timeout after 15000 ms"],
+    );
+  });
+
+  it("keeps a recorded scenario, and anything without later data, at its recording", async () => {
+    const scenario = withSource("scenario:pool-leak");
+    const asked = await askSourceFor(scenario, minutes(60));
+    assert.equal(asked?.pastAlert, 0);
+    assert.equal(asked?.source.describe().now, (await sourceFor(scenario))?.describe().now);
+    for (const incident of exampleIncidents) assert.equal(await askSourceFor(incident, minutes(60)), undefined);
   });
 });

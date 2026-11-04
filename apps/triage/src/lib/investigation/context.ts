@@ -1,3 +1,4 @@
+import { limitText } from "@/components/incident/metric-labels";
 import { gradeHypothesis, gradeLabels } from "./confidence-grade";
 import type { Claim, Incident } from "./schema";
 import type { TelemetrySource } from "./source";
@@ -24,19 +25,28 @@ export function uptimeNote(source: TelemetrySource): string {
   return `${intro} Nothing but the check results is available: no application logs, traces, database, source code or deploy history are connected. When the results alone cannot say why it failed, an inconclusive verdict naming what is missing (application logs, traces, a deploy history) is the right answer; do not guess a cause. Either way, the report must say what the results show: when it started, how it failed (timeouts, which statuses), and whether it is intermittent.`;
 }
 
-export function incidentBlock(incident: Incident, source: TelemetrySource | undefined): string {
+// `pastAlert`: how many minutes past the alert the source reads (Ask's on a
+// live run, source-for.ts's askSourceFor), so the model knows its tools'
+// windows count back from then, not from the alert.
+export function incidentBlock(incident: Incident, source: TelemetrySource | undefined, pastAlert = 0): string {
   const { trigger, report } = incident;
   const lines = [
     `Incident: ${incident.title}`,
     `Service: ${incident.service}`,
-    `Alert: ${trigger.metric} observed ${trigger.observed} ${trigger.unit} (threshold ${trigger.threshold}) at ${incident.detectedAt}`,
+    `Alert: ${trigger.metric} observed ${trigger.observed} ${trigger.unit} (threshold ${limitText(trigger.metric, String(trigger.threshold))}) at ${incident.detectedAt}`,
   ];
   if (incident.openedBy === "watch") {
     lines.push(`Opened by: Triage's watch, when the alert crossed its threshold (the page shows "Detected by Triage")`);
   } else if (incident.openedBy === "person") {
     lines.push("Opened by: a person on the team");
   }
-  if (source) lines.push(`Alert time (the tools' "now"): ${source.describe().now}`);
+  if (source && pastAlert > 0) {
+    lines.push(
+      `The tools' "now": ${source.describe().now}, ${pastAlert} min after the alert. Their windows count back from it: a window of ${pastAlert + 30} min reaches 30 min before the alert. Nothing after that time can be read.`,
+    );
+  } else if (source) {
+    lines.push(`Alert time (the tools' "now"): ${source.describe().now}`);
+  }
   if (report?.summary) lines.push(`Summary: ${report.summary}`);
   const verdict = report?.verdict;
   if (verdict?.kind === "root_cause") {

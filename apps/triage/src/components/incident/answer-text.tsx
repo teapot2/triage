@@ -8,9 +8,10 @@ import { Citations, useEvidence } from "./evidence";
 // paragraphs and short bullets, with evidence cited inline as [ev_log_3]
 // (or several in one bracket). The citations become the report's numbered
 // chips; an ID no tool returned is struck, as a claim nobody can check.
-// While the answer streams, an unknown ID may still be on its way (the tool
-// result is saved a beat after the chunk), so it shows plain until the
-// stream ends. The text grows token by token behind a thin caret.
+// Until the answer settles, an unknown ID may still be on its way (the tool
+// result is saved a beat after the chunk; a full-context answer's items are
+// kept only once it's answered), so it shows plain until the saved copy
+// takes over. The text grows token by token behind a thin caret.
 
 const bracketed = /\[([^\]\n]*)\]/g;
 const evidenceId = /\bev_[a-z0-9]+(?:_[a-z0-9]+)*/g;
@@ -54,11 +55,15 @@ export function splitBlocks(text: string): Block[] {
 export function AnswerText({
   text,
   streaming = false,
+  unsettled = streaming,
   className,
 }: {
   text: string;
-  // The stream is still open: a caret at the end, unknown IDs not yet struck.
+  // The stream is still open: a caret at the end.
   streaming?: boolean;
+  // The evidence it cites may not all be here yet (it streams, or the saved
+  // copy hasn't taken over): unknown IDs not yet struck.
+  unsettled?: boolean;
   className?: string;
 }) {
   const blocks = useMemo(() => splitBlocks(text), [text]);
@@ -76,7 +81,7 @@ export function AnswerText({
             >
               {block.items.map((item, j) => (
                 <li key={j} className="pl-0.5">
-                  <Inline text={item} streaming={streaming} />
+                  <Inline text={item} unsettled={unsettled} />
                   {last && j === block.items.length - 1 && caret}
                 </li>
               ))}
@@ -85,7 +90,7 @@ export function AnswerText({
         }
         return (
           <p key={i}>
-            <Inline text={block.text} streaming={streaming} />
+            <Inline text={block.text} unsettled={unsettled} />
             {last && caret}
           </p>
         );
@@ -97,7 +102,7 @@ export function AnswerText({
 
 // A paragraph's text: citations, then the light inline marks the model
 // uses (`code` and **bold**).
-function Inline({ text, streaming }: { text: string; streaming: boolean }) {
+function Inline({ text, unsettled }: { text: string; unsettled: boolean }) {
   const { byId } = useEvidence();
   const out: ReactNode[] = [];
   let last = 0;
@@ -114,8 +119,8 @@ function Inline({ text, streaming }: { text: string; streaming: boolean }) {
         {unknown.map((id) => (
           <span
             key={id}
-            title={streaming ? `${id}: not received yet` : `${id}: no tool returned this evidence. The claim is not verified.`}
-            className={cn("font-mono text-[11px] text-muted-foreground", !streaming && "line-through")}
+            title={unsettled ? `${id}: not received yet` : `${id}: no tool returned this evidence. The claim is not verified.`}
+            className={cn("font-mono text-[11px] text-muted-foreground", !unsettled && "line-through")}
           >
             {id}
           </span>

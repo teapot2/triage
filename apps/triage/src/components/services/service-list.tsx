@@ -157,7 +157,7 @@ function ServiceRows({ services }: { services: ServiceRow[] }) {
               <StatusIcon status={latest.status} />
               <span className="truncate">{latest.headline}</span>
               <span className="shrink-0 text-muted-foreground text-xs">
-                {statusLabel[latest.status]} · <Timestamp date={latest.detectedAt} />
+                {statusLabel[latest.status]} · <Timestamp date={latest.ranAt} />
               </span>
             </Link>
           )}

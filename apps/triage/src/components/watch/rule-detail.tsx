@@ -10,7 +10,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { IncidentStatus } from "@/lib/investigation/schema";
 import { conditionText, describeRule, targetText, type WatchRule } from "@/lib/investigation/watch-rule-model";
-import { alertText, allowanceText, burnAlerts, SLOW_BURN_SEVERITY } from "@/lib/slo/model";
+import { SLOW_BURN_HOLD_MS } from "@/lib/slo/judge";
+import { alertText, allowanceText, burnAlerts, durationText, SLOW_BURN_SEVERITY, shortMinimumsText } from "@/lib/slo/model";
 import { BacktestResult, liveBadge, plural, sentence, updateRules, useBacktest, useWatchState, windowLabel } from "./watch-client";
 import { WatchHeader } from "./watch-header";
 
@@ -84,16 +85,23 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
             ) : live?.summary ? (
               <p className="px-3 py-2">
                 {sentence(live.summary)}
-                {live.status === "breaching" && live.checks && (
+                {live.status === "breaching" && (slo || live.checks) && (
                   <span className="text-muted-foreground">
                     {" "}
-                    · over its limit {plural(live.checks, "check", "checks")} in a row of {live.needed}
+                    {/* An SLO opens on its first check over, or, for a slow
+                        burn, once it has fired for the hold (no check
+                        counted until then). */}
+                    {slo
+                      ? live.checks
+                        ? "· over its limit"
+                        : `· a slow burn, which opens an incident once it has lasted ${SLOW_BURN_HOLD_MS / 60_000} min`
+                      : `· over its limit ${plural(live.checks ?? 0, "check", "checks")} in a row of ${live.needed}`}
                   </span>
                 )}
               </p>
             ) : (
               <p className="px-3 py-2 text-muted-foreground">
-                {live ? "No traffic on the routes it covers in its window." : "Waiting for the watch's next check."}
+                {!live ? "Waiting for the watch's next check." : live.status === "idle" ? idleText(rule) : "Nothing to judge it on yet."}
               </p>
             )}
           </Section>
@@ -160,6 +168,12 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
               <Fact label="Minimum requests">
                 {plural(rule.minRequests, "request", "requests")} per route
                 {slo ? ", in an alert's long window" : ""}
+                {slo && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    (in its short window, enough that one bad request can&apos;t fire it: {shortMinimumsText(rule.minRequests, slo)})
+                  </span>
+                )}
               </Fact>
             )}
             <Fact label="Severity">
@@ -173,6 +187,21 @@ export function RuleDetail({ rule: initial, incidents }: { rule: WatchRule; inci
       </div>
     </div>
   );
+}
+
+// Why the watch has no verdict on a rule: no route it covers had the rule's
+// minimum of requests (an SLO's, in both of an alert's windows). A count of
+// slow requests has no minimum, so for it idle is no traffic at all.
+function idleText(rule: WatchRule): string {
+  const c = rule.condition;
+  if (c.metric === "slowCount") return `No traffic on the routes it covers in the last ${windowLabel(rule.windowSeconds)}.`;
+  const min = plural(rule.minRequests, "request", "requests");
+  if (c.metric === "slo") {
+    const longs = burnAlerts.map((a) => durationText(a.longMs));
+    const windows = `${longs.slice(0, -1).join(", ")} or ${longs.at(-1)}`;
+    return `Too little traffic to judge: no route it covers had ${min} in an alert's long window (${windows}) and enough in its short one (${shortMinimumsText(rule.minRequests, c)}).`;
+  }
+  return `Too little traffic to judge: no route it covers had ${min} in the last ${windowLabel(rule.windowSeconds)}.`;
 }
 
 // A title over a bordered box, like the Backtest beside it and the forms'

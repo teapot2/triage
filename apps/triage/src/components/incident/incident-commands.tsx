@@ -29,8 +29,14 @@ export function IncidentCommands({ incident }: { incident: Incident }) {
   const { byId, numberOf, open } = useEvidence();
 
   const section = (id: string) => () => {
-    // The report reads its section from the URL; same as its own menu.
-    window.history.pushState(null, "", `?section=${id}`);
+    // The report reads its section from the URL, as its own menu sets it.
+    // Other params stay, so ?run=2 or ?run=compare keeps showing that run.
+    // Always set, not dropped at the fallback as selectSection does: the
+    // fallback is Investigation while the agent runs, so "Go to Overview"
+    // has to name its section.
+    const params = new URLSearchParams(window.location.search);
+    params.set("section", id);
+    window.history.pushState(null, "", `?${params}`);
   };
 
   const postmortem = incident.postmortem?.status;

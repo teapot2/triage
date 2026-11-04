@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
+import { exampleIncidents } from "../fixtures";
 import type { Incident, Mitigation } from "../schema";
-import { shopfrontOps } from "./executors";
+import { judgeWindow, simulatedWindow } from "../verify";
+import { executorFor, shopfrontOps, simulated, simulatedRecovery } from "./executors";
 
 const rollback: Mitigation = {
   kind: "rollback",
@@ -85,5 +87,100 @@ describe("shopfrontOps rollback", () => {
     const flagOff: Mitigation = { ...rollback, kind: "flag_off", target: "FF_LIST_PRICES", branch: undefined, steps: ["Turn off FF_LIST_PRICES on shopfront"] };
     assert.deepEqual(await shopfrontOps.apply(incident(flagOff)), { output: "FF_LIST_PRICES off" });
     assert.deepEqual(calls, [{ action: "flag", name: "FF_LIST_PRICES", enabled: false }]);
+  });
+});
+
+describe("simulatedRecovery", () => {
+  // Every bundled example a person can approve a mitigation on.
+  const approvable = exampleIncidents.filter((i) => i.mitigation?.state === "proposed");
+
+  it("covers the examples with a proposed mitigation", () => {
+    assert.deepEqual(approvable.map((i) => i.id), ["inc_pool_leak", "inc_price_gap", "inc_live_ratings"]);
+  });
+
+  for (const example of approvable) {
+    it(`recovers ${example.id} under its own limit, then verifies`, () => {
+      const recovery = simulatedRecovery(example);
+      assert.equal(recovery.status, "recovered");
+      assert.equal(recovery.metric, example.trigger.metric);
+      assert.equal(recovery.threshold, example.trigger.threshold);
+      assert.equal(recovery.since, example.trigger.series.at(-1)!.t);
+      // What the verification replays after the recovery stays under it too.
+      const incident = { ...example, mitigation: { ...example.mitigation!, state: "applied", recovery } } as Incident;
+      const window = simulatedWindow(incident, { since: recovery.recoveredAt!, threshold: recovery.threshold, windowMinutes: 5 });
+      assert.equal(judgeWindow(window, recovery.threshold, 5).kind, "resolved");
+    });
+  }
+
+  it("replays the price gap's own recovery, not the pool leak's", () => {
+    const priceGap = approvable.find((i) => i.id === "inc_price_gap")!;
+    assert.ok(simulatedRecovery(priceGap).series.every((p) => p.value < priceGap.trigger.threshold));
+  });
+
+  it("follows a scenario run's source", () => {
+    const poolLeak = approvable.find((i) => i.id === "inc_pool_leak")!;
+    const run = { source: "scenario:price-gap" } as Incident["run"];
+    const values = simulatedRecovery({ ...poolLeak, id: "inc_replay", run }).series.map((p) => p.value);
+    assert.deepEqual(values, [0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe("executorFor", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const shopfront = process.env.SHOPFRONT_URL ?? "http://localhost:3001";
+  const flagOff: Mitigation = {
+    ...rollback,
+    kind: "flag_off",
+    target: "FF_LIST_PRICES",
+    branch: undefined,
+    steps: ["Turn off FF_LIST_PRICES on shopfront"],
+  };
+  // An incident an uptime check opened, on the check's own metric and URL.
+  const uptime = (url: string) =>
+    ({
+      id: "inc_uptime",
+      service: "shopfront",
+      run: { source: "uptime:chk_shop01" },
+      trigger: { metric: "uptime.availability{check=chk_shop01}", threshold: 100, route: url, series: [] },
+      detectedAt: "2026-11-03T10:00:00.000Z",
+      mitigation: flagOff,
+    }) as unknown as Incident;
+
+  it("runs a check of Shopfront's mitigation on Shopfront, not as a replay", async () => {
+    const incident = uptime(`${shopfront}/api/health`);
+    assert.equal(executorFor(incident), shopfrontOps);
+    const calls: { url: string; body: unknown }[] = [];
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return json(200, { flags: [{ name: "FF_LIST_PRICES", enabled: false }] });
+    }) as typeof fetch;
+    const result = await executorFor(incident).apply(incident);
+    assert.deepEqual(result, { output: "FF_LIST_PRICES off" });
+    assert.equal(result.recovery, undefined, "the recovery is watched on the check's results, not replayed");
+    assert.deepEqual(calls, [{ url: `${shopfront}/api/ops`, body: { action: "flag", name: "FF_LIST_PRICES", enabled: false } }]);
+  });
+
+  it("changes nothing behind an external endpoint, and says so", async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return json(200, {});
+    }) as typeof fetch;
+    const incident = uptime("https://www.example.com/");
+    await assert.rejects(executorFor(incident).apply(incident), { message: "Triage can't change anything behind https://www.example.com/" });
+    assert.equal(called, false);
+  });
+
+  it("applies a live run on Shopfront and simulates only recorded runs", () => {
+    const run = (source?: string) => ({ ...incident(flagOff), run: source ? { source } : undefined }) as Incident;
+    assert.equal(executorFor(run("live:shopfront")), shopfrontOps);
+    assert.equal(executorFor(run("scenario:pool-leak")), simulated);
+    assert.equal(executorFor(run("demo")), simulated);
+    assert.equal(executorFor(run()), simulated);
+    for (const example of exampleIncidents) assert.equal(executorFor(example), simulated);
   });
 });

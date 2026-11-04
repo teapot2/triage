@@ -25,6 +25,9 @@ describe("postmortemTimeline", () => {
   it("has the verdict, the fix stage and the pending approval", () => {
     const events = postmortemTimeline(poolLeak()).map((e) => e.event);
     assert.ok(events.includes("Investigation started (muse-spark-1.3)"));
+    const incident = poolLeak();
+    incident.run = { ...incident.run!, provider: "meta", reasoningEffort: "medium" };
+    assert.ok(postmortemTimeline(incident).some((e) => e.event === "Investigation started (muse-spark-1.3 via Meta Model API, medium effort)"));
     assert.ok(events.includes("Verdict: Connection leak in getStockLevel exhausts the pg pool"));
     assert.ok(events.includes("Fix attempt 1 started"));
     assert.ok(events.includes("Fix attempt 1 proven after 2 submissions"));
@@ -62,6 +65,15 @@ describe("postmortemTimeline", () => {
     const byPerson = reopened();
     byPerson.reopenings![0] = { ...byPerson.reopenings![0], by: "person", why: "errors are back\nsince 02:29" };
     assert.ok(postmortemTimeline(byPerson).some((e) => e.event === "Reopened by a person: errors are back"));
+  });
+
+  it("names only who reopened it when there's no why, or one that repeats the title", () => {
+    // No note, and an older record's stand-in for one.
+    for (const why of ["", "Reopened by a person"]) {
+      const incident = reopened();
+      incident.reopenings![0] = { ...incident.reopenings![0], by: "person", why };
+      assert.equal(postmortemTimeline(incident).at(-1)?.event, "Reopened by a person");
+    }
   });
 
   it("says when the recovery watch gave up", () => {
@@ -108,7 +120,7 @@ describe("postmortemTimeline", () => {
     assert.ok(!events.some((e) => e.includes("Dana")));
   });
 
-  it("reads a declined fix stage, a failed run and questions", () => {
+  it("reads a declined fix stage and a failed run, and leaves questions out", () => {
     const incident: Incident = {
       ...poolLeak(),
       status: "failed",
@@ -134,7 +146,7 @@ describe("postmortemTimeline", () => {
     const events = postmortemTimeline(incident).map((e) => e.event);
     assert.ok(events.includes("Investigation failed: model timed out"));
     assert.ok(events.includes("Fix stage declined: not a code defect"));
-    assert.ok(events.includes("Question asked: Why 02:09?"));
+    assert.ok(!events.some((e) => e.includes("Why 02:09?")));
   });
 });
 

@@ -1,8 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
 import type { Choice } from "@/components/stage-choice-fields";
+import { useRefreshWhile } from "@/hooks/use-refresh-while";
 import { markSeen, recordView } from "@/hooks/use-seen";
 import { findUnknownEvidenceIds, type Incident } from "@/lib/investigation/schema";
 import { currentRun, isRunning, runView } from "@/lib/investigation/reruns";
@@ -16,19 +16,6 @@ import { IncidentHeader } from "./incident-header";
 import { IncidentReport } from "./incident-report";
 import { useAskQuestion } from "./questions-panel";
 import { RunComparison, RunNotice, useShownRun } from "./run-switcher";
-
-// While the agent works, re-render from the server every couple of seconds;
-// it saves each step as it goes. Every second while a question is being
-// answered: its answer is saved as it streams, so a second tab (or this
-// one after a reload) reads along.
-function useRefreshWhile(active: boolean, intervalMs = 2000) {
-  const router = useRouter();
-  useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => router.refresh(), intervalMs);
-    return () => clearInterval(timer);
-  }, [active, intervalMs, router]);
-}
 
 // A summary header with the facts that matter, then the report: a section
 // menu beside one section at a time.
@@ -61,6 +48,10 @@ export function IncidentView({
   // And while the postmortem is written, and the fix is being verified.
   const writingPostmortem = incident.postmortem?.status === "writing";
   const verifying = incident.verification?.status === "verifying";
+  // While the agent works, re-render from the server every couple of
+  // seconds; it saves each step as it goes. Every second while a question
+  // is being answered: its answer is saved as it streams, so a second tab
+  // (or this one after a reload) reads along.
   useRefreshWhile(
     incident.status === "investigating" ||
       fixing ||

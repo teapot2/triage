@@ -5,7 +5,7 @@ import { watchRecovery } from "../recovery";
 import type { Incident, Mitigation, Recovery } from "../schema";
 import { getIncident, patchIncident } from "../store";
 import { Refused as VerificationRefused, startVerification, verificationRefusal } from "../verify";
-import { shopfrontOps, simulated } from "./executors";
+import { executorFor } from "./executors";
 import { errorMessage } from "../../errors";
 
 export type MitigationDecision = Extract<Mitigation["state"], "approved" | "denied">;
@@ -39,18 +39,19 @@ export async function decideMitigation(id: string, decision: MitigationDecision,
   }
 }
 
-// Runs an approved mitigation and saves what happened, then watches a live
-// run's alert until it recovers, then checks that it stays recovered (the
-// verification's quiet window). A simulated run's recovery is recorded, so
-// its verification starts right away. Never throws.
+// Runs an approved mitigation through the executor for what the run can
+// touch (executorFor) and saves what happened, then watches a live run's
+// alert (an uptime check's own results, on a check of Shopfront) until it
+// recovers, then checks that it stays recovered (the verification's quiet
+// window). A simulated run's recovery is recorded, so its verification
+// starts right away. Never throws.
 export async function applyMitigation(id: string): Promise<void> {
   let watch = false;
   let recovered: Recovery | undefined;
   try {
     if ((await getIncident(id))?.mitigation?.state !== "approved") return;
     const running = await setMitigation(id, { state: "running" });
-    const executor = running.run?.source === "live:shopfront" ? shopfrontOps : simulated;
-    const { output, recovery } = await executor.apply(running);
+    const { output, recovery } = await executorFor(running).apply(running);
     await setMitigation(id, { state: "applied", appliedAt: new Date().toISOString(), output, recovery });
     void refreshSlackCard(id);
     watch = !recovery;

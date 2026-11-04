@@ -136,6 +136,33 @@ describe("backtestSloRule", () => {
     assert.equal(r.dataFrom, undefined);
   });
 
+  // Two outages 3 hours apart: the first's slow burn still fires (its 6 h
+  // window holds the bad minutes) when the second starts, and the second's
+  // fast burn, quiet for hours, fires again as the live watch opens a new
+  // incident for it.
+  it("fires again for a fast burn in the slow-burn tail of an earlier outage", () => {
+    const close = [now - 6 * HOUR, now - 3 * HOUR];
+    const twice: History = new Map([
+      [
+        "/api/a",
+        {
+          method: "GET",
+          buckets: Array.from({ length: 4 * 24 * 60 }, (_, i) => {
+            const m = now - 4 * DAY + i * MINUTE;
+            const bad = close.some((o) => m >= o && m < o + 10 * MINUTE) ? 50 : 0;
+            return { t: m, total: 100, good: 100 - bad };
+          }),
+        },
+      ],
+    ]);
+    const r = backtestSloRule(rule(), twice, now - DAY, now);
+    assert.equal(r.fired.length, 2);
+    // On its first bad minute, by the 6 h alert, whose long window still
+    // holds the first outage and whose 30 minutes are the second's alone.
+    assert.equal(r.fired[1].at, new Date(close[1] + 10_000).toISOString());
+    assert.match(r.fired[1].summary!, /^burning \d+(\.\d)?× over 6 h on \/api\/a/);
+  });
+
   it("says when the counts start after the range does", () => {
     const short: History = new Map([["/api/a", { method: "GET", buckets: [{ t: now - HOUR, total: 100, good: 100 }] }]]);
     const r = backtestSloRule(rule(), short, now - DAY, now);

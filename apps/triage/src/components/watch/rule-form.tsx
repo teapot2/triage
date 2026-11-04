@@ -521,7 +521,11 @@ export function RuleForm({ rule }: { rule?: WatchRule }) {
               label="Minimum requests"
               htmlFor={`${id}-min`}
               error={shown.minRequests}
-              hint={isSlo ? "An alert doesn't judge a route with fewer in its long window." : "A route with fewer in the window isn't judged."}
+              hint={
+                isSlo
+                  ? "An alert doesn't judge a route with fewer in its long window, or with so few in its short one that one bad request would fire it."
+                  : "A route with fewer in the window isn't judged."
+              }
             >
               <NumberInput
                 id={`${id}-min`}

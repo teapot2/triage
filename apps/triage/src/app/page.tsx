@@ -12,11 +12,13 @@ import { facetCounts, filterIncidents } from "@/lib/investigation/filter";
 import type { IncidentSummary } from "@/lib/investigation/list-summary";
 import { investigationOptions } from "@/lib/investigation/options";
 import { sortIncidents, startedAt } from "@/lib/investigation/sort";
+import { sourceKind } from "@/lib/investigation/source-kind";
 import { isExample, listIncidentSummaries } from "@/lib/investigation/store";
 import { IncidentSelection, SelectIncident } from "./incident-selection";
 import { IncidentToolbar } from "./incident-toolbar";
 import { clampPage, listHref, PAGE_SIZE_COOKIE, pageSizes, parseListParams } from "./list-params";
 import { Pagination } from "./pagination";
+import { RefreshWhileRunning } from "./refresh-while-running";
 import { RunInvestigation } from "./run-investigation";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
@@ -61,8 +63,14 @@ async function IncidentList({ searchParams }: Props) {
     );
   }
 
+  // A shown row whose run (its own or a re-run under it) is still going.
+  const running = incidents.some(
+    (i) => i.status === "investigating" || i.otherRuns.some((r) => r.status === "investigating"),
+  );
+
   return (
     <div className="flex flex-col gap-3">
+      <RefreshWhileRunning running={running} />
       <IncidentToolbar params={params} counts={facetCounts(found)} shown={matching.length} total={found.length} />
       {matching.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center">
@@ -145,6 +153,8 @@ function IncidentRows({ incidents }: { incidents: IncidentSummary[] }) {
                       incident.headline,
                       isExample(incident.id) && "example",
                       isDemo(incident.id) && "demo",
+                      // Its header's time is the recording's; this row's is the run's.
+                      sourceKind(incident) === "scenario" && "replay",
                     ]
                       .filter(Boolean)
                       .join(" · ")}

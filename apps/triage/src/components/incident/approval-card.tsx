@@ -21,7 +21,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import type { Decision } from "@/lib/investigation/approval";
 import { dataChangeOf } from "@/lib/investigation/fix/data-change";
-import type { Approval, Fix } from "@/lib/investigation/schema";
+import type { Approval, Fix, Recovery } from "@/lib/investigation/schema";
 import { cn } from "@/lib/utils";
 import { DataChangeReview } from "./data-change-review";
 import { errorMessage } from "@/lib/errors";
@@ -88,11 +88,15 @@ export function ApprovalActions({
   onApprove,
   onDeny,
   error,
+  opensPr,
   archived = false,
   quietOnceMerged = false,
 }: {
   incidentId: string;
   fix: Fix;
+  // Whether approving opens a PR (a fix proven in the sandbox) or only
+  // records the decision.
+  opensPr: boolean;
   approval?: Approval;
   decision: Approval["state"];
   onApprove: () => void;
@@ -151,8 +155,9 @@ export function ApprovalActions({
           </Button>
         </TooltipTrigger>
         <TooltipContent>
-          Opens a draft PR changing {fix.files.length} file(s). Nothing touches production until it&apos;s marked ready
-          and merged.
+          {opensPr
+            ? `Opens a draft PR changing ${fix.files.length} ${fix.files.length === 1 ? "file" : "files"}. Nothing touches production until it's marked ready and merged.`
+            : "Records the decision; bundled examples open no PR."}
         </TooltipContent>
       </Tooltip>
     </div>
@@ -203,13 +208,18 @@ function PullRequestStatus({ incidentId, approval, archived }: { incidentId: str
     );
   }
   if (approval.prState === "failed") {
+    // Why, inline: the first line of the error, cut to fit beside Retry,
+    // and all of it on hover or focus.
+    const why = retryError ?? approval.prError;
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="cursor-default text-destructive text-xs">{retryError ?? "PR not opened"}</span>
+            <span tabIndex={0} className="min-w-0 max-w-72 cursor-default truncate rounded-sm text-destructive text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+              PR not opened{why ? `: ${why.split("\n")[0]}` : ""}
+            </span>
           </TooltipTrigger>
-          <TooltipContent className="max-w-80">{approval.prError}</TooltipContent>
+          {why && <TooltipContent className="max-w-80 whitespace-pre-wrap break-words">{why}</TooltipContent>}
         </Tooltip>
         {!archived && (
           <Button variant="outline" size="sm" disabled={retrying} onClick={() => void retry()}>
@@ -232,14 +242,15 @@ function PullRequestStatus({ incidentId, approval, archived }: { incidentId: str
 export function ApproveDialog({
   fix,
   opensPr,
-  mitigated,
+  recovery,
   open,
   onOpenChange,
   onConfirm,
 }: {
   fix: Fix;
   opensPr: boolean;
-  mitigated: boolean;
+  // Where the mitigation stands once applied, or undefined when none was.
+  recovery?: Recovery["status"];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (dataReviewed: boolean) => void;
@@ -268,7 +279,7 @@ export function ApproveDialog({
             ) : (
               <>This is a bundled example, so approving only records the decision. No PR is opened.</>
             )}
-            {mitigated && " Service was restored by the mitigation; this PR is the permanent fix."}
+            {recovery && ` ${mitigationNote(recovery, opensPr)}`}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {change.detected && (
@@ -287,12 +298,24 @@ export function ApproveDialog({
   );
 }
 
+// The approve dialog's line on an applied mitigation: recovery takes
+// minutes and can fail, so applied alone isn't restored.
+function mitigationNote(recovery: Recovery["status"], opensPr: boolean): string {
+  if (recovery === "recovered") return `Service was restored by the mitigation; ${opensPr ? "this PR" : "this"} is the permanent fix.`;
+  if (recovery === "watching") return "The mitigation is applied; recovery is still being watched.";
+  return "The mitigation is applied, but the service hasn't recovered.";
+}
+
 // Why feedback on a deny starts no new attempt here (see canRerunFix).
-export type NoRerunReason = "example" | "scenario" | "unproven";
+export type NoRerunReason = "example" | "demo" | "scenario" | "uptime" | "dependency" | "unproven";
 
 const noRerunNotes: Record<NoRerunReason, string> = {
   example: "This is a bundled example: the feedback is recorded, no new attempt follows.",
+  demo: "This is a demo incident: the feedback is recorded, no new attempt follows.",
   scenario: "This is a recorded scenario: the feedback is recorded, no new attempt follows.",
+  uptime:
+    "This incident came from an endpoint check, and only Shopfront's own alerts get a new attempt: the feedback is recorded, no new attempt follows.",
+  dependency: "This is a dependency upgrade: the feedback is recorded, no new attempt follows.",
   unproven: "This fix was never proven in a sandbox: the feedback is recorded, no new attempt follows.",
 };
 

@@ -36,3 +36,41 @@ export async function sourceFor(incident: Incident): Promise<TelemetrySource | u
       return undefined;
   }
 }
+
+// How far past the alert Ask's tools read on a live run or an endpoint
+// check. The tools' windows count back from their "now" and reach at most
+// 180 min, so stopping two hours after the alert keeps the hour before it
+// in reach too.
+export const ASK_REACH_MINUTES = 120;
+
+// The source Ask's tools read: on a live run or an endpoint check, the
+// same telemetry up to now (at most ASK_REACH_MINUTES past the alert), so
+// "is it back to normal?" is read from what came after the mitigation;
+// `pastAlert` says how many minutes past the alert that is (0 at the
+// alert). The database checks still answer as at the alert, as before. A
+// recorded scenario, a dependency advisory or anything else stays at the
+// alert: there is nothing later to read. Re-runs, the full-context bundle
+// and the recovery watch use sourceFor as before.
+export async function askSourceFor(
+  incident: Incident,
+  now = Date.now(),
+): Promise<{ source: TelemetrySource; pastAlert: number } | undefined> {
+  const kind = sourceKind(incident);
+  const alert = Date.parse(incident.detectedAt);
+  const until = Math.min(Math.max(now, alert), alert + ASK_REACH_MINUTES * 60_000);
+  const pastAlert = Math.floor((until - alert) / 60_000);
+  if ((kind !== "live" && kind !== "uptime") || pastAlert < 1) {
+    const source = await sourceFor(incident);
+    return source && { source, pastAlert: 0 };
+  }
+  const later = await sourceFor({ ...incident, detectedAt: new Date(until).toISOString() });
+  if (!later) return undefined;
+  // slow_queries counts its window from a sample taken before the source's
+  // "now": the one before the alert, as the investigation read it.
+  let atAlert: Promise<TelemetrySource | undefined> | undefined;
+  const dbDiagnostics: TelemetrySource["dbDiagnostics"] = async (check) => {
+    const source = await (atAlert ??= sourceFor(incident));
+    return (source ?? later).dbDiagnostics(check);
+  };
+  return { source: { ...later, dbDiagnostics }, pastAlert };
+}

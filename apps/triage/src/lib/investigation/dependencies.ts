@@ -18,6 +18,7 @@ import {
 } from "./dependencies/model";
 import { createDependencySource } from "./dependencies/source";
 import { getFinding, latestAudit, listFindings, recordAudit, setFindingIncident } from "./dependencies/store";
+import { recordOpened } from "./last-opened";
 import { shopfrontDir } from "./live/live-source";
 import type { Incident, Verification } from "./schema";
 import type { TelemetrySource } from "./source";
@@ -54,10 +55,11 @@ export type DependencyState = {
   // Findings now, by severity: runtime ones and dev ones apart.
   runtime: SeverityCounts;
   dev: SeverityCounts;
-  // Incidents open on an advisory.
+  // Incidents open on an advisory, and the most severe one's.
   open: number;
-  // Why the last audit's findings opened nothing (no model to investigate
-  // with), or why acting on them failed.
+  incidentId?: string;
+  // Why the last audit's findings opened nothing (the watch paused, no model
+  // to investigate with), or why acting on them failed.
   error?: string;
 };
 
@@ -157,7 +159,8 @@ export function dependencyState(): DependencyState {
   const runtime = noCounts();
   const dev = noCounts();
   for (const f of findings) (f.dev ? dev : runtime)[f.severity]++;
-  const open = findings.filter((f) => f.incidentId && opensIncident(f, s.severityFloor)).length;
+  const opened = findings.filter((f) => f.incidentId && opensIncident(f, s.severityFloor));
+  const open = opened.length;
   const on = state.enabled && s.enabled;
   const nextAt = on ? new Date(last ? Date.parse(last.at) + s.intervalHours * HOUR : deps.now()).toISOString() : undefined;
   const status: DependencyStatus = state.inFlight
@@ -175,7 +178,7 @@ export function dependencyState(): DependencyState {
               : findings.length
                 ? "findings"
                 : "clean";
-  return { service, status, settings: s, auditing: !!state.inFlight, lastAudit: last, nextAt, runtime, dev, open, error: state.error };
+  return { service, status, settings: s, auditing: !!state.inFlight, lastAudit: last, nextAt, runtime, dev, open, incidentId: opened[0]?.incidentId, error: state.error };
 }
 
 async function tick() {
@@ -240,10 +243,17 @@ async function audit(): Promise<Audit> {
 // needs the watch on; counting and resolving don't (Audit now after a fix).
 async function act(s: DependencySettings, target: { service: string; dir: string }, found: StoredFinding[], at: string) {
   const problems: string[] = [];
+  let paused = false;
   for (const f of found) {
     if (!opensIncident(f, s.severityFloor)) continue;
-    await follow(f, target, at).catch((err: unknown) => problems.push(`${f.advisoryId}: ${errorMessage(err)}`));
+    await follow(f, target, at).then(
+      (r) => void (paused ||= r === "paused"),
+      (err: unknown) => problems.push(`${f.advisoryId}: ${errorMessage(err)}`),
+    );
   }
+  // Said once, however many findings it held back; resuming alone doesn't
+  // audit until the next one is due, hence "audit again".
+  if (paused) problems.unshift(PAUSED);
   const ids = new Set(found.map((f) => f.advisoryId));
   for (const incident of await openDependencyIncidents(target.service)) {
     if (ids.has(incident.dependency!.advisoryId)) continue;
@@ -258,10 +268,15 @@ async function openDependencyIncidents(service: string): Promise<Incident[]> {
   return (await listIncidents({ service })).filter((i) => i.dependency && i.trigger.rule?.id?.startsWith("deps:") && isOpenIncident(i));
 }
 
+// Why an audit (Audit now) found something over the floor and opened
+// nothing, for the Watch page (DependencyState.error).
+export const PAUSED = "The watch is paused, so no incident was opened. Resume the watch, then audit again to open one.";
+
 // The audit found the advisory: on its open incident, one more audit (and,
 // while a merged fix is verified, a point that it's still there); otherwise
-// the one resolved within 30 days reopens, or a new one opens.
-async function follow(f: StoredFinding, target: { service: string; dir: string }, at: string) {
+// the one resolved within 30 days reopens, or a new one opens, unless the
+// watch is paused ("paused": opening needs the watch on).
+async function follow(f: StoredFinding, target: { service: string; dir: string }, at: string): Promise<"paused" | undefined> {
   const ruleId = dependencyRuleId(f.service, f.advisoryId);
   const onRule = await listIncidents({ ruleId });
   const current = onRule.find(isOpenIncident);
@@ -282,19 +297,26 @@ async function follow(f: StoredFinding, target: { service: string; dir: string }
       dependency: advisoryOf(f, at, (i.dependency?.audits ?? 0) + 1),
     }));
     setFindingIncident(f.service, f.advisoryId, incident.id);
+    recordOpened({ ...opened(f, incident, at), reopened: true });
     console.log(`[triage] dependency audit reopened ${incident.id} for ${f.advisoryId}`);
     deps.notify("incident_reopened", incident);
     return;
   }
-  if (!state.enabled) return;
+  if (!state.enabled) return "paused";
   const problem = await deps.investigationProblem();
   if (problem) throw new Error(`${problem} No incident was opened.`);
   const source = await deps.source(f.service, now);
   const incident = await createDependencyIncident(f, source);
   setFindingIncident(f.service, f.advisoryId, incident.id);
+  recordOpened(opened(f, incident, at));
   console.log(`[triage] dependency audit opened ${incident.id}: ${incident.title}`);
   deps.notify("incident_opened", incident);
   void deps.investigate(incident, source, target.dir);
+}
+
+// For the sidebar's announcement (last-opened): "semver advisory".
+function opened(f: StoredFinding, incident: Incident, at: string) {
+  return { incidentId: incident.id, at, rule: `${f.package} advisory`, by: "dependencies" as const, title: incident.title };
 }
 
 // A merged fix's verification, told the audit still finds the advisory.

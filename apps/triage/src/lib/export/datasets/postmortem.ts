@@ -1,12 +1,14 @@
+import type { ActionItem } from "@/lib/investigation/postmortem/render";
 import type { Incident, PostmortemActionItem } from "@/lib/investigation/schema";
 import { defineDataset } from "../dataset";
 
-// A postmortem's action items, to file as tickets. The columns are named as
+// A postmortem's action items, to file as tickets: the rows of its table
+// (render.ts's actionItems), the fix first. The columns are named as
 // Jira's and Linear's CSV importers name their fields (title, description,
 // priority, labels), so mapping them is a matter of confirming.
 
 export type ActionItemRow = {
-  item: PostmortemActionItem;
+  item: ActionItem;
   incident: Pick<Incident, "id" | "title">;
   // The incident page's absolute address.
   url: string;
@@ -25,10 +27,11 @@ export const postmortemActions = defineDataset<ActionItemRow>({
   columns: [
     { key: "title", value: ({ item }) => item.title.trim() },
     // One plain line: a ticket body that still says where it came from once
-    // it's far from the incident.
+    // it's far from the incident, and the fix's PR once it's open.
     {
       key: "description",
-      value: ({ item, incident, url }) => `${kindInWords[item.kind]}, from the postmortem of "${incident.title}": ${url}`,
+      value: ({ item, incident, url }) =>
+        `${kindInWords[item.kind]}, from the postmortem of "${incident.title}": ${url}${item.prUrl ? `; PR: ${item.prUrl}` : ""}`,
     },
     { key: "priority", value: ({ item }) => item.priority },
     // Two labels, semicolon-separated: one to find every postmortem item,

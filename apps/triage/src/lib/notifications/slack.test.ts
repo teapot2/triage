@@ -168,6 +168,29 @@ describe("slackMessage", () => {
     assert.match(card(slackMessage("resolved", i, base)), /Triage confirmed it: 3 checks in a row answered in time\./);
   });
 
+  it("says the audit confirmed a dependency incident, not a metric", () => {
+    const at = "2026-10-23T03:19:00.000Z";
+    const verification: Incident["verification"] = {
+      after: "dependencies",
+      since: at,
+      windowMinutes: 1,
+      metric: "vulnerable_dependencies{advisory=GHSA-c2qf-rxjj-qqgw}",
+      threshold: 1,
+      series: [{ t: at, value: 0 }],
+      status: "resolved",
+      startedAt: at,
+    };
+    const dependency = { advisoryId: "GHSA-c2qf-rxjj-qqgw" } as Incident["dependency"];
+    const merged = example({ status: "resolved", resolvedAt: at, dependency, verification });
+    const text = card(slackMessage("resolved", merged, base));
+    assert.match(text, /the next audit no longer finds GHSA-c2qf-rxjj-qqgw\./);
+    assert.doesNotMatch(text, /quiet window/);
+
+    const note = "The audit no longer finds GHSA-c2qf-rxjj-qqgw: the dependency changed without a Triage PR.";
+    const elsewhere = example({ status: "resolved", resolvedAt: at, dependency, verification: { ...verification!, note } });
+    assert.match(card(slackMessage("resolved", elsewhere, base)), /changed without a Triage PR/);
+  });
+
   it("escapes Slack's markup in text taken from the incident", () => {
     const m = slackMessage("incident_opened", example({ title: "<!channel> a & b > c", service: "<svc>" }), base);
     assert.ok(card(m).includes("|&lt;!channel&gt; a &amp; b &gt; c>"));

@@ -1,4 +1,5 @@
-import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
+import { limitText, lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
+import { modelLabel } from "../../models/labels";
 import { citationOrder } from "../citations";
 import { gradeLabels } from "../confidence-grade";
 import type { IncidentSummary } from "../list-summary";
@@ -19,12 +20,19 @@ import { breaches, durations, firstBreach, postmortemTimeline, withUnit } from "
 // Blameless: no commit author, no approver, only what happened and why.
 
 // Where the incident stands, in words: the most specific that holds. A
-// summary (list-summary.ts) has all it reads.
-export function statusInWords(incident: Pick<IncidentSummary, "status" | "approval" | "mitigation">): string {
+// summary (list-summary.ts) has all it reads but the PR's merge, which only
+// a whole incident says.
+export function statusInWords(
+  incident: Pick<IncidentSummary, "status" | "mitigation"> & {
+    approval?: NonNullable<IncidentSummary["approval"]> & { prMergedAt?: string };
+  },
+): string {
   const { status, approval, mitigation } = incident;
   if (status === "resolved") return "resolved";
   if (status === "healthy") return "no issue found";
   if (status === "failed") return "investigation failed";
+  if (status === "investigating") return "investigating";
+  if (approval?.state === "approved" && approval.prMergedAt) return "fix merged, verifying";
   if (approval?.state === "approved" && approval.prState === "opened") return "fix approved, PR open";
   if (approval?.state === "pending") return "fix awaiting approval";
   if (mitigation?.state === "applied") return "mitigated";
@@ -114,7 +122,7 @@ function header(incident: Incident): string {
     `Detected ${dateTime(incident.detectedAt)} UTC${incident.openedBy === "watch" ? " by Triage's watch" : ""}`,
   ];
   if (pm?.status === "ready") {
-    facts.push(`Written by Triage (${pm.model})${pm.finishedAt ? ` on ${dateTime(pm.finishedAt)} UTC` : ""}`);
+    facts.push(`Written by Triage (${modelLabel(pm.model, pm.provider, pm.reasoningEffort)})${pm.finishedAt ? ` on ${dateTime(pm.finishedAt)} UTC` : ""}`);
   }
   return `# Postmortem: ${incident.title}\n\n${facts.join(" · ")}`;
 }
@@ -151,7 +159,7 @@ function impact(incident: Incident, notes: Footnotes): string {
   const values = trigger.series.map((p) => p.value);
   const worst = values.length ? (low ? Math.min(...values) : Math.max(...values)) : trigger.observed;
   const items = [
-    `${low ? "Lowest" : "Peak"} ${label}: ${withUnit(num(worst), trigger.unit)}, against a threshold of ${withUnit(num(trigger.threshold), trigger.unit)}.`,
+    `${low ? "Lowest" : "Peak"} ${label}: ${withUnit(num(worst), trigger.unit)}, against a threshold of ${limitText(trigger.metric, withUnit(num(trigger.threshold), trigger.unit))}.`,
   ];
   const over = timeOverThreshold(incident);
   const start = firstBreach(incident);
@@ -160,8 +168,10 @@ function impact(incident: Incident, notes: Footnotes): string {
       `${low ? "Under" : "Over"} the threshold for ${over.ongoing ? "at least " : ""}${formatMinutes(over.ms)}, from ${time(start)} UTC.`,
     );
   }
+  // Only a baseline on the healthy side of the threshold: one taken over a
+  // window the fault had already reached says nothing about before it.
   const baseline = incident.evidence.find((e) => e.kind === "metric" && e.metric === trigger.metric);
-  if (baseline?.kind === "metric") {
+  if (baseline?.kind === "metric" && !breaches(incident)(baseline.baseline)) {
     items.push(`Baseline before the incident: ${withUnit(num(baseline.baseline), baseline.unit)} ${notes.markers([baseline.id])}`);
   }
   const claim = incident.postmortem?.impact;
@@ -247,22 +257,35 @@ const kindInWords: Record<PostmortemActionItem["kind"], string> = {
   mitigate_faster: "Mitigate faster",
 };
 
-function actions(incident: Incident, notes: Footnotes, drafting: boolean): string {
-  const rows: [string, string, string][] = [];
+// An action item as the table lists it: `prUrl` on the fix's row once its
+// PR is open.
+export type ActionItem = PostmortemActionItem & { prUrl?: string };
+
+// The action items in the table's order: the fix first, when there is one
+// (to merge once its PR is open, else to review), then the postmortem's own.
+// The action items export files the same list.
+export function actionItems(incident: Pick<Incident, "fix" | "approval" | "postmortem">): ActionItem[] {
+  const items: ActionItem[] = [];
   const { fix, approval } = incident;
   if (fix) {
     const summary = fix.summary.trim();
-    rows.push([
-      approval?.prUrl ? `Merge the fix: ${summary} ([PR](${approval.prUrl}))` : `Review the proposed fix: ${summary}`,
-      kindInWords.fix_this,
-      "P1",
-    ]);
+    items.push({
+      title: approval?.prUrl ? `Merge the fix: ${summary}` : `Review the proposed fix: ${summary}`,
+      kind: "fix_this",
+      priority: "P1",
+      ...(approval?.prUrl && { prUrl: approval.prUrl }),
+    });
   }
-  for (const item of incident.postmortem?.actionItems ?? []) {
+  return [...items, ...(incident.postmortem?.actionItems ?? [])];
+}
+
+function actions(incident: Incident, notes: Footnotes, drafting: boolean): string {
+  const rows = actionItems(incident).map((item): [string, string, string] => {
     const markers = notes.markers(item.evidenceIds);
+    const pr = item.prUrl ? ` ([PR](${item.prUrl}))` : "";
     // A draft's item may not have its kind or priority yet.
-    rows.push([`${item.title.trim()}${markers ? ` ${markers}` : ""}`, kindInWords[item.kind] ?? "", item.priority ?? ""]);
-  }
+    return [`${item.title.trim()}${pr}${markers ? ` ${markers}` : ""}`, kindInWords[item.kind] ?? "", item.priority ?? ""];
+  });
   if (!rows.length) return `## Action items\n\n${placeholder("_None recorded._", drafting)}`;
   return [
     "## Action items",
@@ -282,7 +305,7 @@ export function evidenceLine(e: Evidence): string {
     case "span":
       return `Trace · ${e.service} · ${e.name}, ${num(e.durationMs)} ms, ${e.status}`;
     case "metric":
-      return `Metric · ${metricLabel(e.metric)} (\`${e.metric}\`) · baseline ${num(e.baseline)}, observed ${withUnit(num(e.observed), e.unit)}`;
+      return `Metric · ${metricLabel(e.metric)} (\`${e.metric}\`) · baseline ${withUnit(num(e.baseline), e.unit)}, observed ${withUnit(num(e.observed), e.unit)}`;
     case "db":
       return `Database · ${e.summary}`;
     case "source":

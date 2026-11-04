@@ -9,6 +9,10 @@ const known: Record<string, string> = {
   "http.server.duration": "latency",
   "http.server.request.rate": "Request rate",
   "http.server.error_ratio": "Error rate",
+  // A slow-request rule's: the requests in a minute slower than {le=…} ms,
+  // as a count or a share (watch-rule-model's slowMetric).
+  "http.server.slow_requests": "Slow requests",
+  "http.server.slow_share": "Share of slow requests",
   // An SLO's; its {objective=…} and {le=…} labels are left off.
   "slo.burn_rate": "Error budget burn",
   "db.client.connection.count": "DB pool connections",
@@ -26,6 +30,36 @@ const known: Record<string, string> = {
 // over it: an uptime check's availability.
 export const lowerIsWorse = (metric: string) => metric.startsWith("uptime.availability");
 
+// Metrics whose limit is "more than N", as the slow-request rules say it:
+// a minute at the limit is healthy, one past it breaches. Every other
+// metric breaches at its limit.
+export const exclusiveLimit = (metric: string) =>
+  metric.startsWith("http.server.slow_requests") || metric.startsWith("http.server.slow_share");
+
+// Whether a value of the metric is past its alert limit: over it for a
+// "more than N" metric, at or over it for the rest, or under it where less
+// is worse (an uptime check's availability, alerting under 100 %).
+export function pastLimit(metric: string, threshold: number): (value: number) => boolean {
+  if (lowerIsWorse(metric)) return (v) => v < threshold;
+  return exclusiveLimit(metric) ? (v) => v > threshold : (v) => v >= threshold;
+}
+
+// Which side of its limit a metric is healthy on, in words: "under" the
+// limit for latency and errors, "at or under" it for a "more than N"
+// count, "at or over" it for availability; and the side a breach is on.
+// "5 min under the limit", "Back over the limit".
+export const limitSides = (metric: string) =>
+  lowerIsWorse(metric)
+    ? { healthy: "at or over", breach: "under" }
+    : exclusiveLimit(metric)
+      ? { healthy: "at or under", breach: "over" }
+      : { healthy: "under", breach: "over" };
+
+// The limit as a rule states it, from its value already formatted: "more
+// than 3 requests" for a "more than N" metric, the value alone otherwise.
+export const limitText = (metric: string, formatted: string) =>
+  exclusiveLimit(metric) ? `more than ${formatted}` : formatted;
+
 export function metricLabel(metric: string): string {
   const parts = metric.match(/^([^{]+)(?:\{(.*)\})?$/);
   const base = (parts?.[1] ?? metric).trim();
@@ -42,6 +76,11 @@ export function metricLabel(metric: string): string {
   const percentile = pct?.[2];
   let label = known[name] ?? humanize(name);
   if (percentile) label = `${percentile} ${label}`;
+  // "Requests over 1500 ms", "Share of requests over 1500 ms": the slow
+  // limit is what they're counted on.
+  if (labels.le && exclusiveLimit(name)) {
+    label = `${name.endsWith("share") ? "Share of requests" : "Requests"} over ${labels.le} ms`;
+  }
   if (labels.state) label = `${label} (${labels.state})`;
   if (labels.route) label = `${label} · ${labels.route}`;
   if (labels.advisory) label = `${label} · ${labels.advisory}`;

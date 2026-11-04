@@ -2,12 +2,14 @@ import { investigationProblem } from "../models/settings";
 import { notify } from "../notifications/notify";
 import { runInvestigation } from "./agent";
 import { isArchived } from "./archive";
+import { recordOpened } from "./last-opened";
 import { incidentToReopen, isOpen } from "./reopen";
 import type { Incident } from "./schema";
 import type { TelemetrySource } from "./source";
 import { getIncident, listIncidents, patchIncident } from "./store";
 import {
   readChecks,
+  downWords,
   incidentTitle,
   ruleDescription,
   ruleId,
@@ -467,6 +469,9 @@ async function open(check: UptimeCheck, rule: UptimeRule, samples: UptimeSample[
   const last = samples.at(-1)!;
   let failing = 0;
   for (let i = samples.length - 1; i >= 0 && failed(samples[i]); i--) failing++;
+  // The status every result of a Down run answered with, if one did: it
+  // words the reopening and the announcement as the title does.
+  const status = rule === "down" ? runStatus(failingRun("down", samples)) : undefined;
 
   // Only the rule's incidents: the others can't be reopened by it.
   const tripped = ruleId(check, rule);
@@ -475,10 +480,11 @@ async function open(check: UptimeCheck, rule: UptimeRule, samples: UptimeSample[
     const incident = await patchIncident(previous.id, (i) => ({
       // Already reopened (its verification saw the failure first): the
       // episode joins it as it is.
-      ...(isOpen(i) ? i : reopened(i, { at, by: "watch", why: `${incidentTitle(check, rule)} again` })),
+      ...(isOpen(i) ? i : reopened(i, { at, by: "watch", why: `${incidentTitle(check, rule, status)} again` })),
       uptime: { checkId: check.id, rule, failedChecks: (i.uptime?.failedChecks ?? 0) + failing, lastFailedAt: last.at },
     }));
     state.episodes.set(check.id, episode(incident.id, rule, now));
+    recordOpened({ ...opened(check, rule, status, incident, at), reopened: true });
     console.log(`[triage] uptime check ${check.id} reopened ${incident.id}`);
     deps.notify("incident_reopened", incident);
     return;
@@ -489,11 +495,19 @@ async function open(check: UptimeCheck, rule: UptimeRule, samples: UptimeSample[
   const { source, appDir } = await createUptimeSource(check, samples, { now });
   const incident = await createUptimeIncident(check, rule, samples, source);
   state.episodes.set(check.id, episode(incident.id, rule, now));
+  recordOpened(opened(check, rule, status, incident, at));
   console.log(`[triage] uptime check ${check.id} opened ${incident.id}: ${incident.title}`);
   // Slack hears within the tick, before the investigation starts.
   deps.notify("incident_opened", incident);
   // The pipeline runs on its own; the loop keeps checking meanwhile.
   void deps.investigate(incident, source, appDir);
+}
+
+// For the sidebar's announcement (last-opened): "Google is not responding",
+// "Shopfront health is returning HTTP 503".
+function opened(check: UptimeCheck, rule: UptimeRule, status: number | undefined, incident: Incident, at: string) {
+  const what = rule === "down" ? downWords(check, status) : "is slow";
+  return { incidentId: incident.id, at, rule: `${check.name} ${what}`, by: "uptime" as const, title: incident.title };
 }
 
 // For tests: the loop as a new process starts it (nothing in memory, so

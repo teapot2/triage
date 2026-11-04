@@ -1,35 +1,28 @@
 "use client";
 
-import { LoaderCircleIcon, RotateCcwIcon } from "lucide-react";
+import { LoaderCircleIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { useNow } from "@/hooks/use-now";
 import { useStartInvestigation } from "@/hooks/use-start-investigation";
-import type { Run } from "@/lib/investigation/schema";
-
-// What a failure means, as one plain title. The raw error shows under it
-// only when it says something the title can't: an unrecognized failure, or
-// the model's own message about why it refused.
-function explain(error: string): { title: string; detail?: string } {
-  if (/^Triage restarted/.test(error)) return { title: "The run stopped when Triage restarted" };
-  if (/no accepted report/i.test(error)) return { title: "The agent ran out of steps before finishing its report" };
-  // The retrying fetch's and the run budget's sentences (lib/models).
-  if (/ran past its .* limit|didn't answer within|didn't start its answer|stopped sending/.test(error)) {
-    return { title: "The model didn't answer in time", detail: error };
-  }
-  if (/rate-limiting|answered HTTP 5\d\d/.test(error)) return { title: "The model's API is overloaded", detail: error };
-  if (/tool_choice|fetch|network|ECONN|reach|timed? ?out|HTTP \d|api key|unauthor/i.test(error)) {
-    return { title: "Couldn't reach the model", detail: error };
-  }
-  return { title: "The investigation failed", detail: error };
-}
+import { isArchived } from "@/lib/investigation/archive";
+import { rerunBlocker } from "@/lib/investigation/reruns";
+import { explainFailure } from "@/lib/investigation/run-failure";
+import type { Incident, Run } from "@/lib/investigation/schema";
+import { requestRerun } from "./rerun-dialog";
 
 // A failed run on the Overview: what happened, in one line (two at most),
-// and a way to try again when the run came from a replayable scenario.
-// When retrying fails, that's the line instead.
-export function FailedRunNotice({ run }: { run: Run & { error: string } }) {
+// and a way to try again. Re-run, on this incident, wherever the header's
+// re-run dialog can take it (a live run with its snapshot, a scenario);
+// else Run again, a new incident, for a replayable scenario. When starting
+// one fails, that's the line instead.
+export function FailedRunNotice({ incident, run }: { incident: Incident; run: Run & { error: string } }) {
   const scenario = run.source.startsWith("scenario:") ? run.source.slice("scenario:".length) : undefined;
   const retry = useStartInvestigation();
-  const { title, detail } = explain(run.error);
+  // As the header decides it: 0 to hydrate, then the clock.
+  const now = useNow(0);
+  const rerun = !isArchived(incident) && rerunBlocker(incident, now) === undefined;
+  const { title, detail } = explainFailure(run.error);
   const line = retry.error ? `Couldn't start a new run: ${retry.error}` : detail;
 
   return (
@@ -38,13 +31,22 @@ export function FailedRunNotice({ run }: { run: Run & { error: string } }) {
     <Alert variant="destructive" className="has-data-[slot=alert-action]:pr-28">
       <AlertTitle>{title}</AlertTitle>
       {line && <AlertDescription className="line-clamp-2 break-words">{line}</AlertDescription>}
-      {scenario && (
+      {rerun ? (
         <AlertAction>
-          <Button size="xs" variant="outline" disabled={retry.pending} onClick={() => retry.start(scenario)}>
-            {retry.pending ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
-            Run again
+          <Button size="xs" variant="outline" onClick={requestRerun}>
+            <RefreshCwIcon />
+            Re-run
           </Button>
         </AlertAction>
+      ) : (
+        scenario && (
+          <AlertAction>
+            <Button size="xs" variant="outline" disabled={retry.pending} onClick={() => retry.start(scenario)}>
+              {retry.pending ? <LoaderCircleIcon className="animate-spin" /> : <RotateCcwIcon />}
+              Run again
+            </Button>
+          </AlertAction>
+        )
       )}
     </Alert>
   );

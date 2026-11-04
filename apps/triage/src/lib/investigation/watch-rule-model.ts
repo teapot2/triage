@@ -24,7 +24,8 @@ export const conditionSchema = z.discriminatedUnion("metric", [
   // didn't fail and, with latencyMs, took at most that long. It opens an
   // incident on how fast the error budget burns (slo/model's burnAlerts),
   // so the rule's windowSeconds and checksToOpen don't apply; minRequests
-  // does, to the alert's long window.
+  // does, to the alert's long window (its short window has its own,
+  // slo/model's shortWindowMinimum).
   z.object({
     metric: z.literal("slo"),
     objectivePercent: z.number().min(50).max(99.999),
@@ -88,10 +89,20 @@ export const rulesSchema = z
 // not on a fixed limit (slo/model). 99.9% leaves the fast alert under a
 // minute behind a full outage, and minRequests 100 keeps one slow request
 // (a dev server compiling a route on its first visit) from paging while the
-// hour's counts are still thin. API latency, the check the watch always
+// hour's counts are still thin; the short windows' own minimum keeps it from
+// paging after a cold start while an old outage is still in the long ones. API latency, the check the watch always
 // made, stays as an example, paused: it would page on the same outages.
 // Pages get a looser, count-based limit; errors are judged everywhere,
 // within seconds, ahead of the SLO's minute.
+//
+// Page latency is more than 10 slow requests in a minute, for a minute of
+// checks. Shopfront's dev server renders a page slowly now and then, and
+// after it sits idle or restarts a few renders in a row (Nov 4 2026: 3 or 4 on
+// /products/[id] in one minute, up to 8 on / after a fault was turned off);
+// "more than 3" for 2 checks paged on those, with a chart that never crossed
+// its own line. The pool leak is dozens a minute (21 to 60 on /products/[id],
+// 37 on /) and pages 70 to 80 s after it starts. Replayed over Nov 2 to 4,
+// every page it opens has a minute past 10 on its chart.
 export const defaultRules: WatchRule[] = [
   {
     id: "api-slo",
@@ -120,9 +131,9 @@ export const defaultRules: WatchRule[] = [
     name: "Page latency",
     enabled: true,
     target: { kind: "pages" },
-    condition: { metric: "slowCount", slowerThanMs: 1500, moreThan: 3 },
+    condition: { metric: "slowCount", slowerThanMs: 1500, moreThan: 10 },
     windowSeconds: 60,
-    checksToOpen: 2,
+    checksToOpen: 6,
     minRequests: 1,
     severity: "sev3",
   },
@@ -196,19 +207,36 @@ export function tripTitle(r: WatchRule, method: string, route: string, burn?: nu
   }
 }
 
-// The series an incident from this rule charts, and the limit drawn on it:
-// the route's p95 against the latency limit, its error ratio against the
-// error limit, or for an SLO its budget's burn rate over the last 5 minutes
-// against the burn rate that fired (`burnThreshold`).
+// The series an incident from this rule charts, and the limit drawn on it,
+// in the rule's own measure, so the recovery watch and the verification
+// judge what the rule did: the route's p95 against the latency limit; per
+// minute, its slow requests against "more than N" or their share against
+// "more than P%" (both breach only past the limit: metric-labels'
+// exclusiveLimit); its error ratio against the error limit; or for an SLO
+// its budget's burn rate over the last 5 minutes against the burn rate that
+// fired (`burnThreshold`).
 export function tripMetric(r: WatchRule, route: string, burnThreshold?: number): { metric: string; threshold: number } {
   const c = r.condition;
-  if (c.metric === "errorRate") return { metric: `http.server.error_ratio{route=${route}}`, threshold: c.moreThanPercent / 100 };
-  if (c.metric === "slo") return { metric: burnMetric(route, c.objectivePercent, c.latencyMs), threshold: burnThreshold ?? 1 };
-  return {
-    metric: `http.server.request.duration.p95{route=${route}}`,
-    threshold: c.metric === "p95" ? c.aboveMs : c.slowerThanMs,
-  };
+  switch (c.metric) {
+    case "p95":
+      return { metric: `http.server.request.duration.p95{route=${route}}`, threshold: c.aboveMs };
+    case "slowCount":
+      return { metric: slowMetric("count", route, c.slowerThanMs), threshold: c.moreThan };
+    case "slowShare":
+      return { metric: slowMetric("share", route, c.slowerThanMs), threshold: c.moreThanPercent };
+    case "errorRate":
+      return { metric: `http.server.error_ratio{route=${route}}`, threshold: c.moreThanPercent / 100 };
+    case "slo":
+      return { metric: burnMetric(route, c.objectivePercent, c.latencyMs), threshold: burnThreshold ?? 1 };
+  }
 }
+
+// The name of a route's per-minute series of requests slower than
+// `slowerThanMs`: how many (`http.server.slow_requests{route=…,le=1500}`)
+// or what percent of its requests (`http.server.slow_share{…}`). Read back
+// by the live source (live-source's slowSeries), so it carries the limit.
+export const slowMetric = (kind: "count" | "share", route: string, slowerThanMs: number) =>
+  `http.server.${kind === "count" ? "slow_requests" : "slow_share"}{route=${route},le=${slowerThanMs}}`;
 
 // The name of a route's burn-rate series for an SLO, read back by the live
 // source (live-source's burnSeries), so it carries all that's needed.

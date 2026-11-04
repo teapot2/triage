@@ -18,11 +18,12 @@ import {
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { Dialog } from "radix-ui";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { type PaletteCommand, useCommandRegistry } from "@/components/command-registry";
 import { formatAgo } from "@/components/incident/format";
 import { StatusIcon, statusLabel } from "@/components/incident/status-badges";
 import { SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
+import { modKey, useIsMac } from "@/hooks/use-is-mac";
 import { useRecentlyViewed } from "@/hooks/use-seen";
 import { type ScenarioOption, useStartInvestigation } from "@/hooks/use-start-investigation";
 import { useTheme } from "@/hooks/use-theme";
@@ -41,18 +42,6 @@ const themes: { value: ThemePreference; label: string; icon: LucideIcon }[] = [
   { value: "light", label: "Light", icon: SunIcon },
   { value: "dark", label: "Dark", icon: MoonIcon },
 ];
-
-const subscribeNever = () => () => {};
-
-// ⌘ on a Mac, Ctrl elsewhere (the convention on Windows and Linux). The
-// server can't tell, so it renders Ctrl and a Mac switches after hydration.
-function useIsMac() {
-  return useSyncExternalStore(
-    subscribeNever,
-    () => /mac|iphone|ipad/i.test(navigator.userAgent),
-    () => false,
-  );
-}
 
 // The sidebar's Search row and the palette it opens, toggled from anywhere
 // with ⌘K / Ctrl+K. With nothing typed it offers what's likely next: the
@@ -83,7 +72,7 @@ export function SearchCommand({
   const { preference, setPreference } = useTheme();
   const { setOpenMobile, toggleSidebar, isMobile, state: sidebarState } = useSidebar();
   const run = useStartInvestigation();
-  const mod = isMac ? "⌘" : "Ctrl ";
+  const mod = modKey(isMac);
 
   const show = () => {
     setPageCommands(registry?.collect() ?? []);
@@ -190,8 +179,10 @@ export function SearchCommand({
                 {confirm ? (
                   <Command.Group heading={`Run “${confirm.label}”?`} className={groupClass}>
                     <p className="px-2 pb-2 text-muted-foreground text-xs">
-                      Replays recorded telemetry through the agent. It calls the model, which may incur charges,
-                      and creates a new incident.
+                      {confirm.live
+                        ? "Investigates the running Shopfront from its live telemetry."
+                        : "Replays recorded telemetry through the agent."}{" "}
+                      It calls the model, which may incur charges, and creates a new incident.
                     </p>
                     <Command.Item
                       value="confirm-run"
@@ -201,7 +192,7 @@ export function SearchCommand({
                       }}
                       className={itemClass}
                     >
-                      {run.pending ? <LoaderCircleIcon className={iconClass} /> : <PlayIcon className={iconClass} />}
+                      {run.pending ? <LoaderCircleIcon className={`${iconClass} animate-spin`} /> : <PlayIcon className={iconClass} />}
                       {run.pending ? "Starting…" : "Run investigation"}
                       <Hint>Enter</Hint>
                     </Command.Item>

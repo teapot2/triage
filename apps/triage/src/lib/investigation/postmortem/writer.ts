@@ -1,3 +1,4 @@
+import { limitSides } from "@/components/incident/metric-labels";
 import { type LanguageModel, type ModelMessage, parsePartialJson, tool, ToolLoopAgent } from "ai";
 import { z } from "zod";
 import { cacheKey, callSettings, languageModel, modelErrorText, modelOptions } from "../../models/client";
@@ -5,6 +6,7 @@ import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
 import { readTemplate, runStageModel, stageProblem } from "../../models/settings";
 import { fuller, noTokens, onEachCall, type TokenCounts } from "../../models/usage";
+import { plural } from "../../plural";
 import { runAgentLoop } from "../agent-loop";
 import { knownEvidenceIds } from "../ask/rules";
 import { gradeHypothesis, gradeLabels } from "../confidence-grade";
@@ -129,7 +131,7 @@ function mitigationBlock(incident: Incident): string {
   if (m.error) lines.push(`Error: ${m.error}`);
   if (m.recovery) {
     const r = m.recovery;
-    lines.push(`Recovery: ${r.status} (${r.metric} under ${r.threshold})${r.note ? `, ${r.note}` : ""}`);
+    lines.push(`Recovery: ${r.status} (${r.metric} ${limitSides(r.metric).healthy} ${r.threshold})${r.note ? `, ${r.note}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -148,7 +150,7 @@ function fixBlock(incident: Incident): string {
   }
   if (fixRun) {
     const rejections = fixRun.rejections?.length ? `, rejected: ${fixRun.rejections.join("; ")}` : "";
-    lines.push(`Fix stage: ${fixRun.status} after ${fixRun.attempt} attempts${rejections}`);
+    lines.push(`Fix stage: ${fixRun.status} after ${plural(fixRun.attempt, "attempt")}${rejections}`);
   }
   return lines.join("\n");
 }

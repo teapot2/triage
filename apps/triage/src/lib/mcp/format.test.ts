@@ -35,6 +35,15 @@ describe("incidentMarkdown", () => {
     for (const id of citationOrder(incident.report!)) assert.ok(md.includes(`- [${id}] `), `cited line for ${id}`);
     assert.match(md, /## Also considered/);
     assert.match(md, /get_fix/);
+    assert.ok(!md.includes("Related to"));
+  });
+
+  it("names the incident it was opened in place of reopening, in the header", () => {
+    const incident = example("inc_price_gap");
+    incident.relatedTo = { id: "inc_pool_leak", title: "Server errors on GET /products/[id]", why: "Same rule and route, resolved 27 min before this opened." };
+    const md = incidentMarkdown(incident, base);
+    const header = md.split("\n\n## ")[0];
+    assert.match(header, /Related to `inc_pool_leak` \(Server errors on GET \/products\/\[id\]\)\. Same rule and route, resolved 27 min/);
   });
 
   it("says no issue was found on the control run", () => {

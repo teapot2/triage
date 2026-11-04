@@ -7,7 +7,7 @@ import { describeRule, metricOptions, targetOptions, type WatchRule } from "@/li
 
 // Search, filters and sort for the Watch page's rules, on the app's shared
 // list controls: free text over a rule's name and what it watches, facets
-// for its live status, severity, routes and condition, and three orders.
+// for its live status, severity, routes and condition, and four orders.
 
 export type RuleStatus = RuleState["status"];
 
@@ -17,7 +17,9 @@ export const ruleStatuses: { id: RuleStatus; label: string; tone: StatusTone }[]
   { id: "alerting", label: "Incident open", tone: "destructive" },
   { id: "breaching", label: "Over limit", tone: "warning" },
   { id: "ok", label: "OK", tone: "success" },
-  { id: "idle", label: "No traffic", tone: "muted" },
+  // Idle is fewer requests than the rule's minimum on every route it covers,
+  // which is often some traffic, not none.
+  { id: "idle", label: "Too little traffic", tone: "muted" },
   { id: "paused", label: "Paused", tone: "muted" },
 ];
 
@@ -28,13 +30,16 @@ export function ruleStatus(rule: WatchRule, live: RuleState | undefined, watchOn
   return live?.status;
 }
 
+// Active first by default: the rules the watch judges, then the paused ones,
+// each by name. It doesn't wait on (or jump with) the live state.
 export const ruleSorts = [
+  { id: "active", label: "Active first" },
   { id: "name", label: "Name" },
   { id: "attention", label: "Needs attention first" },
   { id: "severity", label: "Most severe first" },
 ] as const;
 export type RuleSort = (typeof ruleSorts)[number]["id"];
-export const defaultRuleSort: RuleSort = "name";
+export const defaultRuleSort: RuleSort = "active";
 
 export const parseRuleSort = (value: string | null): RuleSort => ruleSorts.find((s) => s.id === value)?.id ?? defaultRuleSort;
 
@@ -109,6 +114,7 @@ export function filterRules(
     [r.name, describeRule(r), r.target.kind === "route" ? r.target.route : ""].join(" ").toLowerCase();
   const byName = (a: WatchRule, b: WatchRule) => a.name.localeCompare(b.name);
   const order: Record<RuleSort, (a: WatchRule, b: WatchRule) => number> = {
+    active: (a, b) => Number(b.enabled) - Number(a.enabled) || byName(a, b),
     name: byName,
     attention: (a, b) => statusRank(statusOf(a)) - statusRank(statusOf(b)) || byName(a, b),
     // "sev1" < "sev2" as strings, so the most severe sorts first.

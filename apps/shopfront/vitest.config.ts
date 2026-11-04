@@ -8,7 +8,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
-    // Tests use the real Postgres, so a fork per file keeps pools separate.
+    // The tests are pure (no database). A fork per file still keeps any
+    // future test that opens a pg pool or a socket apart from the rest.
     pool: "forks",
     // Bound the run: a fork stuck on open sockets is killed, not waited on.
     testTimeout: 10_000,

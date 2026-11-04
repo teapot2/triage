@@ -76,6 +76,8 @@ export function withRecorded(stored: Incident, snapshot: Incident): Incident {
 export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, ThoughtRecorder {
   readonly queriedServices = new Set<string>();
   rejectedReports = 0;
+  // Why each one was rejected (rejectReport).
+  readonly reportRejections: string[] = [];
   private counters = new Map<EvidenceKind, number>();
   private writes: Promise<void> = Promise.resolve();
   // The model call whose tool calls run now: the last thought started.
@@ -91,6 +93,13 @@ export class InvestigationRecorder implements StepRecorder, EvidenceRecorder, Th
     public incident: Incident,
     private save?: (incident: Incident) => Promise<void>,
   ) {}
+
+  // A report submission that failed validation, sent back to the model
+  // with `problems` to fix.
+  rejectReport(problems: string[]) {
+    this.rejectedReports += 1;
+    this.reportRejections.push(problems.join("; "));
+  }
 
   get report(): InvestigationReport | undefined {
     return this.incident.report;
@@ -252,6 +261,14 @@ export class QuestionRecorder implements StepRecorder, EvidenceRecorder, Thought
     if (evidence.length === 0) return;
     this.question.evidence.push(...evidence);
     this.updateStep(stepId, (step) => ({ ...step, evidenceIds: [...step.evidenceIds, ...evidence.map((e) => e.id)] }));
+  }
+
+  // Evidence that already has its IDs and no step behind it: the incident
+  // record's recovery and verification an answer cited (ask/after-alert.ts).
+  keepEvidence(evidence: Evidence[]) {
+    if (evidence.length === 0) return;
+    this.question.evidence.push(...evidence);
+    this.persist();
   }
 
   startThought(id: string) {

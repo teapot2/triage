@@ -64,6 +64,19 @@ describe("recovered", () => {
     });
   });
 
+  for (const state of ["approved", "running"] as const) {
+    it(`fails a mitigation still ${state === "approved" ? "approved but not started" : "running"}, so the card offers Retry`, () => {
+      const base = incident(recovery);
+      const applying = { ...base, mitigation: { ...base.mitigation!, state, appliedAt: undefined, recovery: undefined } };
+      const next = recovered(applying, now);
+      assert.equal(next?.mitigation?.state, "failed");
+      assert.equal(next?.mitigation?.error, "Triage restarted before the mitigation was applied");
+      assert.equal(next?.mitigation?.recovery, undefined);
+      // A bundled example can take a mitigation too.
+      assert.equal(recovered(applying, now, true)?.mitigation?.state, "failed");
+    });
+  }
+
   it("cuts both off on a bundled example too", () => {
     const next = recovered(incident(recovery, verification), now, true);
     assert.equal(next?.verification?.status, "stopped");

@@ -17,6 +17,16 @@ import { toast } from "sonner";
 import { ExportCommands, ExportMenuItems, type ExportSource } from "@/components/export-menu";
 import { Timestamp } from "@/components/timestamp";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,7 +41,7 @@ import { postmortemActions } from "@/lib/export/datasets/postmortem";
 import { isArchived } from "@/lib/investigation/archive";
 import { downloadText } from "@/lib/export/download";
 import { progressOf, sectionKey } from "@/lib/investigation/postmortem/draft";
-import { postmortemMarkdown } from "@/lib/investigation/postmortem/render";
+import { actionItems, postmortemMarkdown } from "@/lib/investigation/postmortem/render";
 import { postmortemRefusal } from "@/lib/investigation/postmortem/rules";
 import { defaultTemplate, sectionLabel, type Template } from "@/lib/investigation/postmortem/template";
 import type { DraftContent, Incident } from "@/lib/investigation/schema";
@@ -179,6 +189,9 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
   const markdown = useMemo(() => (pm?.status === "ready" ? postmortemMarkdown(incident) : ""), [pm?.status, incident]);
   const draft = usePostmortemDraft(incident);
   const template = templateOf(incident);
+  // Write again replaces a finished postmortem as soon as it starts, so it
+  // asks first: one stray click on the icon would otherwise lose it.
+  const [confirmRewrite, setConfirmRewrite] = useState(false);
 
   // The write this panel watched, and its attempt: once it's ready, the
   // rest of it is revealed before the document takes the draft's place.
@@ -275,7 +288,8 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
   // The judgment predates the resolution; the document around it doesn't.
   const written = pm.finishedAt ?? pm.startedAt;
   const stale = incident.resolvedAt !== undefined && Date.parse(incident.resolvedAt) > Date.parse(written);
-  const actionExports: ExportSource[] = pm.actionItems?.length
+  // The table's rows, the fix first: offered whenever the table has any.
+  const actionExports: ExportSource[] = actionItems(incident).length
     ? [{ dataset: postmortemActions, params: { id: incident.id } }]
     : [];
 
@@ -291,10 +305,25 @@ export function PostmortemPanel({ incident }: { incident: Incident }) {
           {stale && <span className="text-muted-foreground text-xs">Written before the incident resolved</span>}
           {/* Quiet, icon-only: their names show on hover. */}
           {!archived && (
-            <WriteButton refusal={refusal} sending={sending} onClick={write} size="icon-sm" variant="ghost">
+            <WriteButton refusal={refusal} sending={sending} onClick={() => setConfirmRewrite(true)} size="icon-sm" variant="ghost">
               Write again
             </WriteButton>
           )}
+          <AlertDialog open={confirmRewrite} onOpenChange={setConfirmRewrite}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Write the postmortem again?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This one is replaced as soon as the new one starts, and isn&apos;t kept. Copy or download it first if you want to
+                  keep it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void write()}>Write again</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Copy Markdown" onClick={() => copyPostmortem(incident)}>

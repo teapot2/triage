@@ -146,6 +146,16 @@ async function regenerateLockfile(appDir: string, root: string, worktree: string
   return "regenerated";
 }
 
+// The PR's title and commit message, as a Conventional Commit:
+// "fix(shopfront): connection pool leak in getStock". The first letter is
+// lowered only on a capitalised word, so "N+1 queries" or "DB pool" keep
+// theirs. The dependency PR's "fix(deps): …" is made on its own.
+export function conventionalTitle(service: string, subject: string): string {
+  const s = subject.trim().replace(/\.$/, "");
+  const lowered = /^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s;
+  return `fix(${service}): ${lowered}`.slice(0, 120);
+}
+
 // What the PR says: the diagnosis, the change, and the sandbox proof, so a
 // reviewer can judge it without opening Triage.
 export function pullRequestText(incident: Incident, opts: { lockfile?: "regenerated" | "failed" } = {}): { title: string; body: string } {
@@ -154,7 +164,7 @@ export function pullRequestText(incident: Incident, opts: { lockfile?: "regenera
   if (fix.bump) return dependencyPullRequestText(incident, opts.lockfile);
   const verdict = report.verdict;
   const cause = verdict.kind === "root_cause" ? report.hypotheses.find((h) => h.id === verdict.hypothesisId) : undefined;
-  const title = `Fix: ${cause?.title ?? incident.title}`.slice(0, 120);
+  const title = conventionalTitle(incident.service, cause?.title ?? incident.title);
   const runs = proofTable(validation);
   // A data change the sandbox couldn't prove gets a warning and a checklist
   // at the top, where a reviewer reads first.

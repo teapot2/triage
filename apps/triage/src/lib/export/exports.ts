@@ -2,6 +2,7 @@ import { z } from "zod";
 import { parseListParams } from "@/app/list-params";
 import { filterIncidents } from "@/lib/investigation/filter";
 import { toSummary } from "@/lib/investigation/list-summary";
+import { actionItems } from "@/lib/investigation/postmortem/render";
 import { sortIncidents } from "@/lib/investigation/sort";
 import type { Incident } from "@/lib/investigation/schema";
 import { getIncident, listIncidents } from "@/lib/investigation/store";
@@ -125,12 +126,13 @@ export const exportEntries = exportRegistry([
   defineExport({
     dataset: postmortemActions,
     params: incidentParams,
-    // Nothing to file until a postmortem has action items: a 404, as the
+    // The rows of the written postmortem's table, the fix first. Nothing to
+    // file until it's written, or with no fix and no items: a 404, as the
     // incident page offers no export then.
     load: async ({ id }, { origin }) => {
       const incident = await getIncident(id);
-      const items = incident?.postmortem?.actionItems;
-      if (!incident || !items?.length) return undefined;
+      const items = incident?.postmortem?.status === "ready" ? actionItems(incident) : [];
+      if (!incident || !items.length) return undefined;
       const url = incidentUrl(origin, incident.id);
       return {
         subject: { kind: "incident", id: incident.id, name: incident.title },

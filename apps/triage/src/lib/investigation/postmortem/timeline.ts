@@ -1,4 +1,5 @@
-import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
+import { exclusiveLimit, limitSides, lowerIsWorse, metricLabel, pastLimit } from "@/components/incident/metric-labels";
+import { modelLabel } from "../../models/labels";
 import type { Approval, FixRun, Incident, Reopening } from "../schema";
 
 // The postmortem's timeline and headline durations, built from the
@@ -15,9 +16,10 @@ export function withUnit(value: number | string, unit: string): string {
 }
 
 // Whether a value of the alert's metric breaches its threshold: at or over
-// it, or under it for a metric where less is worse (availability).
+// it, over it for a "more than N" metric (slow requests), or under it for a
+// metric where less is worse (availability).
 export function breaches({ trigger }: Incident): (value: number) => boolean {
-  return lowerIsWorse(trigger.metric) ? (v) => v < trigger.threshold : (v) => v >= trigger.threshold;
+  return pastLimit(trigger.metric, trigger.threshold);
 }
 
 // Where the episode that fired the alert began: the first point of the last
@@ -88,6 +90,20 @@ export const reopenedBy: Record<Reopening["by"], string> = {
   person: "a person",
 };
 
+// "Reopened by a person", and why when there's a why that says more. A
+// person may give none; records from before that saved "Reopened by a
+// person" as the why, which only repeats the title.
+export const reopeningTitle = (r: Reopening) => `Reopened by ${reopenedBy[r.by]}`;
+export function reopeningWhy(r: Reopening): string | undefined {
+  const why = firstLine(r.why ?? "");
+  const bare = why.replace(/[.!]$/, "").toLowerCase();
+  return bare && bare !== reopeningTitle(r).toLowerCase() ? why : undefined;
+}
+export function reopeningText(r: Reopening): string {
+  const why = reopeningWhy(r);
+  return why ? `${reopeningTitle(r)}: ${why}` : reopeningTitle(r);
+}
+
 const denied = (approval: Approval) => (approval.reason ? `denied: ${firstLine(approval.reason)}` : "denied");
 
 export function postmortemTimeline(incident: Incident): TimelineEvent[] {
@@ -98,7 +114,7 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
     if (at) events.push({ at, event });
   };
 
-  const crossed = lowerIsWorse(trigger.metric) ? "fell below" : "crossed";
+  const crossed = lowerIsWorse(trigger.metric) ? "fell below" : exclusiveLimit(trigger.metric) ? "went over" : "crossed";
   add(firstBreach(incident), `${label} ${crossed} ${withUnit(trigger.threshold, trigger.unit)}`);
   add(
     incident.detectedAt,
@@ -106,7 +122,7 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
   );
 
   if (run) {
-    add(run.startedAt, `Investigation started (${run.model})${isReplay(incident) ? ", replaying the recorded telemetry" : ""}`);
+    add(run.startedAt, `Investigation started (${modelLabel(run.model, run.provider, run.reasoningEffort)})${isReplay(incident) ? ", replaying the recorded telemetry" : ""}`);
     add(run.finishedAt, verdictEvent(incident));
   }
 
@@ -118,7 +134,7 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
     if (recovery?.recoveredAt) {
       add(
         recovery.recoveredAt,
-        `${metricLabel(recovery.metric)} back under ${withUnit(recovery.threshold, trigger.unit)}`,
+        `${metricLabel(recovery.metric)} back ${limitSides(recovery.metric).healthy} ${withUnit(recovery.threshold, trigger.unit)}`,
       );
     } else if (recovery?.status === "not_recovered") {
       add(recovery.checkedAt, `Recovery watch gave up: ${recovery.note ?? "still over the threshold"}`);
@@ -141,7 +157,8 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
     }
   }
 
-  for (const q of incident.questions ?? []) add(q.askedAt, `Question asked: ${q.text}`);
+  // Questions asked in Ask aren't listed: they're how people read the
+  // incident, not what happened to the service ("Question asked: Hello").
 
   const { verification } = incident;
   // An uptime check's recovery is a run of healthy checks, not a window.
@@ -153,7 +170,7 @@ export function postmortemTimeline(incident: Incident): TimelineEvent[] {
       `Verification started: watching ${metricLabel(verification.metric)} for ${verification.windowMinutes} min`,
     );
   }
-  for (const r of incident.reopenings ?? []) add(r.at, `Reopened by ${reopenedBy[r.by]}: ${firstLine(r.why)}`);
+  for (const r of incident.reopenings ?? []) add(r.at, reopeningText(r));
   add(incident.resolvedAt, "Incident resolved");
 
   // Stable, so events at the same instant keep the order they happen in.

@@ -9,7 +9,9 @@ type Streamed<TOOLS extends ToolSet> = Awaited<ReturnType<ToolLoopAgent<never, T
 // agent can't be forced to call the tool that finishes it: a run that stops
 // in plain text before `done` is told `nudge` and runs again, up to
 // `maxNudges` times, while it has steps left. Each run's messages join
-// `messages` and its tokens go on `tokens`.
+// `messages`, and its tokens go on `tokens` once it returns. An agent that
+// counts its tokens call by call instead (onEachCall), so a run that throws
+// part-way keeps what it spent, leaves `tokens` out.
 export async function runAgentLoop<TOOLS extends ToolSet>(o: {
   agent: ToolLoopAgent<never, TOOLS>;
   messages: ModelMessage[];
@@ -21,7 +23,7 @@ export async function runAgentLoop<TOOLS extends ToolSet>(o: {
   nudge: string;
   // Whether the agent did what it's for: an accepted submission, say.
   done: () => boolean;
-  tokens: TokenCounts;
+  tokens?: TokenCounts;
   // Streams each run instead of generating it, and reads it to the end.
   // Returns true when the run settled it, done or not, and a nudge wouldn't
   // help.
@@ -32,13 +34,13 @@ export async function runAgentLoop<TOOLS extends ToolSet>(o: {
     if (o.read) {
       const result = await o.agent.stream({ messages: o.messages, abortSignal: o.abortSignal });
       const settled = await o.read(result, pass);
-      addUsage(o.tokens, await result.totalUsage);
+      if (o.tokens) addUsage(o.tokens, await result.totalUsage);
       o.messages.push(...(await result.responseMessages));
       if (settled) break;
     } else {
       const result = await o.agent.generate({ messages: o.messages, abortSignal: o.abortSignal });
       o.messages.push(...result.responseMessages);
-      addUsage(o.tokens, result.usage);
+      if (o.tokens) addUsage(o.tokens, result.usage);
     }
   }
 }

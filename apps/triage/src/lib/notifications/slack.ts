@@ -1,3 +1,4 @@
+import { exclusiveLimit } from "@/components/incident/metric-labels";
 import { dataChangeOf } from "../investigation/fix/data-change";
 import type { Incident } from "../investigation/schema";
 import { withUnit } from "../investigation/postmortem/timeline";
@@ -55,7 +56,7 @@ const rounded = (v: number) => (Math.abs(v) >= 100 ? Math.round(v) : Number(v.to
 // its advisory and how many audits found it say what it is.
 function measured({ trigger, dependency }: Incident): string {
   if (dependency) return `${esc(dependency.advisoryId)} · found by ${plural(dependency.audits, "audit")}`;
-  return `${esc(withUnit(rounded(trigger.observed), trigger.unit))} observed · limit ${esc(withUnit(trigger.threshold, trigger.unit))}`;
+  return `${esc(withUnit(rounded(trigger.observed), trigger.unit))} observed · ${exclusiveLimit(trigger.metric) ? "more than" : "limit"} ${esc(withUnit(trigger.threshold, trigger.unit))}`;
 }
 
 const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
@@ -171,12 +172,17 @@ export function slackMessage(kind: MessageKind | "test", incident: Incident | un
       const open =
         incident.resolvedAt && took(Date.parse(incident.resolvedAt) - Date.parse(incident.detectedAt));
       const v = incident.verification;
+      // A dependency verification's note, when there is one, says how the
+      // advisory went away (without a Triage PR, say).
+      const audited = `Triage confirmed it: the next audit no longer finds ${incident.dependency?.advisoryId ?? "the advisory"}.`;
       const by =
         v?.after === "uptime"
           ? `Triage confirmed it: ${v.series.length} checks in a row answered in time.`
-          : v?.status === "resolved"
-            ? "Triage confirmed it: the metric stayed under its limit for the whole quiet window."
-            : "A person marked it resolved.";
+          : v?.after === "dependencies" && v.status === "resolved"
+            ? (v.note ?? audited)
+            : v?.status === "resolved"
+              ? "Triage confirmed it: the metric stayed under its limit for the whole quiet window."
+              : "A person marked it resolved.";
       return message(
         `Resolved: ${esc(incident.title)}`,
         open ? `*Resolved after ${open}*` : "*Incident resolved*",

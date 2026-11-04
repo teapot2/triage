@@ -18,9 +18,11 @@ export interface ContextSegment {
   detail?: string;
 }
 
-// The categorical slots, in a fixed order (the data-viz reference palette,
-// validated for both themes); the order follows the segments, so a part
-// keeps its colour whatever else is there.
+// The categorical slots, in a fixed order: the data-viz reference palette's
+// eight, then navy, brown and teal so a full-context question's parts never
+// share one (each slot clears the CVD and normal-vision checks against the
+// next, in both themes). Given to the parts shown, in order, so the first
+// eight colours go to the parts there are and none is left on an empty one.
 const swatches = [
   "bg-[#2a78d6] dark:bg-[#3987e5]",
   "bg-[#eb6834] dark:bg-[#d95926]",
@@ -29,12 +31,16 @@ const swatches = [
   "bg-[#e87ba4] dark:bg-[#d55181]",
   "bg-[#008300] dark:bg-[#008300]",
   "bg-[#6250d6] dark:bg-[#9085e9]",
+  "bg-[#e34948] dark:bg-[#e66767]",
+  "bg-[#184f95] dark:bg-[#2a5fa8]",
+  "bg-[#a86a00] dark:bg-[#b07a1a]",
+  "bg-[#0095a8] dark:bg-[#1594a6]",
 ];
 
 // How full a conversation's context window is, like Claude's /context: a
 // ring and a percent that open a card with the total against the window,
-// a bar of what fills it, a row per part that has any (each keeps its
-// colour by position, so pass every part), and what's free. `note` goes
+// a bar of what fills it, a row per part that has any (or a detail), and
+// what's free. `note` goes
 // under the rows (where the numbers come from); `className` places the
 // trigger.
 export function ContextWindow({
@@ -51,7 +57,9 @@ export function ContextWindow({
   className?: string;
 }) {
   const share = used / limit;
-  const shown = segments.map((s, i) => ({ ...s, swatch: swatches[i % swatches.length] }));
+  const shown = segments
+    .filter((s) => s.tokens > 0 || s.detail)
+    .map((s, i) => ({ ...s, swatch: swatches[i % swatches.length] }));
   const filled = shown.filter((s) => s.tokens > 0);
   const total = filled.reduce((sum, s) => sum + s.tokens, 0);
   return (
@@ -90,8 +98,7 @@ export function ContextWindow({
           </div>
         )}
         <dl className="mt-2.5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 tabular-nums">
-          {shown.map((s) =>
-            s.tokens > 0 || s.detail ? (
+          {shown.map((s) => (
             <div key={s.key} className="contents">
               <dt className="flex min-w-0 items-center gap-2">
                 <span aria-hidden className={cn("size-2 shrink-0 rounded-[2px]", s.swatch)} />
@@ -100,8 +107,7 @@ export function ContextWindow({
               </dt>
               <dd className="text-right">{formatCompact(s.tokens)}</dd>
             </div>
-            ) : null,
-          )}
+          ))}
           <dt className="flex items-center gap-2 text-muted-foreground">
             <span aria-hidden className="size-2 shrink-0 rounded-[2px] border border-muted-foreground/40" />
             Free space

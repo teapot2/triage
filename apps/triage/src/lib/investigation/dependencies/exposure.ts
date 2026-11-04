@@ -2,7 +2,7 @@ import { type LanguageModel, ToolLoopAgent, tool } from "ai";
 import { z } from "zod";
 import { errorMessage } from "../../errors";
 import { cacheKey, callSettings, modelOptions, reasoningKind } from "../../models/client";
-import { onEachCall, type TokenCounts } from "../../models/usage";
+import { addUsage, onEachCall, type TokenCounts } from "../../models/usage";
 import { recordRunContext, recordThoughts } from "../agent";
 import { runAgentLoop } from "../agent-loop";
 import type { Stage } from "../fanout/run";
@@ -36,7 +36,7 @@ import { createInvestigationTools, forModel } from "../tools";
 // two ruled out by its rationale. That keeps the report valid every time
 // and opens the fix gate (agent.ts) for the bump.
 
-const MAX_STEPS = 14;
+export const MAX_STEPS = 14;
 // Steps left when only submit_exposure stays available.
 const SUBMIT_RESERVE = 2;
 const MAX_NUDGES = 2;
@@ -237,7 +237,7 @@ function exposureTools(source: TelemetrySource, recorder: InvestigationRecorder,
         const unknown = findUnknownEvidenceIds(report, recorder.evidence);
         if (unknown.length) problems.push(`unknown evidence IDs cited: ${unknown.join(", ")}`);
         if (problems.length) {
-          recorder.rejectedReports += 1;
+          recorder.rejectReport([...new Set(problems)]);
           return { accepted: false, problems: [...new Set(problems)] };
         }
         recorder.update({ report });
@@ -339,7 +339,11 @@ export async function runExposureStage(o: {
     providerOptions: modelOptions(o.stage, cacheKey("investigate", recorder.incident.id)),
     ...callSettings(),
     ...recordThoughts(recorder, reasoningKind(o.stage.provider)),
-    ...onEachCall((call) => recordRunContext(recorder, call)),
+    // Its tokens call by call, so a run that fails part-way keeps them.
+    ...onEachCall((call, step) => {
+      addUsage(o.tokens, step.usage);
+      recordRunContext(recorder, call);
+    }),
     instructions,
     tools: exposureTools(o.source, recorder, a, advisory.id),
     stopWhen: [() => o.count.steps >= MAX_STEPS, () => recorder.report !== undefined],
@@ -357,6 +361,5 @@ export async function runExposureStage(o: {
     maxNudges: MAX_NUDGES,
     nudge: NUDGE,
     done: () => recorder.report !== undefined,
-    tokens: o.tokens,
   });
 }

@@ -14,9 +14,10 @@ export type ServiceRow = {
   live: boolean;
   open: number;
   total: number;
-  // The most recently run incident. A replay keeps its recording's
-  // detectedAt, so "latest" goes by when the investigation ran.
-  latest?: { id: string; status: IncidentStatus; headline: string; detectedAt: string; ranAt: string };
+  // The most recently run incident, and when it ran. A replay keeps its
+  // recording's detectedAt, so "latest" (shown and sorted) goes by the run
+  // start, as the Incidents list does.
+  latest?: { id: string; status: IncidentStatus; headline: string; ranAt: string };
   // Advisories the dependency audit finds now on the service's runtime
   // dependencies, by severity, for the one service it audits.
   advisories?: { total: number; worst: AdvisorySeverity };

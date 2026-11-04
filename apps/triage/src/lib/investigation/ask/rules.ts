@@ -1,4 +1,5 @@
 import type { Incident, Question } from "../schema";
+import { sourceKind } from "../source-kind";
 
 // The pure rules around questions, apart from the agent so they can be
 // tested without a model.
@@ -34,6 +35,17 @@ export function askRefusal(incident: Incident): string | undefined {
   const open = incident.questions?.find((q) => q.status === "answering");
   if (open) return `question ${open.id} is still being answered: wait for it to finish`;
   return undefined;
+}
+
+// Whether Ask can tell if the alert's metric is back: the record holds the
+// recovery watch's or the verification's minutes (ask/after-alert.ts), or
+// a mitigation was applied on a live run or an endpoint check, whose tools
+// read past the alert (source-for.ts's askSourceFor). A recorded scenario
+// or a bundled example without that record has nothing after the alert.
+export function knowsAfterAlert(incident: Incident): boolean {
+  if (incident.mitigation?.recovery?.series.length || incident.verification?.series.length) return true;
+  const kind = sourceKind(incident);
+  return incident.mitigation?.state === "applied" && (kind === "live" || kind === "uptime");
 }
 
 // q_1, q_2, … in the order asked.

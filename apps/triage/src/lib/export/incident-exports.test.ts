@@ -38,6 +38,11 @@ before(async () => {
   await saveIncident({ ...poolLeak(), id: "inc_export_pm" });
   // A postmortem still being written has no action items yet.
   await saveIncident({ ...poolLeak(), id: "inc_export_writing", postmortem: { status: "writing", startedAt: "2026-10-23T02:20:00.000Z", model: "muse-spark-1.3" } });
+  // Written with no items of its own: the fix is still item 1.
+  const fixOnly = poolLeak();
+  await saveIncident({ ...fixOnly, id: "inc_export_fix_only", postmortem: { ...fixOnly.postmortem!, actionItems: [] } });
+  // Neither a fix nor items: an empty table.
+  await saveIncident({ ...fixOnly, id: "inc_export_no_actions", fix: undefined, postmortem: { ...fixOnly.postmortem!, actionItems: [] } });
   for (let n = 1; n <= 12; n++) await saveIncident(checkout(n));
   // Archived: left out of the counts below unless asked for.
   await saveIncident({ ...resolved(), id: "inc_export_archived", archivedAt: "2026-11-02T09:00:00.000Z" });
@@ -70,8 +75,8 @@ describe("GET /api/export/incidents", () => {
       header,
       "id,title,service,severity,status,opened_by,detected_at,mitigated_at,resolved_at,minutes_to_mitigate,minutes_to_resolve,root_cause,confidence,confidence_grade,verdict_outcome,fix_state,pr_url,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,cost_usd,url",
     );
-    // 15 saved and the 6 bundled examples, as the list shows them.
-    assert.equal(rows.length, 21);
+    // 17 saved and the 6 bundled examples, as the list shows them.
+    assert.equal(rows.length, 23);
     for (const id of ["inc_pool_leak", "inc_control", "inc_price_gap", "inc_live_ratings", "inc_bad_deploy", "inc_traffic_rush"]) {
       assert.ok(
         rows.some((r) => r.startsWith(`${id},`)),
@@ -151,7 +156,10 @@ describe("GET /api/export/incidents", () => {
 });
 
 describe("GET /api/export/postmortem-actions", () => {
-  it("writes the action items as CSV, for a ticket importer", async () => {
+  const fix =
+    "Release the pooled client in a finally block so every return path gives the connection back, and add a regression test for the missing-row path.";
+
+  it("writes the action items as CSV, the fix first as in the postmortem, for a ticket importer", async () => {
     const res = await get("postmortem-actions", "format=csv&id=inc_export_pm");
     assert.equal(res.status, 200);
     assert.match(filename(res) ?? "", new RegExp(`^postmortem-actions_p95-latency-and-500s-on-get-api-products_${STAMP}\\.csv$`));
@@ -160,6 +168,7 @@ describe("GET /api/export/postmortem-actions", () => {
     const link = "inc_export_pm,http://localhost:3021/incidents/inc_export_pm";
     assert.deepEqual(csvRows(await text(res)), [
       "title,description,priority,labels,owner,due_date,incident_id,incident_url,evidence_ids",
+      `"Review the proposed fix: ${fix}",${description("Fix this")},P1,postmortem;fix_this,,,${link},`,
       `Lint for pooled clients acquired without a release in a finally block,${description("Prevent the class")},P2,postmortem;prevent_class,,,${link},ev_source_stock`,
       `Alert when DB pool connections in use stay at the maximum for 2 minutes,${description("Detect sooner")},P2,postmortem;detect_sooner,,,${link},ev_metric_pool`,
       `Document turning off FF_STOCK_DIRECT_QUERY in the shopfront runbook,${description("Mitigate faster")},P3,postmortem;mitigate_faster,,,${link},ev_commit_flag`,
@@ -171,8 +180,8 @@ describe("GET /api/export/postmortem-actions", () => {
     assert.equal(res.headers.get("content-type"), "application/json; charset=utf-8");
     const json = await res.json();
     assert.deepEqual(json.subject, { kind: "incident", id: "inc_export_pm", name: "p95 latency and 500s on GET /api/products/:id" });
-    assert.equal(json.count, 3);
-    assert.deepEqual(json.rows[2], {
+    assert.equal(json.count, 4);
+    assert.deepEqual(json.rows[3], {
       title: "Document turning off FF_STOCK_DIRECT_QUERY in the shopfront runbook",
       description: 'Mitigate faster, from the postmortem of "p95 latency and 500s on GET /api/products/:id": https://triage.example.com/incidents/inc_export_pm',
       priority: "P3",
@@ -185,8 +194,33 @@ describe("GET /api/export/postmortem-actions", () => {
     });
   });
 
-  it("answers 404 without an incident, a postmortem or its action items", async () => {
-    for (const id of ["inc_nope", "inc_control", "inc_export_writing"]) {
+  it("names the fix's PR once it's open", async () => {
+    const json = await (await get("postmortem-actions", "format=json&id=inc_export_resolved")).json();
+    assert.equal(json.count, 4);
+    assert.deepEqual(json.rows[0], {
+      title: `Merge the fix: ${fix}`,
+      description:
+        'Fix this, from the postmortem of "p95 latency and 500s on GET /api/products/:id": http://localhost:3021/incidents/inc_export_resolved; PR: https://github.com/acme/shopfront/pull/42',
+      priority: "P1",
+      labels: "postmortem;fix_this",
+      owner: null,
+      due_date: null,
+      incident_id: "inc_export_resolved",
+      incident_url: "http://localhost:3021/incidents/inc_export_resolved",
+      evidence_ids: null,
+    });
+  });
+
+  it("files the fix alone when the postmortem lists no items of its own", async () => {
+    const json = await (await get("postmortem-actions", "format=json&id=inc_export_fix_only")).json();
+    assert.deepEqual(
+      json.rows.map((r: { title: string }) => r.title),
+      [`Review the proposed fix: ${fix}`],
+    );
+  });
+
+  it("answers 404 without an incident, a written postmortem or any action item", async () => {
+    for (const id of ["inc_nope", "inc_control", "inc_export_writing", "inc_export_no_actions"]) {
       assert.equal((await get("postmortem-actions", `format=csv&id=${id}`)).status, 404, id);
     }
   });

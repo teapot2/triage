@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import path from "node:path";
 import { dependencyPrBase } from "../dependencies/fix";
 import type { DependencyAdvisory, Incident, Mitigation } from "../schema";
-import { pullRequestBase, pullRequestText, repoRootPatch } from "./pull-request";
+import { exampleIncidents } from "../fixtures";
+import { conventionalTitle, pullRequestBase, pullRequestText, repoRootPatch } from "./pull-request";
 
 const mitigation: Mitigation = {
   kind: "rollback",
@@ -127,5 +128,19 @@ describe("a dependency fix's PR", () => {
     // A package the release never mentions.
     const leftPad = { dependency: { ...advisory, package: "left-pad" } };
     assert.equal(await dependencyPrBase(leftPad, shopfront, deployed("edaf2d2")), undefined);
+  });
+});
+
+describe("a code fix's PR title", () => {
+  it("is a Conventional Commit scoped to the service, from the leading hypothesis", () => {
+    const poolLeak = exampleIncidents.find((i) => i.id === "inc_pool_leak")!;
+    assert.equal(pullRequestText(poolLeak).title, "fix(shopfront): connection leak in getStockLevel exhausts the pg pool");
+  });
+
+  it("lowers only a capitalised first word, drops a final period, and stays under 120 characters", () => {
+    assert.equal(conventionalTitle("shopfront", "Connection leak in getStock."), "fix(shopfront): connection leak in getStock");
+    assert.equal(conventionalTitle("shopfront", "N+1 queries on /products"), "fix(shopfront): N+1 queries on /products");
+    assert.equal(conventionalTitle("shopfront", "DB pool exhausted"), "fix(shopfront): DB pool exhausted");
+    assert.equal(conventionalTitle("shopfront", "x".repeat(200)).length, 120);
   });
 });

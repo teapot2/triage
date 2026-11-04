@@ -244,6 +244,7 @@ describe("runInvestigation on a dependency incident", () => {
     assert.equal(rejected.accepted, false);
     assert.match(rejected.problems[0], /reachable verdict must cite the lines/);
     assert.equal(incident.run?.rejectedReports, 1);
+    assert.match(incident.run?.reportRejections?.[0] ?? "", /reachable verdict must cite the lines/);
 
     const report = incident.report!;
     assert.deepEqual(reportProblems(report), []);
@@ -279,7 +280,7 @@ describe("runInvestigation on a dependency incident", () => {
     const silent = await investigate(() => ({ text: "Hmm." }));
     assert.equal(silent.incident.status, "failed");
     assert.equal(silent.incident.noMitigation, undefined);
-    assert.match(silent.incident.run?.error ?? "", /^No accepted report after 3 model steps/);
+    assert.match(silent.incident.run?.error ?? "", /^The model stopped without submitting a report after 3 steps/);
   });
 
   it("goes on to the fix stage with an app directory", async () => {

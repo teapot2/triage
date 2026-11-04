@@ -1,4 +1,5 @@
 import { p95, type RequestSample } from "./live/live-source";
+import { FAST_BURN_QUIET_MS } from "../slo/model";
 import type { Incident } from "./schema";
 import { matchesTarget, type WatchCondition, type WatchRule } from "./watch-rule-model";
 
@@ -6,7 +7,7 @@ import { matchesTarget, type WatchCondition, type WatchRule } from "./watch-rule
 // backtest that replays a rule over past telemetry, so the two can't drift.
 
 export const CHECK_MS = 10_000;
-// Judged checks with nothing over a limit before an open episode ends.
+// A rule's judged checks in a row within its limit before its episode ends.
 export const HEALTHY_TO_REARM = 6;
 
 // Never judged: a health check is the probe, not the traffic. HEAD requests
@@ -66,14 +67,23 @@ export type RuleResult = {
   // Checks in a row over the limit, on its worst route.
   checks?: number;
   // Set when the rule has been over its limit on a route long enough to open.
-  // An SLO's says how fast its budget was burning, and the severity when it
-  // isn't the rule's (a slow burn).
-  trip?: { route: string; method: string; severity?: WatchRule["severity"]; burn?: TripBurn };
+  // An SLO's says how fast its budget was burning, which kind of alert fired
+  // (see newFastBurn), and the severity when it isn't the rule's (a slow
+  // burn).
+  trip?: { route: string; method: string; severity?: WatchRule["severity"]; burn?: TripBurn; speed?: "fast" | "slow" };
   // An SLO's: what's left of its budget on its worst route.
   budgetLeftPercent?: number;
 };
 
 export type TripBurn = NonNullable<Incident["trigger"]["burn"]>;
+
+// A trip's burn as its incident keeps it: with the minutes the fast alert
+// fired on (the watch's `burning`, from burningMinutes) when it knows them.
+export function incidentBurn(trip: { burn?: TripBurn; burning?: { from: number; to: number } }): TripBurn | undefined {
+  if (!trip.burn || !trip.burning) return trip.burn;
+  const at = (ms: number) => new Date(ms).toISOString();
+  return { ...trip.burn, burning: { from: at(trip.burning.from), to: at(trip.burning.to) } };
+}
 
 // Judges a rule at `now` on each route it covers, advancing that route's
 // streak in `streaks` (keyed "rule|route"). A route without enough requests
@@ -160,10 +170,21 @@ export function backtestRule(rule: WatchRule, samples: RequestSample[], from: nu
   return { ...result, dataFrom: dataFrom(from, samples.find((s) => s.start > from)?.start) };
 }
 
+// Whether an SLO's trip at `now` is a new outage inside the rule's episode,
+// whose fast alerts last fired at `fastAt` (undefined: not in this episode):
+// a fast alert after FAST_BURN_QUIET_MS without one. The slow alert keeps an
+// outage's episode going for hours after it, and a fresh fast burn in that
+// tail is a new fault to page on, not the old one; a fast alert that clears
+// and fires again sooner is the same outage flapping.
+export const newFastBurn = (trip: RuleResult["trip"], fastAt: number | undefined, now: number) =>
+  trip?.speed === "fast" && (fastAt === undefined || now - fastAt >= FAST_BURN_QUIET_MS);
+
 // The watch's checks replayed every CHECK_MS from `from` to `to` with its
 // episodes: once a check trips it stays quiet until HEALTHY_TO_REARM healthy
-// checks, then `rearm` runs. `check` judges the rule as of a time, and is
-// called with each in order. Shared with the SLO backtest (slo/backtest).
+// checks, then `rearm` runs; an SLO's fresh fast burn in an episode fires
+// again and starts the next (newFastBurn). `check` judges the rule as of a
+// time, and is called with each in order. Shared with the SLO backtest
+// (slo/backtest).
 export function replay(
   from: number,
   to: number,
@@ -174,12 +195,18 @@ export function replay(
   let [checks, judged, breaching] = [0, 0, 0];
   let alerting = false;
   let healthy = 0;
+  let fastAt: number | undefined;
   for (let t = from + CHECK_MS; t <= to; t += CHECK_MS) {
     const r = check(t);
     checks++;
     if (r.status !== "idle") judged++;
     if (r.status === "breaching") breaching++;
-    if (alerting) {
+    if (alerting && newFastBurn(r.trip, fastAt, t)) {
+      fired.push({ at: new Date(t).toISOString(), route: r.trip!.route, summary: r.summary });
+      healthy = 0;
+      fastAt = t;
+    } else if (alerting) {
+      if (r.trip?.speed === "fast") fastAt = t;
       healthy = r.status === "breaching" ? 0 : r.status === "ok" ? healthy + 1 : healthy;
       if (healthy >= HEALTHY_TO_REARM) {
         alerting = false;
@@ -190,6 +217,7 @@ export function replay(
       fired.push({ at: new Date(t).toISOString(), route: r.trip.route, summary: r.summary });
       alerting = true;
       healthy = 0;
+      fastAt = r.trip.speed === "fast" ? t : undefined;
     }
   }
   return { fired, checks, judged, breaching, from: new Date(from).toISOString(), to: new Date(to).toISOString() };

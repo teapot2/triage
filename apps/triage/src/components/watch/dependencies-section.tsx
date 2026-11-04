@@ -124,13 +124,14 @@ function DependenciesBox({ data }: { data: DependencyData }) {
   const runtime = open.filter((f) => !f.dev).toSorted(byUrgency);
   const dev = open.filter((f) => f.dev).toSorted(byUrgency);
   const gone = findings.filter((f) => f.goneAt).toSorted((a, b) => Date.parse(b.goneAt!) - Date.parse(a.goneAt!));
+  const paused = state.status === "paused";
   return (
     <div className="divide-y overflow-hidden rounded-lg border">
-      <AuditSummary state={state} findings={open} />
+      <AuditSummary state={state} findings={open} incidents={incidents} />
       {runtime.length > 0 && (
         <ul aria-label="Advisories on runtime dependencies" className="divide-y">
           {runtime.map((f) => (
-            <FindingRow key={f.advisoryId} finding={f} floor={floor} incident={f.incidentId ? incidents[f.incidentId] : undefined} />
+            <FindingRow key={f.advisoryId} finding={f} floor={floor} incident={incidentOf(f, incidents)} paused={paused} />
           ))}
         </ul>
       )}
@@ -147,7 +148,7 @@ function DependenciesBox({ data }: { data: DependencyData }) {
         <Folded label={`${gone.length} fixed this week`}>
           <ul aria-label="Advisories fixed this week" className="flex flex-col gap-1.5 border-t px-4 py-3">
             {gone.map((f) => (
-              <GoneRow key={f.advisoryId} finding={f} />
+              <GoneRow key={f.advisoryId} finding={f} incident={incidentOf(f, incidents)} />
             ))}
           </ul>
         </Folded>
@@ -155,6 +156,13 @@ function DependenciesBox({ data }: { data: DependencyData }) {
     </div>
   );
 }
+
+// The status of the incident a finding opened, when that incident still
+// exists: the API leaves a deleted one out of its map, and a link to it
+// would 404.
+type IncidentMap = Record<string, IncidentStatus>;
+const incidentOf = (f: StoredFinding, incidents: IncidentMap): IncidentStatus | undefined =>
+  f.incidentId ? incidents[f.incidentId] : undefined;
 
 // Open incidents first, then the most severe; ties by package.
 function byUrgency(a: StoredFinding, b: StoredFinding): number {
@@ -182,13 +190,13 @@ const countBySeverity = (findings: StoredFinding[]) => {
 
 // The audit in two lines: whether anything needs attention, in a sentence,
 // then the service, its package manager, and when it last and next runs.
-function AuditSummary({ state, findings }: { state: DependencyState; findings: StoredFinding[] }) {
+function AuditSummary({ state, findings, incidents }: { state: DependencyState; findings: StoredFinding[]; incidents: IncidentMap }) {
   const now = useClock();
   const last = state.lastAudit;
   const floor = state.settings.severityFloor;
   const runtime = findings.filter((f) => !f.dev);
-  const withIncident = runtime.filter((f) => f.incidentId).length;
-  const overFloor = runtime.filter((f) => !f.incidentId && opensIncident(f, floor)).length;
+  const withIncident = runtime.filter((f) => incidentOf(f, incidents)).length;
+  const overFloor = runtime.filter((f) => !incidentOf(f, incidents) && opensIncident(f, floor)).length;
 
   let verdict: ReactNode;
   if (!last) {
@@ -294,15 +302,18 @@ function reach(f: StoredFinding): string {
 // title, and on the right its incident's status, or the range that fixes
 // it. Opening it shows the full title, how the package gets in (the
 // chains), why it opened no incident, when it was first found, and the
-// advisory itself.
+// advisory itself. An incident that was deleted reads as none: the next
+// audit opens another.
 function FindingRow({
   finding: f,
   floor,
   incident,
+  paused = false,
 }: {
   finding: StoredFinding;
   floor: DependencySettings["severityFloor"];
   incident?: IncidentStatus;
+  paused?: boolean;
 }) {
   const why = f.dev ? "dev only" : `below ${severityLabel(floor).toLowerCase()}`;
   return (
@@ -340,12 +351,18 @@ function FindingRow({
             </p>
             {f.paths.length > 0 && !f.paths.some((p) => !p.includes(">")) && <ChainList paths={f.paths} />}
             <p className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
-              {f.incidentId ? (
+              {incident && f.incidentId ? (
                 <Link href={`/incidents/${f.incidentId}`} className="font-mono text-foreground hover:underline">
                   {f.incidentId}
                 </Link>
               ) : (
-                <span>{opensIncident(f, floor) ? "No incident yet" : `No incident: ${why}`}</span>
+                <span>
+                  {!opensIncident(f, floor)
+                    ? `No incident: ${why}`
+                    : paused
+                      ? "No incident yet: the watch is paused"
+                      : "No incident yet"}
+                </span>
               )}
               <span aria-hidden>·</span>
               <span>
@@ -396,15 +413,16 @@ function ChainList({ paths }: { paths: string[] }) {
 }
 
 // One an audit stopped finding, in a line: the package struck through, its
-// severity, when it went, and the incident it had opened.
-function GoneRow({ finding: f }: { finding: StoredFinding }) {
+// severity, when it went, and the incident it had opened, while that still
+// exists.
+function GoneRow({ finding: f, incident }: { finding: StoredFinding; incident?: IncidentStatus }) {
   return (
     <li className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground text-xs">
       <PackageVersions finding={f} struck />
       <span>
         · {severityLabel(f.severity).toLowerCase()} · gone <Timestamp date={f.goneAt!} />
       </span>
-      {f.incidentId && (
+      {incident && f.incidentId && (
         <>
           <span aria-hidden>·</span>
           <Link href={`/incidents/${f.incidentId}`} className="font-mono text-foreground hover:underline">

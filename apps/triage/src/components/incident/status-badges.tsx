@@ -3,6 +3,7 @@ import { useId } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Incident, IncidentStatus } from "@/lib/investigation/schema";
+import { openStatuses } from "@/lib/investigation/summary";
 import { cn } from "@/lib/utils";
 
 export const statusLabel: Record<IncidentStatus, string> = {
@@ -23,11 +24,13 @@ const statusColor: Record<IncidentStatus, string> = {
   failed: "text-destructive",
 };
 
-// Where a status sits in the run: still going, or an outcome. Filter menus
-// list statuses under these headings, in this order.
+// Where a status sits: open (still going, or needing someone, as a failed
+// run does) or done. The same split as openStatuses, which drives the
+// sidebar's open count, the Services page and MCP's status filter. Filter
+// menus list statuses under these headings, in this order.
 export const statusGroups: { label: string; statuses: IncidentStatus[] }[] = [
-  { label: "In progress", statuses: ["investigating", "diagnosed", "awaiting_approval"] },
-  { label: "Done", statuses: ["resolved", "failed", "healthy"] },
+  { label: "Open", statuses: openStatuses },
+  { label: "Done", statuses: ["resolved", "healthy"] },
 ];
 export const statusGroupOf = Object.fromEntries(
   statusGroups.flatMap((g) => g.statuses.map((s) => [s, g.label])),
@@ -43,8 +46,9 @@ const ring = (props: React.SVGProps<SVGCircleElement>) => (
 // as severity: severity is bars, status is a round icon, and the shape
 // alone says which status it is, color only backing it up. The open
 // statuses fill the ring as the run gets further: investigating spins,
-// diagnosed is half full, awaiting approval (waiting on you) three-quarters.
-// Then done: failed is a cross, resolved (a fix shipped) a solid disc with
+// diagnosed is half full, awaiting approval (waiting on you) three-quarters,
+// and failed (open too, for someone to retry) is a cross. Then done:
+// resolved (a fix shipped) a solid disc with
 // the check cut out, and healthy (nothing to fix, the most common outcome)
 // a gray check in a dashed ring, so it recedes next to real incidents.
 // Reduced motion stops the spin.

@@ -1,7 +1,7 @@
-import { metricLabel } from "@/components/incident/metric-labels";
+import { lowerIsWorse, metricLabel } from "@/components/incident/metric-labels";
 import { archivedRefusal, isArchived } from "./archive";
-import { createLiveSource } from "./live/live-source";
 import { withUnit } from "./postmortem/timeline";
+import { liveReader, type MetricReader, pastThreshold } from "./recovery";
 import type { Incident, MetricPoint, Reopening, Verification } from "./schema";
 import { notify } from "../notifications/notify";
 import { getIncident, patchIncident } from "./store";
@@ -23,11 +23,13 @@ export type WindowJudgment =
   | { kind: "verifying"; quiet: number };
 
 // Judges the completed minutes since the recovery: breached on the first
-// one at or over the threshold, resolved once windowMinutes of them are all
-// under it. A minute with no point (no requests) neither counts nor breaks
-// the window.
-export function judgeWindow(series: MetricPoint[], threshold: number, windowMinutes: number): WindowJudgment {
-  const over = series.find((p) => p.value >= threshold);
+// one at or over the threshold (under it, for a metric where less is worse:
+// availability), resolved once windowMinutes of them are all on the healthy
+// side. A minute with no point (no requests) neither counts nor breaks the
+// window.
+export function judgeWindow(series: MetricPoint[], threshold: number, windowMinutes: number, metric = ""): WindowJudgment {
+  const past = pastThreshold(metric, threshold);
+  const over = series.find((p) => past(p.value));
   if (over) return { kind: "breached", at: over.t, value: over.value };
   if (series.length >= windowMinutes) return { kind: "resolved", at: series.at(-1)!.t };
   return { kind: "verifying", quiet: series.length };
@@ -123,11 +125,11 @@ async function verify(incident: Incident): Promise<void> {
     });
     return ours(saved);
   };
-  const why = `${metricLabel(v.metric)} back over ${withUnit(v.threshold, incident.trigger.unit)}`;
+  const why = `${metricLabel(v.metric)} ${lowerIsWorse(v.metric) ? "back under" : "back over"} ${withUnit(v.threshold, incident.trigger.unit)}`;
   // Saves the series and acts on the judgment; true while still verifying.
   const check = async (series: MetricPoint[], now: number, resolvedAt = (at: string) => at) => {
     const checkedAt = new Date(now).toISOString();
-    const judgment = judgeWindow(series, v.threshold, v.windowMinutes);
+    const judgment = judgeWindow(series, v.threshold, v.windowMinutes, v.metric);
     if (judgment.kind === "resolved") {
       const at = resolvedAt(judgment.at);
       // A person may have resolved it meanwhile; their time stands.
@@ -151,7 +153,10 @@ async function verify(incident: Incident): Promise<void> {
   };
 
   try {
-    if (incident.run?.source === "live:shopfront") await watchLive(v, check, save);
+    // What the run can read now (the live Shopfront, or an uptime check's
+    // own results) is watched; only a recorded run is replayed.
+    const read = liveReader(incident);
+    if (read) await watchLive(v, read, check, save);
     else await replay(incident, v, check);
   } catch (err) {
     console.error("[triage] verification failed", id, err);
@@ -163,10 +168,12 @@ async function verify(incident: Incident): Promise<void> {
 
 type Check = (series: MetricPoint[], now: number, resolvedAt?: (at: string) => string) => Promise<boolean>;
 
-// A live run: the alert's metric from Shopfront every 15 s, as the recovery
-// watch reads it, until the window is judged or the timeout.
+// A live run: the alert's metric every 15 s, as the recovery watch reads it
+// (Shopfront's telemetry, or an uptime check's saved results), until the
+// window is judged or the timeout.
 async function watchLive(
   v: Verification,
+  read: MetricReader,
   check: Check,
   save: (change: Partial<Verification>) => Promise<boolean>,
 ): Promise<void> {
@@ -178,7 +185,7 @@ async function watchLive(
     await sleep(VERIFY_INTERVAL_MS);
     const now = Date.now();
     const thisMinute = Math.floor(now / MINUTE) * MINUTE;
-    const points = (await (await createLiveSource()).queryMetric({ name: v.metric, windowMinutes: 10 }))?.points ?? [];
+    const points = await read(v.metric, 10);
     // A point is its minute's start: one after `since` is wholly after the
     // recovery. The current minute is still filling.
     for (const p of points) if (Date.parse(p.t) > since && Date.parse(p.t) < thisMinute) byMinute.set(p.t, p);
@@ -208,16 +215,19 @@ async function replay(incident: Incident, v: Verification, check: Check): Promis
 }
 
 // The minutes a replay shows: the recovery's recorded points after `since`,
-// then a quiet value (the last one under the threshold, from the recovery
-// or else the trigger's series before the breach) a minute apart, until
-// there are windowMinutes of them.
+// then a quiet value (the last one on the healthy side of the threshold,
+// from the recovery or else the trigger's series before the breach) a
+// minute apart, until there are windowMinutes of them. Only for recorded
+// runs: an incident with something live to read is never padded.
 export function simulatedWindow(incident: Incident, v: Pick<Verification, "since" | "threshold" | "windowMinutes">): MetricPoint[] {
   const recovery = incident.mitigation?.recovery?.series ?? [];
   const since = Date.parse(v.since);
   const series = recovery.filter((p) => Date.parse(p.t) > since).slice(0, v.windowMinutes);
-  const under = (p: MetricPoint) => p.value < v.threshold;
-  const quiet =
-    recovery.findLast(under)?.value ?? incident.trigger.series.findLast(under)?.value ?? Math.round(v.threshold / 2);
+  const metric = incident.trigger.metric;
+  const past = pastThreshold(metric, v.threshold);
+  const healthy = (p: MetricPoint) => !past(p.value);
+  const fallback = lowerIsWorse(metric) ? v.threshold : Math.round(v.threshold / 2);
+  const quiet = recovery.findLast(healthy)?.value ?? incident.trigger.series.findLast(healthy)?.value ?? fallback;
   let t = Math.max(Math.floor(since / MINUTE) * MINUTE, ...series.map((p) => Date.parse(p.t)));
   while (series.length < v.windowMinutes) {
     t += MINUTE;

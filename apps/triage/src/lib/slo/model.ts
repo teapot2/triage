@@ -34,9 +34,44 @@ export type BurnAlert = (typeof burnAlerts)[number];
 
 export const SLOW_BURN_SEVERITY = "sev4";
 
+// How long an SLO rule's fast alerts must have been quiet before one firing
+// again is a new outage rather than the last one flapping: the longest fast
+// short window (the 6 h alert's 30 min). Within it, that window can still
+// hold the last burst's bad minutes; past it, a fast alert fires only on new
+// ones. The watch then opens a new incident even while the slow alert keeps
+// the old outage's episode going (its 6 h window holds the bad minutes for
+// hours), so a second outage in that tail still pages.
+export const FAST_BURN_QUIET_MS = Math.max(...burnAlerts.filter((a) => a.speed === "fast").map((a) => a.shortMs));
+
 // The burn rate at which `alert` fires for an SLO over `windowDays`.
 export const burnThreshold = (alert: BurnAlert, windowDays: number) =>
   Math.round(((alert.budgetShare * windowDays * DAY) / alert.longMs) * 100) / 100;
+
+// The fewest requests an alert's short window judges a route on, for a rule
+// asking minRequests of the long one. The short window says whether the
+// burn is still going, and a handful of requests can't say that: after a
+// cold start, with an old outage still in the long window, one slow first
+// visit to a route (the dev server compiling it) put a 30 min window of 5
+// requests at 200× and paged. So it needs enough requests that one bad
+// request alone stays within the threshold (70 for the 1 h alert at 99.9%
+// over 30 days, 167 for the 6 h one, 1000 for the slow one; it takes two),
+// and never fewer than the long window's minimum at the same rate
+// (minRequests × short / long). Under steady traffic the short window holds
+// that already, so a full outage pages as fast as before.
+export function shortWindowMinimum(
+  alert: BurnAlert,
+  minRequests: number,
+  c: { objectivePercent: number; windowDays: number },
+): number {
+  const scaled = Math.ceil((minRequests * alert.shortMs) / alert.longMs);
+  // At exactly this many, one bad request burns at the threshold, which
+  // doesn't fire (it must be over). Checked with burnRate itself, so the
+  // judge can never read it as over.
+  const threshold = burnThreshold(alert, c.windowDays);
+  let oneBad = Math.max(1, Math.ceil(1 / (threshold * allowedShare(c.objectivePercent))));
+  while (burnRate({ total: oneBad, good: oneBad - 1 }, c.objectivePercent) > threshold) oneBad++;
+  return Math.max(scaled, oneBad);
+}
 
 export type Counts = { total: number; good: number };
 
@@ -44,8 +79,14 @@ export type Counts = { total: number; good: number };
 // window, 14.4 spends 2% of a 30-day budget in an hour. 0 with no requests.
 export function burnRate({ total, good }: Counts, objectivePercent: number): number {
   if (total === 0) return 0;
-  return (total - good) / total / (1 - objectivePercent / 100);
+  return (total - good) / total / allowedShare(objectivePercent);
 }
+
+// The share of requests the objective lets fail: 0.001 at 99.9. Rounded at
+// a precision past any objective's (they have at most 3 decimals), so it's
+// 0.001 rather than 1 - 0.999's 0.00099999999999989: one bad request in
+// 1000 then burns exactly 1×, at the slow alert's threshold, not over it.
+const allowedShare = (objectivePercent: number) => Math.round((100 - objectivePercent) * 1e6) / 1e8;
 
 // What's left of the budget over the SLO window, as a percentage of it.
 // Below 0 once it's overspent; 100 with no requests.
@@ -83,6 +124,13 @@ export function allowanceText(objectivePercent: number, windowDays: number): str
 // "14.4× over 1 h and 5 min": an alert, for an SLO over windowDays.
 export const alertText = (alert: BurnAlert, windowDays: number) =>
   `${burnText(burnThreshold(alert, windowDays))} over ${durationText(alert.longMs)} and ${durationText(alert.shortMs)}`;
+
+// "70 over 5 min, 167 over 30 min and 1000 over 6 h": each alert's
+// shortWindowMinimum, for a rule asking minRequests of the long windows.
+export function shortMinimumsText(minRequests: number, c: { objectivePercent: number; windowDays: number }): string {
+  const parts = burnAlerts.map((a) => `${shortWindowMinimum(a, minRequests, c)} over ${durationText(a.shortMs)}`);
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
 
 // "99.9% of requests succeed within 500 ms over 30 days"
 export function sloText(c: { objectivePercent: number; windowDays: number; latencyMs?: number }): string {

@@ -10,7 +10,10 @@ import { checkIdPattern } from "./uptime/model";
 // bundled examples (no run) and anything else have none. Apart from
 // source-for so the incident page can tell which way a question will be
 // answered without bundling the live source.
-export function sourceKind(incident: Incident): "scenario" | "live" | "uptime" | "dependency" | undefined {
+// Takes anything with the run's source, so a list summary works too.
+export function sourceKind(
+  incident: { run?: Pick<NonNullable<Incident["run"]>, "source"> },
+): "scenario" | "live" | "uptime" | "dependency" | undefined {
   const id = incident.run?.source ?? "";
   if (id.startsWith("scenario:")) return getScenario(id.slice("scenario:".length)) ? "scenario" : undefined;
   if (id === "live:shopfront") return "live";

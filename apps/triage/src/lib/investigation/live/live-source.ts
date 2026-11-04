@@ -251,7 +251,10 @@ export async function createLiveSource(opts: { now?: number } = {}): Promise<Tel
     },
 
     async queryMetric({ name, windowMinutes }) {
-      const s = catalog.find((x) => x.name === name) ?? burnSeries(name, requests, now, { failed, duration });
+      const s =
+        catalog.find((x) => x.name === name) ??
+        burnSeries(name, requests, now, { failed, duration }) ??
+        slowSeries(name, requests, now, { duration });
       if (!s) return undefined;
       return { name: s.name, service: s.service, unit: s.unit, description: s.description, points: s.points(windowMinutes) };
     },
@@ -473,6 +476,43 @@ export function burnSeries(
         const end = start + MINUTE;
         const inWindow = rows.filter((r) => r.start >= end - BURN_WINDOW && r.start < end);
         return inWindow.length ? [point(start, inWindow.filter(bad).length / inWindow.length / allowed)] : [];
+      }),
+  };
+}
+
+// A slow-request rule's series on a route (watch-rule-model's slowMetric),
+// what its incident charts, recovers and verifies on: per minute, how many
+// of the route's requests took longer than `le` ms, or what percent of them
+// did. Counted on the requests the watch judges (HEAD probes left out). A
+// minute with requests but none slow is 0; a minute with no requests has
+// no point, so it neither counts nor breaks a quiet window. Built when
+// asked for, from the route and the limit in the name.
+const slowName = /^http\.server\.(slow_requests|slow_share)\{route=(\/[^,}]*),le=(\d+)\}$/;
+
+export function slowSeries(
+  name: string,
+  requests: SpanRow[],
+  now: number,
+  f: { duration: (s: SpanRow) => number },
+): Series | undefined {
+  const m = name.match(slowName);
+  if (!m) return undefined;
+  const [, kind, route, le] = m;
+  const limitMs = Number(le);
+  const rows = requests.filter((r) => routeOf(r) === route && methodOf(r) !== "HEAD");
+  const share = kind === "slow_share";
+  return {
+    name,
+    service: "shopfront",
+    unit: share ? "%" : "requests",
+    description: share
+      ? `Percent of ${route} requests slower than ${limitMs} ms, per minute`
+      : `${route} requests slower than ${limitMs} ms, per minute`,
+    points: (w) =>
+      bucketed(rows, (r) => r.start, now, w).flatMap(({ start, rows: inMinute }) => {
+        if (!inMinute.length) return [];
+        const slow = inMinute.filter((r) => f.duration(r) > limitMs).length;
+        return [point(start, share ? (slow / inMinute.length) * 100 : slow)];
       }),
   };
 }

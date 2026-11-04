@@ -43,19 +43,28 @@ function FindingBadge({ hypothesis, running }: { hypothesis: Hypothesis; running
 
 // A fan-out investigation's hypotheses, each checked in its own lane: what
 // its lane found, why in a line, and the evidence for and against it. The
-// lead model that proposed them merged the findings into the report above.
+// lead model proposed them, and once the run is `reported` it merged the
+// findings into the report above; while the lanes are still checking (or
+// the run failed without a report) it's named only as the lead. A merge
+// that fails hands over to the single agent, which writes the report
+// instead, but the record can't tell that apart (submit_report isn't
+// recorded as a step, and the fix stage adds lane-less steps of its own),
+// so that report still reads "Merged by".
 // `lanes` is the run's model, which every lane ran on.
 export function HypothesesChecked({
   fanout,
   lanes,
   running,
+  reported,
   className,
 }: {
   fanout: Fanout;
   lanes: { provider?: string; model: string };
   running: boolean;
+  reported: boolean;
   className?: string;
 }) {
+  const lead = modelLabel(fanout.leadModel, fanout.leadProvider);
   if (fanout.hypotheses.length === 0) return null;
   return (
     <div className={cn("flex flex-col gap-3 rounded-lg border p-4", className)}>
@@ -65,7 +74,7 @@ export function HypothesesChecked({
           Hypotheses checked
         </span>
         <span className="flex items-center gap-2">
-          Merged by {modelLabel(fanout.leadModel, fanout.leadProvider)}
+          {reported ? `Merged by ${lead}` : `Lead: ${lead}`}
           <ContextMeter records={[leadRecord(fanout)]} />
         </span>
       </div>

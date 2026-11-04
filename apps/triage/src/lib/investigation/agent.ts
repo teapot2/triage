@@ -4,9 +4,9 @@ import { runBudget } from "../models/policy";
 import { providers } from "../models/providers";
 import { fanoutLead, stageModel, stageProblem } from "../models/settings";
 import { recordedEffort } from "../models/stages";
-import { fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
+import { addUsage, fuller, noTokens, onEachCall, type TokenCounts } from "../models/usage";
 import { runAgentLoop } from "./agent-loop";
-import { NO_DEPENDENCY_MITIGATION, runExposureStage } from "./dependencies/exposure";
+import { MAX_STEPS as EXPOSURE_MAX_STEPS, NO_DEPENDENCY_MITIGATION, runExposureStage } from "./dependencies/exposure";
 import { isDependencySource } from "./dependencies/source";
 import { runFanout, type Stage } from "./fanout/run";
 import { runFixStage } from "./fix/agent";
@@ -18,7 +18,9 @@ import { proposeMitigation, whyNoMitigation } from "./mitigation/propose";
 import { notify, refreshSlackCard } from "../notifications/notify";
 import { readTelemetry, RETENTION_MS } from "./live/otlp-files";
 import { uptimeNote } from "./context";
+import { limitText } from "@/components/incident/metric-labels";
 import { InvestigationRecorder, type ThoughtRecorder } from "./recorder";
+import { noReportError } from "./run-failure";
 import type { Scenario } from "./scenarios";
 import { createScenarioSource } from "./scenarios";
 import type { Incident, Thought } from "./schema";
@@ -27,7 +29,7 @@ import { saveIncident } from "./store";
 import { createInvestigationTools } from "./tools";
 import { beforeAnswer, type Part } from "./web-search";
 import { describeRule, matchesTarget, readRules, tripMetric, tripTitle, type WatchRule } from "./watch-rules";
-import type { TripBurn } from "./watch-judge";
+import { incidentBurn, type TripBurn } from "./watch-judge";
 import { budgetText, burnText, durationText } from "../slo/model";
 
 const MAX_STEPS = 30;
@@ -76,7 +78,7 @@ export function prompt(incident: Incident, source: TelemetrySource, task = "Inve
   const note = uptimeNote(source);
   return `Alert: ${incident.title}
 Service: ${incident.service}
-Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${incident.trigger.threshold})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}${burnLine(incident.trigger.burn)}
+Metric: ${incident.trigger.metric} observed ${incident.trigger.observed} ${incident.trigger.unit} (threshold ${limitText(incident.trigger.metric, String(incident.trigger.threshold))})${rule ? `\nWatch rule: ${rule.name}, ${rule.description}` : ""}${burnLine(incident.trigger.burn, d.now)}
 Alert time (treat as now): ${d.now}${focusLine(incident.trigger.focus)}
 Dependency path: ${services}${flagsLine(d.flags)}
 ${note ? `\n${note}\n` : ""}
@@ -84,9 +86,24 @@ ${task}`;
 }
 
 // An SLO alert's burn, in words: what users are losing, not a threshold.
-function burnLine(burn: Incident["trigger"]["burn"]): string {
+// Then which minutes it fires on: its long window can hold an earlier outage
+// with a bigger signal, and on 2026-11-04 the investigation of a 6× alert
+// (6 h and 30 min) on the price list gap from 03:32 blamed the pool leak
+// that had ended at 03:25. When the watch didn't know the minutes (a slow
+// burn, an incident from before), the short window stands in: the alert
+// fires only while that burns too.
+function burnLine(burn: Incident["trigger"]["burn"], now: string): string {
   if (!burn) return "";
-  return `\nError budget: burning ${burnText(burn.rate)} over the last ${durationText(burn.longMs)} (the alert fires over ${burnText(burn.threshold)} in both the last ${durationText(burn.longMs)} and ${durationText(burn.shortMs)}); ${budgetText(burn.budgetLeftPercent)} of the budget left.`;
+  const line = `\nError budget: burning ${burnText(burn.rate)} over the last ${durationText(burn.longMs)} (the alert fires over ${burnText(burn.threshold)} in both the last ${durationText(burn.longMs)} and ${durationText(burn.shortMs)}); ${budgetText(burn.budgetLeftPercent)} of the budget left.`;
+  const earlier = `Earlier outages in the alert's ${durationText(burn.longMs)} window are not this incident`;
+  if (!burn.burning) {
+    const short = durationText(burn.shortMs);
+    return `${line}\nThe alert fires only while the last ${short} are burning too. ${earlier}; diagnose what failed in the last ${short}.`;
+  }
+  const { from, to } = burn.burning;
+  const back = Math.ceil((Date.parse(now) - Date.parse(from)) / 60_000);
+  const reach = back > 30 ? ` They began ${back} min before the alert: widen windowMinutes to reach them.` : "";
+  return `${line}\nThe bad minutes the alert is burning on: ${from.slice(11, 16)} to ${to.slice(11, 16)} UTC, from when this burn began. ${earlier}; diagnose what failed in those minutes.${reach}`;
 }
 
 // What the logs say each flag is now: code behind a flag that is off isn't
@@ -200,13 +217,22 @@ export async function createRangeIncident(
 }
 
 // An incident a watch rule opened: titled by the rule and the route that
-// tripped it, its chart that route's latency (or error ratio) against the
-// rule's limit.
+// tripped it, its chart that route's series in the rule's own measure
+// (latency, slow requests, error ratio: tripMetric) against the rule's limit.
 // An SLO rule's charts the route's burn rate against the burn its alert
 // fired at, at the trip's severity (lower for a slow burn).
 export async function createRuleIncident(
   source: TelemetrySource,
-  trip: { rule: WatchRule; route: string; method: string; severity?: Incident["severity"]; burn?: TripBurn },
+  trip: {
+    rule: WatchRule;
+    route: string;
+    method: string;
+    severity?: Incident["severity"];
+    burn?: TripBurn;
+    // The minutes a fast SLO alert fired on (watch.ts), kept on the burn.
+    burning?: { from: number; to: number };
+  },
+  relatedTo?: Incident["relatedTo"],
 ): Promise<Incident> {
   const { metric, threshold } = tripMetric(trip.rule, trip.route, trip.burn?.threshold);
   const alert = await source.queryMetric({ name: metric, windowMinutes: 30 });
@@ -219,7 +245,8 @@ export async function createRuleIncident(
     openedBy: "watch",
     rule: { id: trip.rule.id, name: trip.rule.name, description: describeRule(trip.rule) },
     route: trip.route,
-    burn: trip.burn,
+    burn: incidentBurn(trip),
+    relatedTo,
   });
 }
 
@@ -237,6 +264,7 @@ type NewIncident = {
   focus?: Incident["trigger"]["focus"];
   uptime?: Incident["uptime"];
   dependency?: Incident["dependency"];
+  relatedTo?: Incident["relatedTo"];
 };
 
 // Saves a new incident charting `alert`, ready for runInvestigation. Shared
@@ -280,6 +308,7 @@ async function newIncident(source: TelemetrySource, alert: MetricSeries, a: NewI
     },
     uptime: a.uptime,
     dependency: a.dependency,
+    ...(a.relatedTo && { relatedTo: a.relatedTo }),
   };
   return incident;
 }
@@ -378,6 +407,24 @@ export async function runInvestigation(
   // Model steps across every agent of the run: a fan-out's scout, lanes and
   // merge, and the single agent, which a failed scout hands over to.
   const count = { steps: 0 };
+  // The stage's model's tokens (the single agent's, or a fan-out's lanes'
+  // and fallback's) go on the run; a fan-out's lead's on run.fanout, so
+  // each is priced at its own model's rates. Each agent adds a call's
+  // tokens as it ends, so a run that fails part-way still records them.
+  const tokens = noTokens();
+  const leadTokens = noTokens();
+  // What every ending records, failed or not.
+  const spent = () => {
+    const fanout = recorder.incident.run!.fanout;
+    return {
+      modelSteps: count.steps,
+      ...tokens,
+      ...(fanout && { fanout: { ...fanout, ...leadTokens } }),
+      rejectedReports: recorder.rejectedReports,
+      reportRejections: recorder.reportRejections.length ? [...recorder.reportRejections] : undefined,
+      modelRetries: retries,
+    };
+  };
 
   // The agent can't be forced to call submit_report (see runAgentLoop), so
   // near the step cap it's the only tool left, and a run that ends in plain
@@ -387,7 +434,10 @@ export async function runInvestigation(
     providerOptions: modelOptions(stage, cacheKey("investigate", incident.id)),
     ...callSettings(),
     ...recordThoughts(recorder, reasoningKind(stage.provider)),
-    ...onEachCall((call) => recordRunContext(recorder, call)),
+    ...onEachCall((call, step) => {
+      addUsage(tokens, step.usage);
+      recordRunContext(recorder, call);
+    }),
     instructions,
     tools,
     stopWhen: [() => count.steps >= MAX_STEPS, () => recorder.report !== undefined],
@@ -410,11 +460,6 @@ export async function runInvestigation(
     }
     // The run's time limit starts once the host is awake.
     const budget = runBudget("investigate");
-    // The stage's model's tokens (the single agent's, or a fan-out's lanes'
-    // and fallback's) go on the run; a fan-out's lead's on run.fanout, so
-    // each is priced at its own model's rates.
-    const tokens = noTokens();
-    const leadTokens = noTokens();
     // The single agent, until a report is accepted or its steps run out.
     const alone = (messages: ModelMessage[]) =>
       runAgentLoop({
@@ -426,25 +471,19 @@ export async function runInvestigation(
         maxNudges: MAX_NUDGES,
         nudge: NUDGE,
         done: () => recorder.report !== undefined,
-        tokens,
       });
     if (dependency) await runExposureStage({ recorder, source, stage, model: model(stage), abortSignal: budget, tokens, count });
     else if (lead) await runFanout({ incident, source, recorder, budget, tokens, leadTokens, count, lane: stage, lead, model, alone });
     else await alone([{ role: "user", content: prompt(incident, source) }]);
 
     const report = recorder.report;
-    const fanout = recorder.incident.run!.fanout;
     recorder.update({
       status: !report ? "failed" : report.verdict.kind === "healthy" ? "healthy" : "diagnosed",
       run: {
         ...recorder.incident.run!,
         finishedAt: new Date().toISOString(),
-        modelSteps: count.steps,
-        ...tokens,
-        ...(fanout && { fanout: { ...fanout, ...leadTokens } }),
-        rejectedReports: recorder.rejectedReports,
-        modelRetries: retries,
-        error: report ? undefined : `No accepted report after ${count.steps} model steps`,
+        ...spent(),
+        error: report ? undefined : noReportError(count.steps, dependency ? EXPOSURE_MAX_STEPS : MAX_STEPS),
       },
     });
     if (report?.verdict.kind === "root_cause" && dependency) {
@@ -468,8 +507,7 @@ export async function runInvestigation(
         ...recorder.incident.run!,
         wakingSince: undefined,
         finishedAt: new Date().toISOString(),
-        rejectedReports: recorder.rejectedReports,
-        modelRetries: retries,
+        ...spent(),
         error: modelErrorText(err, stage.provider),
       },
     });

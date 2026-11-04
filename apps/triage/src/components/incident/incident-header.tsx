@@ -14,10 +14,11 @@ import {
   XIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { Fragment, type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { useRegisterCommands } from "@/components/command-registry";
 import { type ExportSource, ExportSubmenu, useExportCommands } from "@/components/export-menu";
 import { StickyHeader } from "@/components/sticky-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -32,14 +33,16 @@ import { archiveBlocker, isArchived } from "@/lib/investigation/archive";
 import { currentRun, rerunBlocker } from "@/lib/investigation/reruns";
 import { incidentUsage } from "@/lib/investigation/cost";
 import type { Incident } from "@/lib/investigation/schema";
+import { sourceKind } from "@/lib/investigation/source-kind";
 import { ApprovalActions, ApproveDialog, DenyDialog, type NoRerunReason, useApprovalDecision } from "./approval-card";
 import { useArchiveActions } from "./archive-actions";
 import { Timestamp } from "@/components/timestamp";
 import { cn } from "@/lib/utils";
+import { formatDateTime } from "./format";
 import { THIS_INCIDENT } from "./incident-commands";
 import { incidentExports } from "./incident-export";
 import { MetricBadges } from "./outcome-badges";
-import { RerunDialog } from "./rerun-dialog";
+import { RERUN_EVENT, RerunDialog } from "./rerun-dialog";
 import { RunPicker, type ShownRun } from "./run-switcher";
 import { IncidentStatusBadge, SeverityBadge } from "./status-badges";
 import { UsageLine } from "./usage-line";
@@ -47,13 +50,27 @@ import { quietMinutes, ReopenDialog, reopening, resolutionOptions, useResolution
 
 // Why a deny with feedback starts no new attempt on this incident, or
 // undefined when it does: the client's view of canRerunFix. Only a fix
-// proven on the live Shopfront can be written again; a bundled example has
-// no run, a recorded scenario's files are fixtures.
+// proven on the live Shopfront's own alert can be written again. A bundled
+// example has no run, a demo incident's (inc_demo_*, source "demo") fix
+// only illustrates the page, and a recorded scenario's files are fixtures.
+// An endpoint check on Shopfront gets a proven fix too, but canRerunFix
+// takes only live:shopfront, so its feedback starts nothing either; nor
+// does a dependency advisory's upgrade's.
 export function noRerunReason(incident: Pick<Incident, "run" | "fixRun">): NoRerunReason | undefined {
-  if (!incident.run) return "example";
-  if (incident.run.source !== "live:shopfront") return "scenario";
-  if (incident.fixRun?.status !== "proven") return "unproven";
-  return undefined;
+  const source = incident.run?.source;
+  if (!source) return "example";
+  if (source === "demo") return "demo";
+  switch (sourceKind(incident)) {
+    case "live":
+      return incident.fixRun?.status === "proven" ? undefined : "unproven";
+    case "uptime":
+      return "uptime";
+    case "dependency":
+      return "dependency";
+    default:
+      // A scenario, including one no longer bundled (sourceKind's undefined).
+      return "scenario";
+  }
 }
 
 // The incident at a glance: the title, then one line with its state, where
@@ -140,6 +157,14 @@ export function IncidentHeader({
   // at 0 to hydrate, then runs.
   const now = useNow(0);
   const rerunBlocked = rerunBlocker(incident, now);
+  // A failed run's notice offers Re-run too (failed-run-notice).
+  const canRerun = !rerunBlocked && !archived;
+  useEffect(() => {
+    if (!canRerun) return;
+    const open = () => setRerunning(true);
+    window.addEventListener(RERUN_EVENT, open);
+    return () => window.removeEventListener(RERUN_EVENT, open);
+  }, [canRerun]);
   useRegisterCommands(
     "incident-rerun",
     rerunBlocked || archived
@@ -183,6 +208,7 @@ export function IncidentHeader({
       fix={fix}
       approval={approval}
       decision={decision}
+      opensPr={opensPr}
       archived={archived}
       quietOnceMerged={dependency}
       onApprove={() => setConfirming(true)}
@@ -246,6 +272,18 @@ export function IncidentHeader({
             <span>
               {incident.openedBy === "watch" ? "Detected by Triage" : "Detected"} <Timestamp date={incident.detectedAt} />
             </span>
+            {/* A replay keeps its recording's alert time, which the list
+                (sorted by when runs started) doesn't show: say so here. */}
+            {incident.run && sourceKind(incident) === "scenario" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="cursor-default text-muted-foreground">
+                    Replay
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>Recorded telemetry, replayed {formatDateTime(incident.run.startedAt)}</TooltipContent>
+              </Tooltip>
+            )}
             {/* An icon rather than a dot: this is the item that wraps on
                 most widths, and a dot would start the new line. */}
             {usage && <UsageLine usage={usage} />}
@@ -266,7 +304,7 @@ export function IncidentHeader({
           <ApproveDialog
             fix={fix}
             opensPr={opensPr}
-            mitigated={mitigated}
+            recovery={recovered ? "recovered" : mitigated ? (mitigation.recovery?.status ?? "watching") : undefined}
             open={confirming}
             onOpenChange={setConfirming}
             onConfirm={(dataReviewed) => void decide("approved", undefined, dataReviewed)}

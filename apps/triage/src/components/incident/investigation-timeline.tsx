@@ -25,6 +25,7 @@ import {
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChangedSinceMount } from "@/hooks/use-changed-since-mount";
 import { useCountUp } from "@/hooks/use-count-up";
 import { scrollToEnd, useFollowBottom } from "@/hooks/use-follow-bottom";
@@ -34,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { ContextMeter } from "./context-meter";
 import { leadRecord } from "./hypotheses-checked";
 import { Citations, evidenceIcons, useEvidence } from "./evidence";
-import { modelLabel } from "@/lib/models/labels";
+import { modelLabel, providerLabels } from "@/lib/models/labels";
 import { formatDuration, formatTime } from "./format";
 import { useIncident } from "./incident-export";
 import { evidenceTitle } from "./metric-labels";
@@ -165,6 +166,14 @@ export function InvestigationTimeline({
   const shown = useMemo(() => filterSteps(steps, query, filters, byId), [steps, query, filters, byId]);
   const groups = useMemo(() => groupByPhase(filtering ? shown : steps), [filtering, shown, steps]);
   const citedSet = useMemo(() => new Set(cited), [cited]);
+  // The counts on Cited and All evidence: what the phases can list, the
+  // evidence this run's tool calls returned. byId also holds every Ask
+  // answer's evidence, and a citation of an ID it doesn't know lists nothing.
+  const runEvidence = useMemo(
+    () => new Set(steps.flatMap((s) => s.evidenceIds).filter((id) => byId.has(id))),
+    [steps, byId],
+  );
+  const citedCount = useMemo(() => [...citedSet].filter((id) => runEvidence.has(id)).length, [citedSet, runEvidence]);
   // Offsets count from the first thing that happened: the model's first
   // thought, where it's recorded, comes before the first tool call.
   const firsts = [steps[0]?.startedAt, thoughts[0]?.startedAt].flatMap((t) => (t ? [Date.parse(t)] : []));
@@ -290,6 +299,7 @@ export function InvestigationTimeline({
           {turnCount !== undefined && ` in ${turnCount} ${turnCount === 1 ? "turn" : "turns"}`}
           {run && ` · ${modelLabel(run.model, run.provider, run.reasoningEffort)}`}
         </span>
+        {run?.rejectedReports ? <SentBack count={run.rejectedReports} problems={run.reportRejections} /> : null}
         {/* A fan-out's lanes and its lead are separate contexts: the
             fullest of them. */}
         {run && <ContextMeter records={[run, ...(run.fanout ? [leadRecord(run.fanout)] : [])]} />}
@@ -307,14 +317,14 @@ export function InvestigationTimeline({
           )}
           {/* What the diagnosis cites is marked per phase, so it's a
               phase-view choice. */}
-          {view === "phases" && cited.length > 0 && (
+          {view === "phases" && citedCount > 0 && (
             <PillToggle
               label="Evidence shown"
               value={showAll ? "all" : "cited"}
               onChange={(v) => setShowAll(v === "all")}
               options={[
-                { value: "cited", label: "Cited", count: cited.length },
-                { value: "all", label: "All evidence", count: byId.size },
+                { value: "cited", label: "Cited", count: citedCount },
+                { value: "all", label: "All evidence", count: runEvidence.size },
               ]}
             />
           )}
@@ -346,7 +356,30 @@ export function InvestigationTimeline({
           />
         )}
 
-        {nothingShown ? (
+        {nothingShown && !filtering ? (
+          // Nothing recorded yet (the run has just started, or its model is
+          // still waking), or a run that ended before calling a tool.
+          <div className="flex flex-col items-center gap-1 rounded-md border border-dashed py-6 text-center">
+            {running ? (
+              <>
+                <LoaderCircleIcon className="mb-1 size-5 animate-spin text-muted-foreground" />
+                <p className="font-medium text-sm">Waiting for the first tool call…</p>
+                <p className="max-w-md text-muted-foreground text-xs">
+                  {run?.wakingSince
+                    ? `Starting the ${providerLabels[run.provider ?? ""] ?? "model's"} deployment. After it scales to zero, its first start takes a few minutes.`
+                    : "Each call shows here as the agent makes it."}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-sm">No tool calls</p>
+                <p className="text-muted-foreground text-xs">
+                  {thoughts.length > 0 ? "Step by step shows what the model thought." : "The run ended before calling a tool."}
+                </p>
+              </>
+            )}
+          </div>
+        ) : nothingShown ? (
           // Held back a beat, so it doesn't flash while a query is still being typed.
           <div className="flex flex-col items-center gap-1 rounded-md border border-dashed py-6 text-center animate-in fade-in-0 delay-150 fill-mode-backwards duration-200 ease-out motion-reduce:animate-none">
             <SearchXIcon className="mb-1 size-5 text-muted-foreground" />
@@ -523,6 +556,30 @@ export function InvestigationTimeline({
 // No scrolling box: the timeline scrolls with the page.
 const noBox = { current: null };
 
+// "· 1 report sent back by validation": submissions the report's checks
+// rejected and returned to the model to fix, with what each got wrong on
+// hover where the run kept it.
+function SentBack({ count, problems = [] }: { count: number; problems?: string[] }) {
+  const label = `${count} ${count === 1 ? "report" : "reports"} sent back by validation`;
+  if (problems.length === 0) return <span className="tabular-nums">· {label}</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-default tabular-nums decoration-dotted underline-offset-4 hover:underline">· {label}</span>
+      </TooltipTrigger>
+      <TooltipContent className="block max-w-96">
+        <ol className="flex list-decimal flex-col gap-1 pl-4">
+          {problems.map((p, i) => (
+            <li key={i} className="break-words">
+              {p}
+            </li>
+          ))}
+        </ol>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // Two or more calls known to come from one model call.
 const parallel = (turn: Turn) => turn.together && turn.steps.length > 1;
 
@@ -582,7 +639,7 @@ export function StepRow({
             <Highlight text={step.tool} query={query} />
           </span>
           <span className="truncate text-muted-foreground">
-            <Highlight text={step.error ?? step.summary ?? "Running..."} query={query} />
+            <Highlight text={step.error ?? step.summary ?? "Running…"} query={query} />
           </span>
           {/* How long the call took, then when it started, to the
               millisecond. The absolute start time is on hover. A fan-out

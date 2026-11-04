@@ -110,6 +110,28 @@ describe("reopened", () => {
   });
 });
 
+describe("judgeWindow on a metric where less is worse", () => {
+  // A Down incident charts availability per minute against 100 %.
+  const availability = "uptime.availability{check=chk_abc123}";
+
+  it("resolves on minutes at 100 %", () => {
+    assert.deepEqual(judgeWindow(minutes(100, 100, 100, 100, 100), 100, 5, availability), {
+      kind: "resolved",
+      at: "2026-10-29T10:04:00.000Z",
+    });
+  });
+
+  it("breaches on the first minute under it, not over it", () => {
+    assert.deepEqual(judgeWindow(minutes(100, 50, 0), 100, 5, availability), {
+      kind: "breached",
+      at: "2026-10-29T10:01:00.000Z",
+      value: 50,
+    });
+    // A down minute is never a quiet one.
+    assert.equal(judgeWindow(minutes(0, 0, 0, 0, 0), 100, 5, availability).kind, "breached");
+  });
+});
+
 describe("verificationRefusal", () => {
   it("refuses before the investigation has a report", () => {
     assert.match(verificationRefusal(example({ status: "investigating" }), "manual")!, /no report/);
@@ -198,5 +220,56 @@ describe("simulatedWindow", () => {
     assert.equal(window.length, 5);
     assert.ok(window.every((p) => p.value === quiet));
     assert.equal(window[0].t, "2026-10-29T10:01:00.000Z");
+  });
+});
+
+describe("simulatedWindow on a metric where less is worse", () => {
+  it("pads with a healthy value, never a down one", () => {
+    const metric = "uptime.availability{check=chk_abc123}";
+    const base = example({ mitigation: undefined });
+    const incident = { ...base, trigger: { ...base.trigger, metric, threshold: 100, series: minutes(100, 100, 0, 0) } };
+    const window = simulatedWindow(incident, { ...verifying, threshold: 100 });
+    assert.ok(window.every((p) => p.value === 100));
+    assert.equal(judgeWindow(window, 100, 5, metric).kind, "resolved");
+  });
+});
+
+// A slow-request rule's incident is judged on the rule's own measure, per
+// minute: "more than 3" breaches at 4, never at 3.
+describe("judgeWindow on a count of slow requests", () => {
+  const metric = "http.server.slow_requests{route=/,le=1500}";
+
+  it("resolves on minutes at or under the count, a minute with none slow included", () => {
+    assert.deepEqual(judgeWindow(minutes(1, 3, 0, 2, 3), 3, 5, metric), { kind: "resolved", at: "2026-10-29T10:04:00.000Z" });
+  });
+
+  it("breaches on the first minute with more than the count", () => {
+    assert.deepEqual(judgeWindow(minutes(1, 3, 4, 0), 3, 5, metric), { kind: "breached", at: "2026-10-29T10:02:00.000Z", value: 4 });
+  });
+
+  it("breaches on any slow request when the rule allows none", () => {
+    assert.equal(judgeWindow(minutes(0, 0, 0, 0, 0), 0, 5, metric).kind, "resolved");
+    assert.equal(judgeWindow(minutes(0, 1), 0, 5, metric).kind, "breached");
+  });
+});
+
+describe("judgeWindow on a share of slow requests", () => {
+  const metric = "http.server.slow_share{route=/,le=1500}";
+
+  it("resolves at the share and breaches past it", () => {
+    assert.equal(judgeWindow(minutes(10, 0, 5, 10, 9.5), 10, 5, metric).kind, "resolved");
+    assert.deepEqual(judgeWindow(minutes(10, 10.5), 10, 5, metric), { kind: "breached", at: "2026-10-29T10:01:00.000Z", value: 10.5 });
+  });
+});
+
+describe("simulatedWindow on a count of slow requests", () => {
+  it("pads with a value at or under the count, which the window then resolves on", () => {
+    const metric = "http.server.slow_requests{route=/,le=1500}";
+    const base = example({ mitigation: undefined });
+    const incident = { ...base, trigger: { ...base.trigger, metric, unit: "requests", threshold: 3, series: minutes(0, 3, 9, 12) } };
+    const window = simulatedWindow(incident, { ...verifying, threshold: 3 });
+    // 3 is the last minute on the healthy side: "more than 3" breaches at 4.
+    assert.ok(window.every((p) => p.value === 3));
+    assert.equal(judgeWindow(window, 3, 5, metric).kind, "resolved");
   });
 });

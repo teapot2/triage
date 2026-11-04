@@ -14,7 +14,7 @@ import { activityAt, incidentHeadline, incidentPreview, rootCauseTitle } from ".
 // older one are summarised again from their body the next time a list reads
 // them.
 
-export const SUMMARY_VERSION = 2;
+export const SUMMARY_VERSION = 5;
 
 type Rule = NonNullable<Incident["trigger"]["rule"]>;
 
@@ -22,8 +22,10 @@ export type IncidentSummary = Pick<
   Incident,
   "id" | "title" | "service" | "severity" | "status" | "detectedAt" | "resolvedAt" | "archivedAt"
 > & {
-  run?: Pick<NonNullable<Incident["run"]>, "startedAt">;
-  approval?: Pick<NonNullable<Incident["approval"]>, "state" | "prState">;
+  // The source, for the list's replay tag (source-kind.ts).
+  run?: Pick<NonNullable<Incident["run"]>, "startedAt" | "source">;
+  // prMergedAt, so a merged fix reads "fix merged, verifying" (statusInWords).
+  approval?: Pick<NonNullable<Incident["approval"]>, "state" | "prState" | "prMergedAt">;
   mitigation?: Pick<NonNullable<Incident["mitigation"]>, "state">;
   report?: Pick<NonNullable<Incident["report"]>, "summary">;
   trigger: { rule?: Pick<Rule, "id" | "name"> };
@@ -53,8 +55,8 @@ export function toSummary(incident: Incident): IncidentSummary {
     detectedAt,
     resolvedAt,
     archivedAt,
-    run: run && { startedAt: run.startedAt },
-    approval: approval && { state: approval.state, prState: approval.prState },
+    run: run && { startedAt: run.startedAt, source: run.source },
+    approval: approval && { state: approval.state, prState: approval.prState, prMergedAt: approval.prMergedAt },
     mitigation: mitigation && { state: mitigation.state },
     report: report && { summary: report.summary },
     trigger: { rule: rule && { id: rule.id, name: rule.name } },

@@ -69,7 +69,6 @@ async function Services() {
         id: latest.id,
         status: latest.status,
         headline: latest.headline ?? latest.title,
-        detectedAt: latest.detectedAt,
         ranAt: latest.run?.startedAt ?? latest.detectedAt,
       },
     };

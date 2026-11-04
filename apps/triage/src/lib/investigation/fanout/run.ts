@@ -3,7 +3,7 @@ import { cacheKey, callSettings, modelErrorText, modelOptions, reasoningKind } f
 import { RunTimeoutError } from "../../models/policy";
 import type { Endpoint, StageModel } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
-import { fuller, onEachCall, type TokenCounts } from "../../models/usage";
+import { addUsage, fuller, onEachCall, type TokenCounts } from "../../models/usage";
 import { recordRunContext, recordThoughts } from "../agent";
 import { runAgentLoop } from "../agent-loop";
 import type { InvestigationRecorder, ThoughtRecorder } from "../recorder";
@@ -97,11 +97,12 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       },
       maxSteps: SCOUT_STEPS,
       finish: "propose_hypotheses",
+      tokens: run.leadTokens,
       onCall: (call) => recordLeadContext(recorder, call),
       done: () => proposal !== undefined,
     });
     const content = scoutPrompt(incident, source);
-    await untilDone(scout, [{ role: "user", content }], SCOUT_NUDGE, run.budget, run.leadTokens);
+    await untilDone(scout, [{ role: "user", content }], SCOUT_NUDGE, run.budget);
   } catch (err) {
     if (run.budget.aborted) throw err;
     console.error("[triage] fan-out scout failed, investigating alone", incident.id, err);
@@ -133,11 +134,12 @@ export async function runFanout(run: FanoutRun): Promise<void> {
       tools: createInvestigationTools(source, recorder),
       maxSteps: MERGE_STEPS,
       finish: "submit_report",
+      tokens: run.leadTokens,
       onCall: (call) => recordLeadContext(recorder, call),
       done: () => recorder.report !== undefined,
     });
     const content = mergePrompt(incident, source, recorder.evidence, recorder.incident.run!.fanout!.hypotheses);
-    await untilDone(merge, [{ role: "user", content }], MERGE_NUDGE, run.budget, run.leadTokens);
+    await untilDone(merge, [{ role: "user", content }], MERGE_NUDGE, run.budget);
   } catch (err) {
     if (run.budget.aborted) throw err;
     console.error("[triage] fan-out merge failed, finishing alone", incident.id, err);
@@ -175,6 +177,7 @@ async function runLane(run: FanoutRun, h: Hypothesis, scoutEvidence: Evidence[])
     },
     maxSteps: LANE_STEPS,
     finish: "submit_finding",
+    tokens: run.tokens,
     done: () => finding !== undefined,
     // Each lane is a context of its own, and counts toward the run's too.
     onCall: (call) => {
@@ -189,7 +192,7 @@ async function runLane(run: FanoutRun, h: Hypothesis, scoutEvidence: Evidence[])
   try {
     const content = lanePrompt(run.incident, run.source, scoutEvidence, h);
     const signal = AbortSignal.any([run.budget, limit.signal]);
-    await untilDone(agent, [{ role: "user", content }], LANE_NUDGE, signal, run.tokens);
+    await untilDone(agent, [{ role: "user", content }], LANE_NUDGE, signal);
     if (!finding) error = `No finding after ${agent.steps()} model steps`;
   } catch (err) {
     console.error("[triage] fan-out lane failed", run.incident.id, h.id, err);
@@ -216,8 +219,10 @@ type Bounded = {
 };
 
 // A ToolLoopAgent capped at `maxSteps`, on the given model, recording its
-// thoughts on `thoughts`. As in the single agent: near the cap only the
-// finishing tool stays available, and it stops once `done`.
+// thoughts on `thoughts` and adding each call's tokens to `tokens` (the
+// lead's or the lanes') as it ends, so a phase that fails part-way keeps
+// them. As in the single agent: near the cap only the finishing tool stays
+// available, and it stops once `done`.
 function boundedAgent<T extends ToolSet>(
   run: FanoutRun,
   s: Stage,
@@ -228,6 +233,7 @@ function boundedAgent<T extends ToolSet>(
     maxSteps: number;
     finish: keyof T & string;
     done: () => boolean;
+    tokens: TokenCounts;
     onCall: (call: TokenCounts) => void;
   },
 ): Bounded {
@@ -237,7 +243,10 @@ function boundedAgent<T extends ToolSet>(
     providerOptions: modelOptions(s, cacheKey("investigate", run.incident.id)),
     ...callSettings(),
     ...recordThoughts(thoughts, reasoningKind(s.provider)),
-    ...onEachCall(o.onCall),
+    ...onEachCall((call, step) => {
+      addUsage(o.tokens, step.usage);
+      o.onCall(call);
+    }),
     instructions: o.instructions,
     tools: o.tools as ToolSet,
     stopWhen: [() => steps >= o.maxSteps, o.done],
@@ -251,14 +260,9 @@ function boundedAgent<T extends ToolSet>(
 }
 
 // Runs an agent until it finishes, nudging it once if it stops in plain
-// text, and adds its tokens to `tokens`: the lead's or the lanes'.
-const untilDone = (
-  bounded: Bounded,
-  messages: ModelMessage[],
-  nudge: string,
-  abortSignal: AbortSignal,
-  tokens: TokenCounts,
-) => runAgentLoop({ ...bounded, messages, abortSignal, maxNudges: MAX_NUDGES, nudge, tokens });
+// text. Its tokens are counted call by call (boundedAgent).
+const untilDone = (bounded: Bounded, messages: ModelMessage[], nudge: string, abortSignal: AbortSignal) =>
+  runAgentLoop({ ...bounded, messages, abortSignal, maxNudges: MAX_NUDGES, nudge });
 
 // A call of the lead's, scout or merge, as its context if it's the fullest yet.
 function recordLeadContext(recorder: InvestigationRecorder, call: TokenCounts) {

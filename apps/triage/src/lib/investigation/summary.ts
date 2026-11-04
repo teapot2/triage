@@ -1,6 +1,9 @@
+import { explainFailure } from "./run-failure";
 import type { Incident, IncidentStatus } from "./schema";
 
-// Not finished yet: the sidebar's open count and the Services page use it.
+// Not finished yet, or needing someone (a failed run, to retry): the
+// sidebar's open count, the Services page, MCP's status filter and the
+// status filter's "Open" group (status-badges' statusGroups) use it.
 export const openStatuses: IncidentStatus[] = ["investigating", "diagnosed", "awaiting_approval", "failed"];
 
 // The leading hypothesis' title when Triage found a root cause.
@@ -43,18 +46,24 @@ export type IncidentPreview = {
 
 // What the sidebar's hover card adds to the row: the takeaway, the root
 // cause when Triage found one (short and specific), else the agent's
-// plain-English summary, else why the run failed. Computed on the server,
-// so hovering needs no request.
+// plain-English summary, else why the run failed (as the failure notice
+// titles it, not the raw error). Computed on the server, so hovering needs
+// no request.
 export function incidentPreview(i: Incident): IncidentPreview {
-  return { takeaway: rootCauseTitle(i) ?? i.report?.summary ?? i.run?.error?.split("\n")[0] };
+  return { takeaway: rootCauseTitle(i) ?? i.report?.summary ?? failureTitle(i) };
 }
 
 // One line on what Triage concluded (or why it couldn't). Nothing when the
 // status already says it: a healthy run's status reads "No issue found".
 export function incidentHeadline(incident: Incident): string | undefined {
   const verdict = incident.report?.verdict;
-  if (!verdict) return incident.run?.error;
+  if (!verdict) return failureTitle(incident);
   if (verdict.kind === "healthy") return incident.status === "healthy" ? undefined : "No issue found";
   if (verdict.kind === "inconclusive") return "Inconclusive";
   return rootCauseTitle(incident);
+}
+
+// Why the run failed, as the failure notice titles it (run-failure.ts).
+function failureTitle(incident: Incident): string | undefined {
+  return incident.run?.error ? explainFailure(incident.run.error).title : undefined;
 }
