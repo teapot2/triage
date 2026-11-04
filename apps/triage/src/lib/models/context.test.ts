@@ -6,9 +6,11 @@ import { fuller } from "./usage";
 const call = (inputTokens: number) => ({ inputTokens, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
 
 describe("contextLimit", () => {
-  it("knows Meta's API and OpenRouter's models, and nothing else", () => {
+  it("knows Meta's API, OpenRouter's and Baseten's models, and nothing else", () => {
     assert.equal(contextLimit("meta", "muse-spark-1.3"), 1_048_576);
     assert.equal(contextLimit("openrouter", "meta/muse-glimmer-30b"), 131_072);
+    assert.equal(contextLimit("baseten", "meta-models/muse-spark-open-1026"), 1_048_576);
+    assert.equal(contextLimit("baseten", "some-other-model"), undefined);
     // The same weights elsewhere run with whatever context they were given.
     assert.equal(contextLimit("modal", "muse-glimmer-30b"), undefined);
     assert.equal(contextLimit("ollama", "muse-glimmer:30b"), undefined);

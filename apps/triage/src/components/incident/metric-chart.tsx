@@ -146,6 +146,18 @@ export function MetricChart({
     [exporting, series, label, unit, threshold],
   );
 
+  // How far along the time axis a point sits, 0 to 1.
+  const t0 = series.length ? Date.parse(series[0].t) : 0;
+  const span = series.length ? Date.parse(series[series.length - 1].t) - t0 : 0;
+  const share = (t: string) => (span > 0 ? (Date.parse(t) - t0) / span : 0);
+  // The limit's label leaves the right end to markers labelled there (the
+  // right quarter, where "mitigation applied" usually is), unless the left
+  // quarter is busier still.
+  const placed = markers.map((m) => nearestPoint(series, m.t)).filter((x): x is string => Boolean(x));
+  const rightMarkers = placed.filter((x) => share(x) > 0.75).length;
+  const leftMarkers = placed.filter((x) => share(x) < 0.25).length;
+  const limitOnLeft = rightMarkers > 0 && leftMarkers < rightMarkers;
+
   const chart = (
     <ChartContainer config={config} className={cn("aspect-auto h-40 w-full", className)}>
       <AreaChart
@@ -203,7 +215,9 @@ export function MetricChart({
         />
         {threshold !== undefined && (
           // Neutral, like the deploy marker: the red line above it is what
-          // shows the breach. "limit" matches the header's wording.
+          // shows the breach. "limit" matches the header's wording. Its label
+          // goes to the end of the line with fewer marker labels near it, so
+          // a limit near the top doesn't print over "mitigation applied".
           <ReferenceLine
             y={threshold}
             stroke="var(--muted-foreground)"
@@ -213,7 +227,7 @@ export function MetricChart({
                 ? undefined
                 : {
                     value: limitLabel ?? `limit ${threshold}`,
-                    position: "insideBottomRight",
+                    position: limitOnLeft ? "insideBottomLeft" : "insideBottomRight",
                     fill: "var(--muted-foreground)",
                     fontSize: 11,
                   }
@@ -226,8 +240,7 @@ export function MetricChart({
             // Neighbouring labels take turns on two rows so close markers
             // don't overprint; in the right quarter a label sits left of its
             // line so the chart's edge doesn't cut it off.
-            const t0 = Date.parse(series[0].t);
-            const right = x && (Date.parse(x) - t0) / (Date.parse(series[series.length - 1].t) - t0) > 0.75;
+            const right = x && share(x) > 0.75;
             return (
               x && (
                 <ReferenceLine

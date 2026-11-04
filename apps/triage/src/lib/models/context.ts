@@ -2,8 +2,9 @@ import type { TokenCounts } from "./usage";
 
 // How many tokens a model's context window holds, where Triage is sure of
 // it: Meta's API (dev.meta.ai/docs/models) and OpenRouter's /api/v1/models,
-// both read October 2026. OpenRouter only routes a request to an upstream
-// that fits it, so its listed context_length is the limit.
+// both read October 2026, and Baseten's /v1/models (context_length, read
+// November 2026). OpenRouter only routes a request to an upstream that fits
+// it, so its listed context_length is the limit.
 //
 // Everything else shows no meter rather than a guess: a hosted open-weights
 // deployment or a local server runs with whatever context it was started
@@ -19,6 +20,10 @@ const limits: Record<string, Record<string, number>> = {
     "meta/muse-wonder": 1_048_576,
     "meta/muse-spark-open": 1_048_576,
     "meta/muse-glimmer-30b": 131_072,
+  },
+  baseten: {
+    "meta-models/muse-spark-open": 1_048_576,
+    "meta-models/muse-spark-open-1026": 1_048_576,
   },
 };
 

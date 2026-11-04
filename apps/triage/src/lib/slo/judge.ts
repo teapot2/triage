@@ -3,7 +3,7 @@ import { matchesTarget, type WatchRule } from "../investigation/watch-rule-model
 import {
   type BurnAlert,
   budgetLeftPercent,
-  budgetText,
+  budgetLeftText,
   burnAlerts,
   burnRate,
   burnText,
@@ -107,7 +107,7 @@ export function evaluateSloRule(
     const { alert, ...burn } = shown.burn;
     return {
       status: "breaching",
-      summary: `burning ${burnText(burn.rate)} over ${durationText(burn.longMs)} on ${shown.route} · ${budgetText(burn.budgetLeftPercent)} of budget left`,
+      summary: `burning ${burnText(burn.rate)} over ${durationText(burn.longMs)} on ${shown.route} · ${budgetLeftText(burn.budgetLeftPercent)}`,
       checks: trip ? 1 : undefined,
       trip: trip && {
         route: trip.route,
@@ -121,7 +121,7 @@ export function evaluateSloRule(
   }
   return {
     status: anyOk ? "ok" : "idle",
-    summary: lowest && `${budgetText(lowest.left)} of budget left on ${lowest.route}`,
+    summary: lowest && `${budgetLeftText(lowest.left)} on ${lowest.route}`,
     budgetLeftPercent: lowest?.left,
   };
 }

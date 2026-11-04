@@ -20,7 +20,7 @@ import { WatchHeader } from "@/components/watch/watch-header";
 import { useLivePoll } from "@/hooks/use-live-poll";
 import { useStartInvestigation } from "@/hooks/use-start-investigation";
 import { LIVE_ID } from "@/lib/investigation/options";
-import { budgetText } from "@/lib/slo/model";
+import { budgetText, overspentText } from "@/lib/slo/model";
 import { ErrorBudgets } from "./error-budgets";
 import { TraceSheet } from "./trace-sheet";
 import type { ChartPoint } from "@/lib/investigation/schema";
@@ -673,7 +673,11 @@ function RouteTable({ routes }: { routes: LiveRoute[] }) {
                     r.budgetLeftPercent !== undefined && r.budgetLeftPercent < 0 && "text-destructive",
                   )}
                 >
-                  {r.budgetLeftPercent === undefined ? "—" : budgetText(r.budgetLeftPercent)}
+                  {r.budgetLeftPercent === undefined
+                    ? "—"
+                    : r.budgetLeftPercent < 0
+                      ? `${overspentText(r.budgetLeftPercent)} spent`
+                      : budgetText(r.budgetLeftPercent)}
                 </TableCell>
               )}
             </TableRow>

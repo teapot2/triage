@@ -11,7 +11,7 @@ import { sentence } from "@/components/watch/watch-client";
 import { sloBudget, sloBudgetRows } from "@/lib/export/datasets/slo";
 import type { ChartPoint } from "@/lib/investigation/schema";
 import type { LiveSlo } from "@/lib/live/types";
-import { budgetText, burnText, sloText } from "@/lib/slo/model";
+import { budgetText, burnText, overspentText, sloText } from "@/lib/slo/model";
 import { cn } from "@/lib/utils";
 
 type ExportAs = NonNullable<ComponentProps<typeof MetricChart>["exportAs"]>;
@@ -70,7 +70,7 @@ function BudgetCard({ slo }: { slo: LiveSlo }) {
           <div className="flex flex-col gap-1.5">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
               <span className={cn("font-medium font-mono text-lg tabular-nums", over && "text-destructive")}>
-                {over ? `${budgetText(-lowest.budgetLeftPercent)} over budget` : `${budgetText(lowest.budgetLeftPercent)} left`}
+                {over ? `Spent ${overspentText(lowest.budgetLeftPercent)} its budget` : `${budgetText(lowest.budgetLeftPercent)} left`}
               </span>
               <span className="min-w-0 truncate text-muted-foreground text-xs">
                 {slo.routes.length > 1 ? "lowest, " : ""}
@@ -124,7 +124,7 @@ function BudgetCard({ slo }: { slo: LiveSlo }) {
                       <TableCell
                         className={cn("text-right font-mono text-xs tabular-nums", r.budgetLeftPercent < 0 && "text-destructive")}
                       >
-                        {budgetText(r.budgetLeftPercent)}
+                        {r.budgetLeftPercent < 0 ? `${overspentText(r.budgetLeftPercent)} spent` : budgetText(r.budgetLeftPercent)}
                       </TableCell>
                       <TableCell className={cn("text-right font-mono text-xs tabular-nums", r.alert && "text-destructive")}>
                         {burnText(r.burn1h)}

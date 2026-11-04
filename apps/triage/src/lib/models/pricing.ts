@@ -14,8 +14,9 @@ const metaPrices: [RegExp, Price][] = [
   [/^muse-spark-1\.[1-3](\D|$)/, { input: 1.25, cachedInput: 0.15, output: 4.25 }],
 ];
 
-// Baseten's Model APIs (baseten.co/pricing, as captured on 2026-10-23):
-// Muse Spark Open at Meta's Spark list price. The model id is the dated
+// Baseten's Model APIs (the pricing its /v1/models returns, read November
+// 2026, and baseten.co/pricing as captured on 2026-10-23): Muse Spark Open
+// at Meta's Spark list price. The model id is the dated
 // one the hackathon grant answers for (meta-models/muse-spark-open-1026).
 const basetenPrices: [RegExp, Price][] = [[/muse-spark-open/, { input: 1.25, cachedInput: 0.15, output: 4.25 }]];
 

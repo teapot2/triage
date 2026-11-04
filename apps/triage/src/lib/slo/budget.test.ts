@@ -4,6 +4,7 @@ import { sloBudget, sloBudgetRows } from "../export/datasets/slo";
 import type { WatchRule } from "../investigation/watch-rule-model";
 import { summarize } from "../live/snapshot";
 import { sloBudgets } from "./budget";
+import { budgetLeftText, overspentText } from "./model";
 import type { CountsFn } from "./rollups";
 
 const MINUTE = 60_000;
@@ -139,5 +140,16 @@ describe("sloBudgets", () => {
       snapshot.routes.map((r) => [r.route, r.budgetLeftPercent]),
       [["/api/b", -316.7]],
     );
+  });
+});
+
+// Nov 4: after a few outages the sidebar read "-10312% of budget left".
+describe("budgetLeftText", () => {
+  it("says what's left, and an overspent budget as a multiple", () => {
+    assert.equal(budgetLeftText(71.4), "71% of budget left");
+    assert.equal(budgetLeftText(0), "0% of budget left");
+    assert.equal(budgetLeftText(-10312), "spent 104× its budget");
+    assert.equal(budgetLeftText(-316.7), "spent 4.2× its budget");
+    assert.equal(overspentText(-50), "1.5×");
   });
 });

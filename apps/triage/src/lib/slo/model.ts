@@ -111,6 +111,15 @@ export function burnText(rate: number): string {
 // "71%", "-12%"
 export const budgetText = (percent: number) => `${Math.round(percent)}%`;
 
+// How many times over a budget was spent, from what's left of it: -10312%
+// left is 104× spent. "104×", as burnText words a rate.
+export const overspentText = (leftPercent: number) => burnText((100 - leftPercent) / 100);
+
+// "71% of budget left", "spent 104× its budget": an overspent budget as a
+// multiple, not "-10312% of budget left", which reads like a bug.
+export const budgetLeftText = (leftPercent: number) =>
+  leftPercent >= 0 ? `${budgetText(leftPercent)} of budget left` : `spent ${overspentText(leftPercent)} its budget`;
+
 // "0.1% of requests, about 43 min of full outage in 30 days": what an
 // objective leaves to spend.
 export function allowanceText(objectivePercent: number, windowDays: number): string {
