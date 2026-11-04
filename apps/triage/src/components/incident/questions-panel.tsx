@@ -142,7 +142,8 @@ export interface QueuedQuestion {
   // The full-context switch as it was when sent.
   fullContext?: boolean;
   // The composer's model as it was when sent; absent where the page gave
-  // none, and Settings decides, and with full context, which runs on Wonder.
+  // none, and Settings decides, and with full context, which runs on its
+  // own model (fullContextModel on the server).
   model?: StageChoice;
 }
 
@@ -175,9 +176,11 @@ export interface Ask {
   webSearch: boolean | undefined;
   setWebSearch: (on: boolean) => void;
   // Whether the next question reads everything Triage holds on the service
-  // in one Wonder call: undefined when there's no telemetry to read or no
-  // Wonder to read it, so there's no switch.
+  // in one call: undefined when there's no telemetry to read or no model to
+  // read it, so there's no switch.
   fullContext: boolean | undefined;
+  // The model that call runs on: Wonder, or the Ask stage's Spark Open.
+  fullContextModel: string | undefined;
   setFullContext: (on: boolean) => void;
   // The screenshot attached to the draft, and whether one is being shrunk.
   image: Attachment | undefined;
@@ -252,7 +255,7 @@ export function useAskQuestion(
   incident: Incident,
   defaultModel?: Choice,
   webSearchDefault?: boolean,
-  fullContextAvailable?: boolean,
+  fullContextModel?: string,
 ): Ask {
   const router = useRouter();
   const [model, setModel] = useState(defaultModel);
@@ -260,7 +263,7 @@ export function useAskQuestion(
   // Only Meta's API has the search; the switch keeps its place for when
   // the model goes back there.
   const webSearch = model && model.provider !== "meta" ? undefined : searchOn;
-  const [fullContext, setFullContext] = useState(fullContextAvailable ? false : undefined);
+  const [fullContext, setFullContext] = useState(fullContextModel ? false : undefined);
   const [live, setLive] = useState<LiveQuestion>();
   const [queue, setQueue] = useState<QueuedQuestion[]>([]);
   const [paused, setPaused] = useState(false);
@@ -421,7 +424,7 @@ export function useAskQuestion(
         image,
         webSearch,
         fullContext,
-        // Full context runs on Wonder, whatever the composer has.
+        // Full context runs on its own model, whatever the composer has.
         ...(model && !fullContext && { model: trimChoice(model) }),
       };
       if (waiting || paused || queue.length > 0 || busy.current) {
@@ -474,6 +477,7 @@ export function useAskQuestion(
     webSearch,
     setWebSearch,
     fullContext,
+    fullContextModel,
     setFullContext,
     image,
     attaching,
@@ -1356,7 +1360,7 @@ const modeHint: Record<Question["mode"], { icon: LucideIcon; text: string; detai
   },
   full_context: {
     icon: LibraryBigIcon,
-    text: "Full context, one Wonder call",
+    text: "Full context, one call",
     detail:
       "Answers from everything Triage holds on the service, read at once: its source, git history with diffs, deploys, earlier incidents and telemetry up to the alert. No tools.",
   },
@@ -1688,7 +1692,7 @@ function Composer({
         <span id="ask-triage-mode" className="sr-only">
           {hint.detail}
         </span>
-        {/* Full context runs on Wonder, so there's no model to pick. */}
+        {/* Full context runs on its own model, so there's none to pick. */}
         {!ask.fullContext && <ModelButton ask={ask} disabled={disabled} />}
         <input
           ref={fileRef}
@@ -1738,8 +1742,8 @@ function Composer({
             </TooltipTrigger>
             <TooltipContent>
               {ask.fullContext
-                ? "Full context on · Wonder reads the service's source, git history, earlier incidents and telemetry in one call"
-                : "Full context off · turn on to have Wonder read the service's source, git history, earlier incidents and telemetry in one call"}
+                ? `Full context on · ${ask.fullContextModel ?? "Wonder"} reads the service's source, git history, earlier incidents and telemetry in one call`
+                : `Full context off · turn on to have ${ask.fullContextModel ?? "Wonder"} read the service's source, git history, earlier incidents and telemetry in one call`}
             </TooltipContent>
           </Tooltip>
         )}

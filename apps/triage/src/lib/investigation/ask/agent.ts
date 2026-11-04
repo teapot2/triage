@@ -20,7 +20,7 @@ import {
 } from "../../models/client";
 import { runBudget } from "../../models/policy";
 import type { ProviderId } from "../../models/providers";
-import { choiceModel, stageModel, stageProblem } from "../../models/settings";
+import { stageModel, stageProblem } from "../../models/settings";
 import { recordedEffort } from "../../models/stages";
 import { fuller, noTokens, onEachCall } from "../../models/usage";
 import { recordThoughts } from "../agent";
@@ -40,10 +40,10 @@ import {
   bundleText,
   cachedContext,
   estimateTokens,
-  FULL_CONTEXT_MODEL,
   FULL_CONTEXT_TOKENS,
   type FullContext,
 } from "./full-context";
+import { fullContextModel } from "./full-context-model";
 import { readQuestionImage } from "./images";
 import {
   answerOf,
@@ -179,10 +179,11 @@ const FULL_RUN_MS = 10 * 60_000;
 // so every question on the incident sends the same bundle.
 const FULL_RESERVE = 100_000;
 
-// Wonder on Meta's API, whatever Ask uses in Settings.
+// Wonder on Meta's API, or the Ask stage's open-weights model with a 1M
+// window (full-context-model.ts).
 async function fullContextStage(): Promise<Stage> {
-  const stage = await choiceModel("ask", FULL_CONTEXT_MODEL);
-  if (!stage) throw new Error("Meta's API isn't available for a full-context answer.");
+  const stage = await fullContextModel();
+  if (!stage) throw new Error("No model is available for a full-context answer.");
   return stage;
 }
 

@@ -5,10 +5,11 @@ import { Suspense } from "react";
 import { IncidentView } from "@/components/incident/incident-view";
 import { Skeleton } from "@/components/ui/skeleton";
 import { checkPrMerged } from "@/lib/investigation/fix/pr-merge";
-import { FULL_CONTEXT_MODEL } from "@/lib/investigation/ask/full-context";
+import { fullContextModel } from "@/lib/investigation/ask/full-context-model";
 import { sourceKind } from "@/lib/investigation/source-kind";
 import { getIncident } from "@/lib/investigation/store";
-import { choiceModel, stageModel, stageProblem, webSearchOn } from "@/lib/models/settings";
+import { isSparkOpen } from "@/lib/models/providers";
+import { stageModel, stageProblem, webSearchOn } from "@/lib/models/settings";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -42,10 +43,10 @@ async function Incident({ params }: Props) {
   // endpoint's key stays here), and its web search switch as Settings has
   // it; the switch shows while the chosen model is on Meta's API.
   const { provider, model, effort } = await stageModel("ask");
-  // The full-context switch shows when there's telemetry to read and Wonder
-  // on Meta's API to read it.
-  const wonder = sourceKind(incident) ? await choiceModel("ask", FULL_CONTEXT_MODEL) : undefined;
-  const fullContext = wonder !== undefined && !stageProblem(wonder);
+  // The full-context switch shows when there's telemetry to read and a model
+  // to read it (Wonder, or the Ask stage's Spark Open), named on the switch.
+  const full = sourceKind(incident) ? await fullContextModel() : undefined;
+  const fullContext = full && !stageProblem(full) ? (isSparkOpen(full.model) ? "Spark Open" : "Wonder") : undefined;
   return (
     <IncidentView
       incident={incident}

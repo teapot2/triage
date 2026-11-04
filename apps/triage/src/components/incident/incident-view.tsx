@@ -29,7 +29,9 @@ export function IncidentView({
   // Settings' Ask model, which the composer starts on.
   askModel?: Choice;
   webSearch?: boolean;
-  fullContext?: boolean;
+  // The model a full-context answer runs on ("Wonder", "Spark Open"), or
+  // undefined when there's no switch.
+  fullContext?: string;
 }) {
   // The run on screen: the incident's own, another of its runs (read only:
   // it acts on nothing until it's used), or all of them compared.

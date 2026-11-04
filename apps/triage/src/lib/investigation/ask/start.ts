@@ -1,5 +1,5 @@
-import { choiceModel, runStageModel, stageProblem, webSearchOn } from "../../models/settings";
-import { FULL_CONTEXT_MODEL } from "./full-context";
+import { runStageModel, stageProblem, webSearchOn } from "../../models/settings";
+import { fullContextModel } from "./full-context-model";
 import { recordedEffort } from "../../models/stages";
 import type { Incident, Question, StageChoice } from "../schema";
 import { archivedRefusal, isArchived } from "../archive";
@@ -37,14 +37,15 @@ export async function startQuestion(
   if (!found) return { ok: false, status: 404, error: `unknown incident: ${id}` };
   // Before the model's checks, so an archived incident says why first.
   if (isArchived(found)) return { ok: false, status: 409, error: archivedRefusal };
-  // A full-context question runs on Wonder whatever Ask uses, the
-  // composer's choice included, over the incident's own telemetry: one
+  // A full-context question runs on fullContextModel() (Wonder, or the Ask
+  // stage's own open-weights model with a 1M window), never the composer's
+  // choice, over the incident's own telemetry: one
   // without a source has nothing to read.
   const full = opts.fullContext === true;
   if (full && !sourceKind(found)) {
     return { ok: false, status: 409, error: "This incident has no telemetry to read: ask without full context." };
   }
-  const stage = full ? await choiceModel("ask", FULL_CONTEXT_MODEL) : await runStageModel("ask", opts.model);
+  const stage = full ? await fullContextModel() : await runStageModel("ask", opts.model);
   const problem = stage ? stageProblem(stage) : "Meta's API isn't available.";
   if (!stage || problem) return { ok: false, status: 409, error: problem! };
   // Only Meta's API has the search; elsewhere the question is asked without.

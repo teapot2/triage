@@ -82,7 +82,7 @@ A recovery says the metric came back; the verification checks that it stayed bac
 
 After the report, a person can ask Triage follow-up questions on the incident page, with a pasted screenshot if they have one (a dashboard panel, an error page), and get an answer streamed token by token, citing evidence with clickable chips, and can deny a fix with feedback to get a new attempt; see `apps/triage/README.md`.
 
-A **Full context** switch answers in one call to Muse Wonder with everything Triage holds on the service in the prompt (its source, git history, deploys, earlier incidents and telemetry, up to 800k tokens), and **Web search** lets the answer look up a library's public docs and cite them. The composer's model picker changes the model for one question.
+A **Full context** switch answers in one call to Muse Wonder (or to Muse Spark Open when the Ask stage runs it, so an open-weights setup stays on open weights) with everything Triage holds on the service in the prompt (its source, git history, deploys, earlier incidents and telemetry, up to 800k tokens), and **Web search** lets the answer look up a library's public docs and cite them. The composer's model picker changes the model for one question.
 
 Questions can also be spoken. With **Voice input** on in **Settings → General → Speech**, the composer's mic streams speech to Meta's **Muse Voice Transcribe** (`muse-voice-transcribe-1.0`, realtime, about $0.18 per hour of audio) through Triage's server, so `MODEL_API_KEY` never reaches the browser. Each session is biased toward the incident's service, route and host names, so "shopfront" stops coming out "shop front". Answers can be read aloud with the browser's own voices.
 

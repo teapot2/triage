@@ -17,9 +17,14 @@ import { summarizeSeries } from "../tools";
 // it from the prompt cache. Only the items an answer cites are saved, as
 // the question's evidence.
 
+// The model a full-context answer runs on by default; full-context-model.ts
+// keeps an Ask stage on open weights (Muse Spark Open) on its own model.
 export const FULL_CONTEXT_MODEL = { provider: "meta", model: "muse-wonder-1.0" } as const;
-// Of Wonder's 1,048,576, what a full-context prompt may fill: the rest is
-// for the reasoning and the answer.
+// The context window a full-context model needs: Wonder's and Muse Spark
+// Open's 1,048,576.
+export const FULL_CONTEXT_WINDOW = 1_048_576;
+// Of that window, what a full-context prompt may fill: the rest is for the
+// reasoning and the answer.
 export const FULL_CONTEXT_TOKENS = 800_000;
 // For budgeting only. Code and JSON run nearer 3 characters a token than
 // the 4 of English prose, so 3 errs on the side of a prompt that fits.
