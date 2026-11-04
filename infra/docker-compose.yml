@@ -21,7 +21,13 @@ services:
       retries: 10
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    # Pinned: the config's file exporters and rotation settings are tested
+    # against this release.
+    image: otel/opentelemetry-collector-contrib:0.163.2
+    # The image runs as uid 10001, which can't write the ./telemetry bind
+    # mount a Linux host creates as the cloning user. Docker Desktop on
+    # macOS and Windows hides this; on Linux the collector would write nothing.
+    user: "0:0"
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
