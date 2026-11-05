@@ -298,9 +298,12 @@ export function permanentFix(incident: Pick<Incident, "fix" | "fixRun" | "approv
 }
 
 // Why the recovery watch ended without a recovery, in a few words. The
-// full note is under Details. No note: it ran its 5 min over the limit.
-export function notRecoveredWhy(note: string | undefined): string {
-  if (!note) return "still past the limit after 5 min";
+// full note is under Details. No note: it ran its course over the limit,
+// for `watchedMs` (5 min, 10 for a burn rate: recovery's recoveryDeadline).
+export function notRecoveredWhy(note: string | undefined, watchedMs?: number): string {
+  if (!note) {
+    return watchedMs === undefined ? "still past the limit" : `still past the limit after ${Math.max(1, Math.round(watchedMs / 60_000))} min`;
+  }
   if (/^the watch stopped/i.test(note)) return "the watch stopped";
   if (/^no requests/i.test(note)) return "no requests since the mitigation";
   const line = note.trim().split("\n")[0].replace(/\.$/, "");
@@ -373,11 +376,14 @@ function mitigationSteps(
     recover = { title: "Recovering", state: "current", summary: `${under} min ${sides.healthy} ${value(recovery.threshold)} so far` };
   } else if (recovery) {
     // Without a verification yet, one can be asked for from here: the
-    // metric may come back after the 5 min, or have had no requests.
+    // metric may come back after the watch ends, or have had no requests.
     recover = {
       title: "Not recovered",
       state: "failed",
-      summary: notRecoveredWhy(recovery.note),
+      summary: notRecoveredWhy(
+        recovery.note,
+        recovery.checkedAt ? Date.parse(recovery.checkedAt) - Date.parse(recovery.since) : undefined,
+      ),
       detail: incident.verification ? undefined : verifyAction("Verify"),
     };
   } else {

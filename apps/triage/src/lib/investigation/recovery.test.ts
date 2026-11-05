@@ -5,13 +5,14 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { closeDb } from "../db";
 import { exampleIncidents } from "./fixtures";
-import { liveReader, pastThreshold, perMinute } from "./recovery";
+import { liveReader, pastThreshold, perMinute, recoveryDeadline } from "./recovery";
 import type { Incident, MetricPoint } from "./schema";
 import { saveChecks } from "./uptime/checks";
 import { defaultCheck } from "./uptime/model";
 import { appendSample } from "./uptime/samples";
 import { availabilityMetric, responseTimeMetric } from "./uptime/source";
 import { judgeWindow } from "./verify";
+import { burnMetric, metricLookbackMs, slowMetric } from "./watch-rule-model";
 
 // The uptime case reads .data from the working directory: a temp one.
 const cwd = process.cwd();
@@ -51,6 +52,35 @@ describe("pastThreshold", () => {
     assert.deepEqual([count(0), count(3), count(4)], [false, false, true]);
     const share = pastThreshold("http.server.slow_share{route=/,le=1500}", 10);
     assert.deepEqual([share(10), share(10.01), share(50)], [false, true, true]);
+  });
+});
+
+describe("recoveryDeadline", () => {
+  const start = Date.parse("2026-11-04T16:13:30Z");
+
+  it("waits 5 minutes for a per-minute metric", () => {
+    const metric = slowMetric("share", "/api/products/[id]", 500);
+    assert.equal(metricLookbackMs(metric), 0);
+    assert.equal(recoveryDeadline(metric, start) - start, 5 * MINUTE);
+  });
+
+  // Each burn-rate point covers the 5 minutes to its minute's end, so the
+  // first clean point comes 5 minutes after the fix and the second a minute
+  // later: a 5-minute watch could never see two (incident 2026-11-04, whose
+  // flag-off worked at once and still read "Not recovered").
+  it("adds a burn rate's 5-minute window, so two clean minutes can come in time", () => {
+    const metric = burnMetric("/api/products/[id]", 99.9, 500);
+    assert.equal(metricLookbackMs(metric), 5 * MINUTE);
+    const deadline = recoveryDeadline(metric, start);
+    assert.equal(deadline - start, 10 * MINUTE);
+    // A point at minute S covers S - 4 min to S + 1 min: the first with no
+    // request from before the fix at 16:13:30 is 16:18 (16:17 still read
+    // 176x), and two clean minutes are complete at 16:20, 6.5 min after it.
+    const firstClean = Math.ceil((start + 4 * MINUTE) / MINUTE) * MINUTE;
+    assert.equal(new Date(firstClean).toISOString(), "2026-11-04T16:18:00.000Z");
+    const twoCleanDone = firstClean + 2 * MINUTE;
+    assert.ok(twoCleanDone - start > 5 * MINUTE, "past the old 5-minute watch");
+    assert.ok(twoCleanDone <= deadline, "within the new one");
   });
 });
 

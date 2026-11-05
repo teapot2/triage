@@ -242,3 +242,12 @@ export const slowMetric = (kind: "count" | "share", route: string, slowerThanMs:
 // source (live-source's burnSeries), so it carries all that's needed.
 export const burnMetric = (route: string, objectivePercent: number, latencyMs?: number) =>
   `slo.burn_rate{route=${route},objective=${objectivePercent}${latencyMs === undefined ? "" : `,le=${latencyMs}`}}`;
+
+// How far back each point of a burn-rate series looks: one point a minute,
+// each the burn over the 5 minutes to its minute's end (burnSeries).
+export const BURN_WINDOW_MS = 5 * 60_000;
+
+// How long a point of `metric` keeps counting what came before it: a burn
+// rate's window, nothing for a per-minute metric. After a fix, an outage
+// stays in the series this much longer, so judging a recovery waits for it.
+export const metricLookbackMs = (metric: string) => (metric.startsWith("slo.burn_rate{") ? BURN_WINDOW_MS : 0);

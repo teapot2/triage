@@ -20,6 +20,7 @@ import {
   type TelemetrySource,
 } from "../source";
 import { type Attrs, type LogRow, type MetricRow, readTelemetry, type SpanRow } from "./otlp-files";
+import { BURN_WINDOW_MS } from "../watch-rule-model";
 import { errorMessage } from "../../errors";
 
 // The running Shopfront, read from what it really emitted: OTLP spans, logs
@@ -450,7 +451,6 @@ function spanSeries(
 // minute's end that weren't good, against the share the objective allows.
 // Built when asked for, from the objective and latency in the name.
 const burnName = /^slo\.burn_rate\{route=(\/[^,}]*),objective=([\d.]+)(?:,le=(\d+))?\}$/;
-const BURN_WINDOW = 5 * MINUTE;
 
 export function burnSeries(
   name: string,
@@ -474,7 +474,7 @@ export function burnSeries(
     points: (w) =>
       minuteBuckets(now, w).flatMap((start) => {
         const end = start + MINUTE;
-        const inWindow = rows.filter((r) => r.start >= end - BURN_WINDOW && r.start < end);
+        const inWindow = rows.filter((r) => r.start >= end - BURN_WINDOW_MS && r.start < end);
         return inWindow.length ? [point(start, inWindow.filter(bad).length / inWindow.length / allowed)] : [];
       }),
   };
