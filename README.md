@@ -10,9 +10,7 @@ It watches your service, finds the cause of an outage with cited evidence, stops
 
 <p align="center">
   Meta Global AI Developer Hackathon · Indie Developer track · Build for Your World<br>
-  <!-- Demo video: replace VIDEO_URL and uncomment once it's uploaded.
-  <a href="VIDEO_URL"><b>▶ 3-minute demo video</b></a> ·
-  -->
+  <a href="https://youtu.be/gwnk319IIIo"><b>▶ Demo video (2:49)</b></a> ·
   <a href="#a-real-outage-start-to-finish">A real run</a> ·
   <a href="#how-it-uses-metas-models">Meta's models</a> ·
   <a href="#how-well-it-diagnoses">Benchmark</a> ·
@@ -63,7 +61,7 @@ From the live run in the demo video (Nov 4, 2026), against the bundled demo stor
 | --- | --- |
 | **Impact** (30%) | Built for small teams with no on-call expertise, in the *Build for Your World* theme. In the run above, the outage went from fault to cause in about two minutes and was resolved with a person approving each change. It watches any public URL too, so a site with no telemetry still gets incidents. |
 | **Use of Meta AI tooling** (25%) | Six Meta models and tools, each in its own role: [the table below](#how-it-uses-metas-models). Beyond chat: a tool-calling agent whose reports are schema-validated and must cite real evidence, parallel hypothesis checks led by Muse Wonder, 800k-token full-context answers, screenshots in questions, realtime voice biased toward the incident's own names, open weights on Baseten and Modal, and an MCP server for Muse Code. |
-| **Demo** (25%) | The demo video, plus a demo you can run: Shopfront's `/ops` page plants six faults: three flags, a bad release, a harmless release under load (the right answer is no rollback) and a vulnerable dependency. Recorded scenarios, a healthy control among them, run the live agent with only a Meta API key and no Docker. |
+| **Demo** (25%) | [The demo video](https://youtu.be/gwnk319IIIo), plus a demo you can run: Shopfront's `/ops` page plants six faults: three flags, a bad release, a harmless release under load (the right answer is no rollback) and a vulnerable dependency. Recorded scenarios, a healthy control among them, run the live agent with only a Meta API key and no Docker. |
 | **Technical depth and execution** (20%) | Cited evidence checked against what the tools returned; fixes proven in a throwaway copy of the app *and* its database; SLO multiwindow burn-rate alerts from the SRE Workbook; verification that reopens a relapse; a blind check that nothing Triage reads gives the planted bugs away; a graded benchmark; over 1,100 tests in CI. |
 
 ## How it works
